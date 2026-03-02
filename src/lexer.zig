@@ -239,7 +239,14 @@ pub const Lexer = struct {
             return self.makeToken(.eof, self.pos, 0);
         }
 
-        // handle indentation at the start of a line
+        // indentation state machine:
+        // we maintain a stack of indent levels (starts at [0]). on each new
+        // line, measure the leading whitespace and compare to the stack top:
+        //   deeper  → push the level, emit INDENT
+        //   shallower → pop levels until we match, emit one DEDENT per pop
+        //   same    → no token, continue to content
+        // blank lines (whitespace-only or comment-only) are skipped entirely
+        // so they don't generate spurious indent/dedent noise.
         if (self.at_line_start) {
             self.at_line_start = false;
 
@@ -338,6 +345,28 @@ pub const Lexer = struct {
         return self.makeToken(.comment, start, self.pos - start);
     }
 
+    /// advance past string content, skipping escape sequences.
+    /// stops at closing quote, newline, or EOF. if stop_at_brace is true,
+    /// also stops at { (for interpolation boundaries).
+    fn skipStringContent(self: *Lexer, stop_at_brace: bool) void {
+        while (self.pos < self.source.len and self.current() != '"' and self.current() != '\n') {
+            if (stop_at_brace and self.current() == '{') break;
+            if (self.current() == '\\') {
+                self.advance(); // skip backslash
+                if (self.pos < self.source.len) self.advance(); // skip escaped char
+            } else {
+                self.advance();
+            }
+        }
+    }
+
+    // string scanning has two paths:
+    //   simple:       "hello world" → single STRING_LIT token
+    //   interpolated: "hi {name}!"  → STRING_START, INTERPOLATION_EXPR,
+    //                                  STRING_MID (if more text), ..., STRING_END
+    // we peek ahead first to detect interpolation braces, then commit to
+    // the appropriate path. both paths skip \-escaped characters so that
+    // \" and \{ don't terminate or split the string prematurely.
     fn scanString(self: *Lexer) !Token {
         const start = self.pos;
         self.advance(); // skip opening "
@@ -361,14 +390,7 @@ pub const Lexer = struct {
 
         if (!has_interpolation) {
             // simple string — scan to closing quote
-            while (self.pos < self.source.len and self.current() != '"' and self.current() != '\n') {
-                if (self.current() == '\\') {
-                    self.advance(); // skip backslash
-                    if (self.pos < self.source.len) self.advance(); // skip escaped char
-                } else {
-                    self.advance();
-                }
-            }
+            self.skipStringContent(false);
 
             if (self.pos >= self.source.len or self.current() == '\n') {
                 try self.diagnostics.addError(
@@ -383,14 +405,7 @@ pub const Lexer = struct {
         }
 
         // interpolated string — emit string_start for text up to first {
-        while (self.pos < self.source.len and self.current() != '{' and self.current() != '"' and self.current() != '\n') {
-            if (self.current() == '\\') {
-                self.advance();
-                if (self.pos < self.source.len) self.advance();
-            } else {
-                self.advance();
-            }
-        }
+        self.skipStringContent(true);
 
         if (self.pos >= self.source.len or self.current() == '\n') {
             try self.diagnostics.addError(
@@ -473,14 +488,7 @@ pub const Lexer = struct {
 
             // scan text after } — either more text, another {, or closing "
             const mid_start = self.pos;
-            while (self.pos < self.source.len and self.current() != '{' and self.current() != '"' and self.current() != '\n') {
-                if (self.current() == '\\') {
-                    self.advance();
-                    if (self.pos < self.source.len) self.advance();
-                } else {
-                    self.advance();
-                }
-            }
+            self.skipStringContent(true);
 
             if (self.pos >= self.source.len or self.current() == '\n') {
                 try self.diagnostics.addError(
