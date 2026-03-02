@@ -40,6 +40,14 @@ pub const GenericDecl = union(enum) {
     function: ast.FnDecl,
 };
 
+/// a method registered from an impl block. stores the function type,
+/// visibility, and the original AST decl for pass 2 body checking.
+pub const MethodEntry = struct {
+    type_id: TypeId,
+    is_pub: bool,
+    decl: ast.FnDecl,
+};
+
 // ---------------------------------------------------------------
 // scope
 // ---------------------------------------------------------------
@@ -108,6 +116,10 @@ pub const Checker = struct {
     /// "TypeName\x00InterfaceName" (null-separated, arena-allocated).
     /// presence means the type implements the interface.
     impl_set: std.StringHashMap(void),
+    /// methods registered from impl blocks. key is "TypeName.methodName"
+    /// (arena-allocated). used for method call resolution and pass 2
+    /// body checking.
+    method_types: std.StringHashMap(MethodEntry),
 
     /// create a new checker. registers builtin types and functions.
     pub fn init(allocator: std.mem.Allocator, source: []const u8) !Checker {
@@ -120,6 +132,7 @@ pub const Checker = struct {
             .generic_decls = std.StringHashMap(GenericDecl).init(allocator),
             .interface_decls = std.StringHashMap(ast.InterfaceDecl).init(allocator),
             .impl_set = std.StringHashMap(void).init(allocator),
+            .method_types = std.StringHashMap(MethodEntry).init(allocator),
         };
 
         // register builtins into the module scope
@@ -133,6 +146,7 @@ pub const Checker = struct {
         self.generic_decls.deinit();
         self.interface_decls.deinit();
         self.impl_set.deinit();
+        self.method_types.deinit();
         self.arena.deinit();
         self.diagnostics.deinit();
         self.type_table.deinit();
@@ -392,6 +406,11 @@ pub const Checker = struct {
     /// valid key (valid keys always contain a null byte).
     fn buildImplKey(self: *Checker, type_name: []const u8, iface_name: []const u8) []const u8 {
         return self.fmt("{s}\x00{s}", .{ type_name, iface_name });
+    }
+
+    /// build a dot-separated key for method_types: "TypeName.methodName".
+    fn buildMethodKey(self: *Checker, type_name: []const u8, method_name: []const u8) []const u8 {
+        return self.fmt("{s}.{s}", .{ type_name, method_name });
     }
 
     /// check whether a type implements a given interface.
