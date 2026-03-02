@@ -1,5 +1,14 @@
 const std = @import("std");
 
+// compiler modules — imported here so zig build sees them
+comptime {
+    _ = @import("lexer.zig");
+    _ = @import("ast.zig");
+    _ = @import("parser.zig");
+    _ = @import("errors.zig");
+    _ = @import("intern.zig");
+}
+
 const version = "0.1.0";
 
 pub fn main() !void {
