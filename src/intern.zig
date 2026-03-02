@@ -12,6 +12,8 @@ const std = @import("std");
 pub const InternedString = struct {
     bytes: []const u8,
 
+    /// pointer comparison is safe here because the intern pool guarantees
+    /// that identical strings resolve to the same arena-allocated slice.
     pub fn eql(a: InternedString, b: InternedString) bool {
         return a.bytes.ptr == b.bytes.ptr;
     }
