@@ -817,6 +817,22 @@ pub const Checker = struct {
     }
 
     fn checkCall(self: *Checker, call: ast.CallExpr, location: Location, scope: *const Scope) TypeId {
+        // check if the callee is a struct type name — route to constructor
+        if (call.callee.kind == .ident) {
+            const name = call.callee.kind.ident;
+            if (self.type_table.lookup(name)) |type_id| {
+                if (self.type_table.get(type_id)) |ty| {
+                    if (ty == .@"struct") {
+                        return self.checkStructConstructor(type_id, call, location, scope);
+                    }
+                }
+            }
+        }
+
+        return self.checkFnCall(call, location, scope);
+    }
+
+    fn checkFnCall(self: *Checker, call: ast.CallExpr, location: Location, scope: *const Scope) TypeId {
         const callee_type = self.checkExpr(call.callee, scope);
         if (callee_type.isErr()) return .err;
 
@@ -854,6 +870,38 @@ pub const Checker = struct {
         }
 
         return func.return_type;
+    }
+
+    fn checkStructConstructor(
+        self: *Checker,
+        type_id: TypeId,
+        call: ast.CallExpr,
+        location: Location,
+        scope: *const Scope,
+    ) TypeId {
+        const struct_data = self.type_table.get(type_id).?.@"struct";
+
+        // check argument count matches field count
+        if (call.args.len != struct_data.fields.len) {
+            self.diagnostics.addError(location, self.fmt(
+                "{s} has {d} field(s), got {d} argument(s)",
+                .{ struct_data.name, struct_data.fields.len, call.args.len },
+            )) catch {};
+            return .err;
+        }
+
+        // check each argument type against the corresponding field
+        for (call.args, struct_data.fields) |arg, field| {
+            const actual = self.checkExpr(arg.value, scope);
+            if (!actual.isErr() and !field.type_id.isErr() and actual != field.type_id) {
+                self.diagnostics.addError(arg.location, self.fmt(
+                    "expected {s} for field '{s}', got {s}",
+                    .{ self.type_table.typeName(field.type_id), field.name, self.type_table.typeName(actual) },
+                )) catch {};
+            }
+        }
+
+        return type_id;
     }
 
     fn checkFieldAccess(self: *Checker, fa: ast.FieldAccess, location: Location, scope: *const Scope) TypeId {
@@ -1756,6 +1804,197 @@ test "break at top level is an error" {
     const stmt = ast.Stmt{ .kind = .break_stmt, .location = Location.zero };
     checker.checkStmt(&stmt, &scope);
     try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+// -- struct constructor tests --
+
+test "checkCall: struct constructor with correct args" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    // register struct Point { x: Int, y: Int }
+    const int_te = ast.TypeExpr{ .kind = .{ .named = "Int" }, .location = Location.zero };
+    const struct_decl = ast.Decl{
+        .kind = .{ .struct_decl = .{
+            .name = "Point",
+            .generic_params = &.{},
+            .fields = &.{
+                .{ .name = "x", .type_expr = &int_te, .default = null, .is_pub = true, .is_mut = false, .is_weak = false, .location = Location.zero },
+                .{ .name = "y", .type_expr = &int_te, .default = null, .is_pub = true, .is_mut = false, .is_weak = false, .location = Location.zero },
+            },
+        } },
+        .is_pub = false,
+        .location = Location.zero,
+    };
+
+    const module = ast.Module{ .imports = &.{}, .decls = &.{struct_decl} };
+    checker.check(&module);
+
+    // Point(1, 2) should return Point type
+    const callee = ast.Expr{ .kind = .{ .ident = "Point" }, .location = Location.zero };
+    const arg1 = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const arg2 = ast.Expr{ .kind = .{ .int_lit = "2" }, .location = Location.zero };
+    const call = ast.Expr{
+        .kind = .{ .call = .{
+            .callee = &callee,
+            .args = &.{
+                .{ .name = null, .value = &arg1, .location = Location.zero },
+                .{ .name = null, .value = &arg2, .location = Location.zero },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&call, &checker.module_scope);
+    const point_id = checker.type_table.lookup("Point").?;
+    try std.testing.expectEqual(point_id, result);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
+}
+
+test "checkCall: struct constructor wrong arg count" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const int_te = ast.TypeExpr{ .kind = .{ .named = "Int" }, .location = Location.zero };
+    const struct_decl = ast.Decl{
+        .kind = .{ .struct_decl = .{
+            .name = "Point",
+            .generic_params = &.{},
+            .fields = &.{
+                .{ .name = "x", .type_expr = &int_te, .default = null, .is_pub = true, .is_mut = false, .is_weak = false, .location = Location.zero },
+                .{ .name = "y", .type_expr = &int_te, .default = null, .is_pub = true, .is_mut = false, .is_weak = false, .location = Location.zero },
+            },
+        } },
+        .is_pub = false,
+        .location = Location.zero,
+    };
+
+    const module = ast.Module{ .imports = &.{}, .decls = &.{struct_decl} };
+    checker.check(&module);
+
+    // Point(1) — wrong arg count
+    const callee = ast.Expr{ .kind = .{ .ident = "Point" }, .location = Location.zero };
+    const arg1 = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const call = ast.Expr{
+        .kind = .{ .call = .{
+            .callee = &callee,
+            .args = &.{
+                .{ .name = null, .value = &arg1, .location = Location.zero },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&call, &checker.module_scope);
+    try std.testing.expect(result.isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "checkCall: struct constructor wrong arg type" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const int_te = ast.TypeExpr{ .kind = .{ .named = "Int" }, .location = Location.zero };
+    const struct_decl = ast.Decl{
+        .kind = .{ .struct_decl = .{
+            .name = "Point",
+            .generic_params = &.{},
+            .fields = &.{
+                .{ .name = "x", .type_expr = &int_te, .default = null, .is_pub = true, .is_mut = false, .is_weak = false, .location = Location.zero },
+            },
+        } },
+        .is_pub = false,
+        .location = Location.zero,
+    };
+
+    const module = ast.Module{ .imports = &.{}, .decls = &.{struct_decl} };
+    checker.check(&module);
+
+    // Point("hello") — wrong type
+    const callee = ast.Expr{ .kind = .{ .ident = "Point" }, .location = Location.zero };
+    const arg1 = ast.Expr{ .kind = .{ .string_lit = "hello" }, .location = Location.zero };
+    const call = ast.Expr{
+        .kind = .{ .call = .{
+            .callee = &callee,
+            .args = &.{
+                .{ .name = null, .value = &arg1, .location = Location.zero },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    _ = checker.checkExpr(&call, &checker.module_scope);
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "checkCall: non-struct type name falls through to normal call" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    // Int(42) — Int is a builtin, not a struct, not a function → "undefined variable"
+    const callee = ast.Expr{ .kind = .{ .ident = "Int" }, .location = Location.zero };
+    const arg1 = ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+    const call = ast.Expr{
+        .kind = .{ .call = .{
+            .callee = &callee,
+            .args = &.{
+                .{ .name = null, .value = &arg1, .location = Location.zero },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&call, &checker.module_scope);
+    try std.testing.expect(result.isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "checkCall: struct constructor result used in field access" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const int_te = ast.TypeExpr{ .kind = .{ .named = "Int" }, .location = Location.zero };
+    const struct_decl = ast.Decl{
+        .kind = .{ .struct_decl = .{
+            .name = "Point",
+            .generic_params = &.{},
+            .fields = &.{
+                .{ .name = "x", .type_expr = &int_te, .default = null, .is_pub = true, .is_mut = false, .is_weak = false, .location = Location.zero },
+            },
+        } },
+        .is_pub = false,
+        .location = Location.zero,
+    };
+
+    const module = ast.Module{ .imports = &.{}, .decls = &.{struct_decl} };
+    checker.check(&module);
+
+    // bind p := Point(1), then check p.x
+    const callee = ast.Expr{ .kind = .{ .ident = "Point" }, .location = Location.zero };
+    const arg1 = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const call_expr = ast.Expr{
+        .kind = .{ .call = .{
+            .callee = &callee,
+            .args = &.{
+                .{ .name = null, .value = &arg1, .location = Location.zero },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    // simulate binding p := Point(1)
+    const call_type = checker.checkExpr(&call_expr, &checker.module_scope);
+    try checker.module_scope.define("p", .{ .type_id = call_type, .is_mut = false });
+
+    // now check p.x
+    const p_expr = ast.Expr{ .kind = .{ .ident = "p" }, .location = Location.zero };
+    const field = ast.Expr{
+        .kind = .{ .field_access = .{ .object = &p_expr, .field = "x" } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&field, &checker.module_scope);
+    try std.testing.expectEqual(TypeId.int, result);
 }
 
 // -- type alias tests --
