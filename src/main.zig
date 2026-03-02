@@ -1,3 +1,5 @@
+// main — CLI entry point for the forge compiler
+
 const std = @import("std");
 const Lexer = @import("lexer.zig").Lexer;
 const Parser = @import("parser.zig").Parser;
@@ -82,6 +84,7 @@ pub fn main() !void {
     }
 }
 
+/// lex a source file and print each token.
 fn runLex(allocator: std.mem.Allocator, path: []const u8) !void {
     const source = readSourceFile(allocator, path) orelse return;
     defer allocator.free(source);
@@ -115,6 +118,7 @@ fn runLex(allocator: std.mem.Allocator, path: []const u8) !void {
     }
 }
 
+/// lex and parse a source file, then print the AST.
 fn runParse(allocator: std.mem.Allocator, path: []const u8) !void {
     const source = readSourceFile(allocator, path) orelse return;
     defer allocator.free(source);
@@ -151,6 +155,7 @@ fn runParse(allocator: std.mem.Allocator, path: []const u8) !void {
     printer.printModule(module);
 }
 
+/// lex, parse, and type-check a source file. prints "ok" on success.
 fn runCheck(allocator: std.mem.Allocator, path: []const u8) !void {
     const source = readSourceFile(allocator, path) orelse return;
     defer allocator.free(source);

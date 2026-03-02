@@ -300,6 +300,24 @@ pub const Parser = struct {
         return self.parseOrExpr();
     }
 
+    // expression precedence tower (lowest to highest):
+    //
+    //   parseOrExpr       →  or
+    //   parseAndExpr      →  and
+    //   parseNotExpr      →  not  (prefix unary)
+    //   parseComparison   →  == != < > <= >=
+    //   parsePipeExpr     →  |
+    //   parseAddExpr      →  + -
+    //   parseMulExpr      →  * / %
+    //   parseUnaryExpr    →  spawn, await, - (prefix)
+    //   parsePostfixExpr  →  .field, .method(), [index], ?, !
+    //   parsePrimary      →  literals, identifiers, grouped, etc.
+    //
+    // each binary level follows the same left-associative pattern:
+    //   parse the next-higher level, then loop consuming the operator.
+    // this repetition is intentional — a generic helper with function
+    // pointers and comptime operator maps would be cleverer, not clearer.
+
     /// or_expr = and_expr { "or" and_expr }
     fn parseOrExpr(self: *Parser) ParseError!*const ast.Expr {
         var left = try self.parseAndExpr();
@@ -1218,9 +1236,13 @@ pub const Parser = struct {
     }
 
     /// heuristic: does the current position look like a typed binding?
-    /// checks for: ident ":" type ":="
-    /// scans past tokens that can appear in type expressions until we
-    /// find := (binding) or something that can't be part of a type.
+    /// when we see `ident :`, we need to distinguish:
+    ///   name: Type := value   (binding — colon starts a type annotation)
+    ///   name: other           (could be dict entry, label, etc.)
+    /// we scan forward past tokens that can appear in type expressions
+    /// (identifiers, brackets, parens, commas, ?, !, ->, fn, +) looking
+    /// for := which confirms it's a binding. if we hit a newline, dedent,
+    /// or EOF first, it's not a binding.
     fn looksLikeBinding(self: *const Parser) bool {
         // start from offset 2 (past ident and colon)
         var i: u32 = 2;
@@ -1434,6 +1456,7 @@ pub const Parser = struct {
     // declarations
     // ---------------------------------------------------------------
 
+    /// parse a complete forge source file into a module AST.
     /// module = { import_decl NEWLINE } { top_level_decl } EOF
     pub fn parseModule(self: *Parser) ParseError!ast.Module {
         var imports: std.ArrayList(ast.ImportDecl) = .empty;

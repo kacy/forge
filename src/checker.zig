@@ -85,6 +85,7 @@ pub const Checker = struct {
     arena: std.heap.ArenaAllocator,
     module_scope: Scope,
 
+    /// create a new checker. registers builtin types and functions.
     pub fn init(allocator: std.mem.Allocator, source: []const u8) !Checker {
         var checker = Checker{
             .type_table = try TypeTable.init(allocator),
@@ -464,14 +465,19 @@ pub const Checker = struct {
         }
     }
 
-    fn checkIfStmt(self: *Checker, if_s: ast.IfStmt, scope: *Scope) void {
-        const cond = self.checkExpr(if_s.condition, scope);
-        if (!cond.isErr() and cond != .bool) {
-            self.diagnostics.addError(if_s.condition.location, self.fmt(
+    /// emit an error if the type isn't Bool. used for if/while/elif conditions.
+    fn expectBool(self: *Checker, location: Location, actual: TypeId) void {
+        if (!actual.isErr() and actual != .bool) {
+            self.diagnostics.addError(location, self.fmt(
                 "expected Bool in condition, got {s}",
-                .{self.type_table.typeName(cond)},
+                .{self.type_table.typeName(actual)},
             )) catch {};
         }
+    }
+
+    fn checkIfStmt(self: *Checker, if_s: ast.IfStmt, scope: *Scope) void {
+        const cond = self.checkExpr(if_s.condition, scope);
+        self.expectBool(if_s.condition.location, cond);
 
         var then_scope = Scope.init(self.allocator, scope);
         defer then_scope.deinit();
@@ -479,12 +485,7 @@ pub const Checker = struct {
 
         for (if_s.elif_branches) |branch| {
             const elif_cond = self.checkExpr(branch.condition, scope);
-            if (!elif_cond.isErr() and elif_cond != .bool) {
-                self.diagnostics.addError(branch.condition.location, self.fmt(
-                    "expected Bool in condition, got {s}",
-                    .{self.type_table.typeName(elif_cond)},
-                )) catch {};
-            }
+            self.expectBool(branch.condition.location, elif_cond);
             var elif_scope = Scope.init(self.allocator, scope);
             defer elif_scope.deinit();
             self.checkBlock(branch.block, &elif_scope);
@@ -499,12 +500,7 @@ pub const Checker = struct {
 
     fn checkWhileStmt(self: *Checker, w: ast.WhileStmt, scope: *Scope) void {
         const cond = self.checkExpr(w.condition, scope);
-        if (!cond.isErr() and cond != .bool) {
-            self.diagnostics.addError(w.condition.location, self.fmt(
-                "expected Bool in condition, got {s}",
-                .{self.type_table.typeName(cond)},
-            )) catch {};
-        }
+        self.expectBool(w.condition.location, cond);
 
         var body_scope = Scope.init(self.allocator, scope);
         defer body_scope.deinit();
@@ -534,6 +530,7 @@ pub const Checker = struct {
     // type resolution — AST TypeExpr → TypeId
     // ---------------------------------------------------------------
 
+    /// resolve an AST type expression to a TypeId in the type table.
     pub fn resolveTypeExpr(self: *Checker, type_expr: *const ast.TypeExpr) TypeId {
         return switch (type_expr.kind) {
             .named => |name| self.resolveNamedType(name, type_expr.location),
@@ -651,6 +648,11 @@ pub const Checker = struct {
             .if_expr => |if_e| self.checkIfExpr(if_e, scope),
 
             .call => |call| self.checkCall(call, expr.location, scope),
+
+            // method_call, index, unwrap, try_expr return .err because they
+            // require generics or method resolution that isn't implemented yet.
+            // returning .err (the error sentinel) suppresses cascading
+            // diagnostics — downstream checks skip anything typed as .err.
             .method_call => .err,
             .field_access => |fa| self.checkFieldAccess(fa, expr.location, scope),
             .index => .err,
@@ -848,24 +850,14 @@ pub const Checker = struct {
 
     fn checkIfExpr(self: *Checker, if_e: ast.IfExpr, scope: *const Scope) TypeId {
         const cond = self.checkExpr(if_e.condition, scope);
-        if (!cond.isErr() and cond != .bool) {
-            self.diagnostics.addError(if_e.condition.location, self.fmt(
-                "expected Bool in condition, got {s}",
-                .{self.type_table.typeName(cond)},
-            )) catch {};
-        }
+        self.expectBool(if_e.condition.location, cond);
 
         const then_type = self.checkExpr(if_e.then_expr, scope);
 
         // check elif branches
         for (if_e.elif_branches) |branch| {
             const elif_cond = self.checkExpr(branch.condition, scope);
-            if (!elif_cond.isErr() and elif_cond != .bool) {
-                self.diagnostics.addError(branch.condition.location, self.fmt(
-                    "expected Bool in condition, got {s}",
-                    .{self.type_table.typeName(elif_cond)},
-                )) catch {};
-            }
+            self.expectBool(branch.condition.location, elif_cond);
 
             const elif_type = self.checkExpr(branch.expr, scope);
             if (!then_type.isErr() and !elif_type.isErr() and then_type != elif_type) {
@@ -887,6 +879,13 @@ pub const Checker = struct {
         return then_type;
     }
 
+    // call dispatch logic:
+    // if the callee is a struct type name, route to struct constructor
+    // checking. however, some struct types (Mutex, WaitGroup, Semaphore)
+    // are registered as zero-field structs but also have constructor
+    // functions in scope — when the arg count doesn't match the field
+    // count and a function binding exists, we fall through to normal
+    // function call checking instead.
     fn checkCall(self: *Checker, call: ast.CallExpr, location: Location, scope: *const Scope) TypeId {
         // check if the callee is a struct type name — route to constructor
         if (call.callee.kind == .ident) {
@@ -1077,41 +1076,23 @@ pub const Checker = struct {
         };
     }
 
+    /// emit an error if the subject type doesn't match the expected literal type.
+    fn checkLiteralPattern(self: *Checker, subject_type: TypeId, expected: TypeId, type_name: []const u8, location: Location) void {
+        if (!subject_type.isErr() and subject_type != expected) {
+            self.diagnostics.addError(location, self.fmt(
+                "cannot match {s} literal against {s}",
+                .{ type_name, self.type_table.typeName(subject_type) },
+            )) catch {};
+        }
+    }
+
     fn checkPattern(self: *Checker, pattern: ast.Pattern, subject_type: TypeId, scope: *Scope) void {
         switch (pattern.kind) {
             .wildcard => {},
-            .int_lit => {
-                if (!subject_type.isErr() and subject_type != .int) {
-                    self.diagnostics.addError(pattern.location, self.fmt(
-                        "cannot match Int literal against {s}",
-                        .{self.type_table.typeName(subject_type)},
-                    )) catch {};
-                }
-            },
-            .float_lit => {
-                if (!subject_type.isErr() and subject_type != .float) {
-                    self.diagnostics.addError(pattern.location, self.fmt(
-                        "cannot match Float literal against {s}",
-                        .{self.type_table.typeName(subject_type)},
-                    )) catch {};
-                }
-            },
-            .string_lit => {
-                if (!subject_type.isErr() and subject_type != .string) {
-                    self.diagnostics.addError(pattern.location, self.fmt(
-                        "cannot match String literal against {s}",
-                        .{self.type_table.typeName(subject_type)},
-                    )) catch {};
-                }
-            },
-            .bool_lit => {
-                if (!subject_type.isErr() and subject_type != .bool) {
-                    self.diagnostics.addError(pattern.location, self.fmt(
-                        "cannot match Bool literal against {s}",
-                        .{self.type_table.typeName(subject_type)},
-                    )) catch {};
-                }
-            },
+            .int_lit => self.checkLiteralPattern(subject_type, .int, "Int", pattern.location),
+            .float_lit => self.checkLiteralPattern(subject_type, .float, "Float", pattern.location),
+            .string_lit => self.checkLiteralPattern(subject_type, .string, "String", pattern.location),
+            .bool_lit => self.checkLiteralPattern(subject_type, .bool, "Bool", pattern.location),
             .none_lit => {}, // needs Optional types — skip for now
             .binding => |name| {
                 scope.define(name, .{ .type_id = subject_type, .is_mut = false }) catch {};
