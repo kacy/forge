@@ -986,7 +986,8 @@ pub const Parser = struct {
                 break;
             }
 
-            // unexpected token — error recovery
+            // unexpected token — emit diagnostic and stop
+            try self.diagnostics.addError(self.peek().location, "unexpected token in string interpolation");
             break;
         }
 
@@ -1204,14 +1205,21 @@ pub const Parser = struct {
 
     /// heuristic: does the current position look like a typed binding?
     /// checks for: ident ":" type ":="
+    /// scans past tokens that can appear in type expressions until we
+    /// find := (binding) or something that can't be part of a type.
     fn looksLikeBinding(self: *const Parser) bool {
         // start from offset 2 (past ident and colon)
         var i: u32 = 2;
-        // skip past what looks like a type (identifiers, brackets, etc)
         while (true) {
             const kind = self.peekAhead(i).kind;
             if (kind == .colon_eq) return true;
-            if (kind == .identifier or kind == .lbracket or kind == .rbracket or kind == .comma or kind == .question or kind == .bang) {
+            if (kind == .eof or kind == .newline or kind == .dedent) return false;
+            // tokens that can appear in type expressions
+            if (kind == .identifier or kind == .lbracket or kind == .rbracket or
+                kind == .lparen or kind == .rparen or kind == .comma or
+                kind == .question or kind == .bang or kind == .arrow or
+                kind == .kw_fn or kind == .plus)
+            {
                 i += 1;
                 continue;
             }
@@ -1306,7 +1314,12 @@ pub const Parser = struct {
             else_block = try self.parseBlock();
         }
 
-        const end_loc = if (else_block) |eb| eb.location else if (elifs.items.len > 0) elifs.items[elifs.items.len - 1].block.location else then_block.location;
+        const end_loc = if (else_block) |eb|
+            eb.location
+        else if (elifs.items.len > 0)
+            elifs.items[elifs.items.len - 1].block.location
+        else
+            then_block.location;
 
         return .{
             .kind = .{ .if_stmt = .{
@@ -1365,9 +1378,12 @@ pub const Parser = struct {
     /// match statement (same as match expr, used in statement context)
     fn parseMatchStmt(self: *Parser) ParseError!ast.Stmt {
         const loc = self.peek().location;
-        const match_expr = try self.parseMatchExpr();
+        const result = try self.parseMatchExpr();
         return .{
-            .kind = .{ .match_stmt = match_expr.kind.match_expr },
+            .kind = switch (result.kind) {
+                .match_expr => |m| .{ .match_stmt = m },
+                else => .{ .expr_stmt = result },
+            },
             .location = loc,
         };
     }
@@ -2614,4 +2630,246 @@ test "parse complete program" {
     const module = try result.parser.parseModule();
     try testing.expectEqual(@as(usize, 1), module.imports.len);
     try testing.expectEqual(@as(usize, 2), module.decls.len);
+}
+
+// -- edge case and error tests --
+
+test "parse empty module" {
+    var result = try testParser("");
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    try testing.expectEqual(@as(usize, 0), module.imports.len);
+    try testing.expectEqual(@as(usize, 0), module.decls.len);
+}
+
+test "parse unexpected token produces error expr" {
+    var result = try testParser("@");
+    defer result.deinit();
+
+    // the lexer will produce an error token, which parsePrimary handles
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .err);
+}
+
+test "parse trailing comma in list" {
+    var result = try testParser("[1, 2, 3,]");
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .list);
+    try testing.expectEqual(@as(usize, 3), expr.kind.list.len);
+}
+
+test "parse trailing comma in map" {
+    var result = try testParser("{\"a\": 1, \"b\": 2,}");
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .map);
+    try testing.expectEqual(@as(usize, 2), expr.kind.map.len);
+}
+
+test "parse nested if expression" {
+    var result = try testParser("if a: if b: 1 else: 2 else: 3");
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .if_expr);
+    try testing.expect(expr.kind.if_expr.then_expr.kind == .if_expr);
+}
+
+test "parse deeply nested binary" {
+    var result = try testParser("1 + 2 + 3 + 4 + 5");
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    // left-associative: ((((1+2)+3)+4)+5)
+    try testing.expect(expr.kind == .binary);
+    try testing.expect(expr.kind.binary.right.kind == .int_lit);
+    try testing.expect(expr.kind.binary.left.kind == .binary);
+}
+
+test "parse struct with defaults and modifiers" {
+    const source =
+        \\struct Config:
+        \\    pub host: String = "localhost"
+        \\    pub mut port: Int = 8080
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    const fields = module.decls[0].kind.struct_decl.fields;
+    try testing.expectEqual(@as(usize, 2), fields.len);
+    try testing.expect(fields[0].is_pub);
+    try testing.expect(!fields[0].is_mut);
+    try testing.expect(fields[0].default != null);
+    try testing.expect(fields[1].is_pub);
+    try testing.expect(fields[1].is_mut);
+}
+
+test "parse fn with default parameter" {
+    const source =
+        \\fn connect(host: String = "localhost", port: Int = 5432):
+        \\    return none
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    const params = module.decls[0].kind.fn_decl.params;
+    try testing.expectEqual(@as(usize, 2), params.len);
+    try testing.expect(params[0].default != null);
+    try testing.expect(params[1].default != null);
+}
+
+test "parse match with guard" {
+    const source =
+        \\match x:
+        \\    n if n > 0 => "positive"
+        \\    _ => "non-positive"
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .match_expr);
+    try testing.expectEqual(@as(usize, 2), expr.kind.match_expr.arms.len);
+    try testing.expect(expr.kind.match_expr.arms[0].guard != null);
+    try testing.expect(expr.kind.match_expr.arms[1].guard == null);
+}
+
+test "parse pattern variants" {
+    var result = try testParser(
+        \\match shape:
+        \\    Shape.Circle(r) => r
+        \\    Shape.Rect(w, h) => w
+        \\    _ => 0
+        \\
+    );
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .match_expr);
+    const arms = expr.kind.match_expr.arms;
+    try testing.expect(arms[0].pattern.kind == .variant);
+    try testing.expectEqualStrings("Circle", arms[0].pattern.kind.variant.variant);
+    try testing.expectEqual(@as(usize, 1), arms[0].pattern.kind.variant.fields.len);
+    try testing.expect(arms[1].pattern.kind == .variant);
+    try testing.expectEqual(@as(usize, 2), arms[1].pattern.kind.variant.fields.len);
+    try testing.expect(arms[2].pattern.kind == .wildcard);
+}
+
+test "parse impl block" {
+    const source =
+        \\impl Point:
+        \\    pub fn new(x: Float, y: Float) -> Point:
+        \\        return Point(x, y)
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    try testing.expect(module.decls[0].kind == .impl_decl);
+    const impl_decl = module.decls[0].kind.impl_decl;
+    try testing.expectEqual(@as(usize, 1), impl_decl.methods.len);
+    try testing.expect(impl_decl.methods[0].is_pub);
+}
+
+test "parse impl for interface" {
+    const source =
+        \\impl Display for Point:
+        \\    fn to_string(self: ref Point) -> String:
+        \\        return "point"
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    const impl_decl = module.decls[0].kind.impl_decl;
+    try testing.expect(impl_decl.interface != null);
+}
+
+test "parse lambda with typed params" {
+    var result = try testParser("fn(x: Int, y: Int) => x + y");
+    defer result.deinit();
+
+    const expr = try result.parser.parseExpression();
+    try testing.expect(expr.kind == .lambda);
+    try testing.expectEqual(@as(usize, 2), expr.kind.lambda.params.len);
+    try testing.expect(expr.kind.lambda.params[0].type_expr != null);
+}
+
+test "parse empty function" {
+    const source =
+        \\fn noop():
+        \\    return
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    try testing.expect(module.decls[0].kind == .fn_decl);
+    const body = module.decls[0].kind.fn_decl.body;
+    try testing.expectEqual(@as(usize, 1), body.stmts.len);
+    try testing.expect(body.stmts[0].kind == .return_stmt);
+}
+
+test "parse if-elif-else" {
+    const source =
+        \\if x > 0:
+        \\    a
+        \\elif x == 0:
+        \\    b
+        \\else:
+        \\    c
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .if_stmt);
+    try testing.expectEqual(@as(usize, 1), stmt.kind.if_stmt.elif_branches.len);
+    try testing.expect(stmt.kind.if_stmt.else_block != null);
+}
+
+test "parse generic struct" {
+    const source =
+        \\struct Pair[A, B]:
+        \\    first: A
+        \\    second: B
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    const s = module.decls[0].kind.struct_decl;
+    try testing.expectEqualStrings("Pair", s.name);
+    try testing.expectEqual(@as(usize, 2), s.generic_params.len);
+    try testing.expectEqualStrings("A", s.generic_params[0].name);
+    try testing.expectEqualStrings("B", s.generic_params[1].name);
+}
+
+test "parse generic with bounds" {
+    const source =
+        \\fn sort[T: Comparable](items: List[T]):
+        \\    return items
+        \\
+    ;
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const module = try result.parser.parseModule();
+    const gp = module.decls[0].kind.fn_decl.generic_params;
+    try testing.expectEqual(@as(usize, 1), gp.len);
+    try testing.expectEqual(@as(usize, 1), gp[0].bounds.len);
 }
