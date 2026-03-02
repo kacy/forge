@@ -1130,25 +1130,274 @@ pub const Parser = struct {
     }
 
     // ---------------------------------------------------------------
-    // blocks (forward declaration — used by match arms and lambdas)
+    // blocks and statements
     // ---------------------------------------------------------------
 
-    /// placeholder for block parsing — full implementation in next commit.
+    /// block = NEWLINE INDENT { statement NEWLINE } DEDENT
     fn parseBlock(self: *Parser) ParseError!ast.Block {
         const loc = self.peek().location;
         _ = try self.expect(.newline);
         _ = try self.expect(.indent);
 
-        // skip everything until we find the matching dedent
-        var depth: u32 = 1;
-        while (depth > 0 and self.peek().kind != .eof) {
-            if (self.peek().kind == .indent) depth += 1;
-            if (self.peek().kind == .dedent) depth -= 1;
-            if (depth > 0) _ = self.advance();
+        var stmts: std.ArrayList(ast.Stmt) = .empty;
+        while (!self.check(.dedent) and !self.check(.eof)) {
+            const stmt = try self.parseStatement();
+            try stmts.append(self.allocator, stmt);
+            // consume trailing newlines between statements
+            while (self.check(.newline)) _ = self.advance();
         }
-        if (self.check(.dedent)) _ = self.advance();
+        const end_tok = try self.expect(.dedent);
 
-        return .{ .stmts = &.{}, .location = loc };
+        return .{
+            .stmts = try stmts.toOwnedSlice(self.allocator),
+            .location = Location.span(loc, end_tok.location),
+        };
+    }
+
+    /// dispatch to the appropriate statement parser based on the leading token.
+    fn parseStatement(self: *Parser) ParseError!ast.Stmt {
+        const tok = self.peek();
+
+        // mut binding: mut name [:type] := expr
+        if (tok.kind == .kw_mut) {
+            return self.parseBinding();
+        }
+
+        // binding: name [:type] := expr
+        // need to distinguish from assignment and expr-stmt.
+        // if we see ident followed by := or ident : type :=, it's a binding.
+        if (tok.kind == .identifier) {
+            if (self.peekAhead(1).kind == .colon_eq) {
+                return self.parseBinding();
+            }
+            if (self.peekAhead(1).kind == .colon and self.peekAhead(2).kind == .identifier) {
+                // could be binding with type annotation: name: Type := expr
+                // we need to look further to find :=
+                // but it could also be an expr statement like foo: (which would be weird)
+                // let's check — scan ahead past potential type to find :=
+                if (self.looksLikeBinding()) {
+                    return self.parseBinding();
+                }
+            }
+        }
+
+        // control flow
+        if (tok.kind == .kw_if) return self.parseIfStmt();
+        if (tok.kind == .kw_for) return self.parseForStmt();
+        if (tok.kind == .kw_while) return self.parseWhileStmt();
+        if (tok.kind == .kw_match) return self.parseMatchStmt();
+        if (tok.kind == .kw_return) return self.parseReturnStmt();
+        if (tok.kind == .kw_fail) return self.parseFailStmt();
+
+        if (tok.kind == .kw_break) {
+            _ = self.advance();
+            return .{ .kind = .break_stmt, .location = tok.location };
+        }
+        if (tok.kind == .kw_continue) {
+            _ = self.advance();
+            return .{ .kind = .continue_stmt, .location = tok.location };
+        }
+
+        // expression statement or assignment
+        return self.parseExprStmtOrAssignment();
+    }
+
+    /// heuristic: does the current position look like a typed binding?
+    /// checks for: ident ":" type ":="
+    fn looksLikeBinding(self: *const Parser) bool {
+        // start from offset 2 (past ident and colon)
+        var i: u32 = 2;
+        // skip past what looks like a type (identifiers, brackets, etc)
+        while (true) {
+            const kind = self.peekAhead(i).kind;
+            if (kind == .colon_eq) return true;
+            if (kind == .identifier or kind == .lbracket or kind == .rbracket or kind == .comma or kind == .question or kind == .bang) {
+                i += 1;
+                continue;
+            }
+            return false;
+        }
+    }
+
+    /// parse a binding: [mut] name [: type] := expr
+    fn parseBinding(self: *Parser) ParseError!ast.Stmt {
+        const loc = self.peek().location;
+        const is_mut = self.match(.kw_mut);
+        const name_tok = try self.expect(.identifier);
+
+        var type_expr: ?*const ast.TypeExpr = null;
+        if (self.match(.colon)) {
+            type_expr = try self.parseTypeExpr();
+        }
+
+        _ = try self.expect(.colon_eq);
+        const value = try self.parseExpression();
+
+        return .{
+            .kind = .{ .binding = .{
+                .name = name_tok.lexeme,
+                .type_expr = type_expr,
+                .value = value,
+                .is_mut = is_mut,
+            } },
+            .location = Location.span(loc, value.location),
+        };
+    }
+
+    /// parse an expression statement or assignment.
+    /// first parse as expression, then check for assignment operator.
+    fn parseExprStmtOrAssignment(self: *Parser) ParseError!ast.Stmt {
+        const loc = self.peek().location;
+        const expr = try self.parseExpression();
+
+        // check for assignment operators
+        const op: ?ast.AssignOp = switch (self.peek().kind) {
+            .eq => .assign,
+            .plus_eq => .add,
+            .minus_eq => .sub,
+            .star_eq => .mul,
+            .slash_eq => .div,
+            else => null,
+        };
+
+        if (op) |assign_op| {
+            _ = self.advance();
+            const value = try self.parseExpression();
+            return .{
+                .kind = .{ .assignment = .{
+                    .target = expr,
+                    .op = assign_op,
+                    .value = value,
+                } },
+                .location = Location.span(loc, value.location),
+            };
+        }
+
+        return .{
+            .kind = .{ .expr_stmt = expr },
+            .location = expr.location,
+        };
+    }
+
+    /// if statement: if expr: block {elif expr: block} [else: block]
+    fn parseIfStmt(self: *Parser) ParseError!ast.Stmt {
+        const if_tok = self.advance(); // skip if
+        const condition = try self.parseExpression();
+        _ = try self.expect(.colon);
+        const then_block = try self.parseBlock();
+
+        var elifs: std.ArrayList(ast.ElifBranch) = .empty;
+        while (self.check(.kw_elif)) {
+            const elif_tok = self.advance();
+            const elif_cond = try self.parseExpression();
+            _ = try self.expect(.colon);
+            const elif_block = try self.parseBlock();
+            try elifs.append(self.allocator, .{
+                .condition = elif_cond,
+                .block = elif_block,
+                .location = elif_tok.location,
+            });
+        }
+
+        var else_block: ?ast.Block = null;
+        if (self.check(.kw_else)) {
+            _ = self.advance();
+            _ = try self.expect(.colon);
+            else_block = try self.parseBlock();
+        }
+
+        const end_loc = if (else_block) |eb| eb.location else if (elifs.items.len > 0) elifs.items[elifs.items.len - 1].block.location else then_block.location;
+
+        return .{
+            .kind = .{ .if_stmt = .{
+                .condition = condition,
+                .then_block = then_block,
+                .elif_branches = try elifs.toOwnedSlice(self.allocator),
+                .else_block = else_block,
+            } },
+            .location = Location.span(if_tok.location, end_loc),
+        };
+    }
+
+    /// for statement: for name [, index] in expr: block
+    fn parseForStmt(self: *Parser) ParseError!ast.Stmt {
+        const for_tok = self.advance(); // skip for
+        const binding_tok = try self.expect(.identifier);
+
+        var index_name: ?[]const u8 = null;
+        if (self.match(.comma)) {
+            const index_tok = try self.expect(.identifier);
+            index_name = index_tok.lexeme;
+        }
+
+        _ = try self.expect(.kw_in);
+        const iterable = try self.parseExpression();
+        _ = try self.expect(.colon);
+        const body = try self.parseBlock();
+
+        return .{
+            .kind = .{ .for_stmt = .{
+                .binding = binding_tok.lexeme,
+                .index = index_name,
+                .iterable = iterable,
+                .body = body,
+            } },
+            .location = Location.span(for_tok.location, body.location),
+        };
+    }
+
+    /// while statement: while expr: block
+    fn parseWhileStmt(self: *Parser) ParseError!ast.Stmt {
+        const while_tok = self.advance(); // skip while
+        const condition = try self.parseExpression();
+        _ = try self.expect(.colon);
+        const body = try self.parseBlock();
+
+        return .{
+            .kind = .{ .while_stmt = .{
+                .condition = condition,
+                .body = body,
+            } },
+            .location = Location.span(while_tok.location, body.location),
+        };
+    }
+
+    /// match statement (same as match expr, used in statement context)
+    fn parseMatchStmt(self: *Parser) ParseError!ast.Stmt {
+        const loc = self.peek().location;
+        const match_expr = try self.parseMatchExpr();
+        return .{
+            .kind = .{ .match_stmt = match_expr.kind.match_expr },
+            .location = loc,
+        };
+    }
+
+    /// return statement: return [expr]
+    fn parseReturnStmt(self: *Parser) ParseError!ast.Stmt {
+        const tok = self.advance(); // skip return
+
+        // return has a value if the next token isn't a newline/dedent/eof
+        var value: ?*const ast.Expr = null;
+        const next = self.peek().kind;
+        if (next != .newline and next != .dedent and next != .eof) {
+            value = try self.parseExpression();
+        }
+
+        const end_loc = if (value) |v| v.location else tok.location;
+        return .{
+            .kind = .{ .return_stmt = .{ .value = value } },
+            .location = Location.span(tok.location, end_loc),
+        };
+    }
+
+    /// fail statement: fail expr
+    fn parseFailStmt(self: *Parser) ParseError!ast.Stmt {
+        const tok = self.advance(); // skip fail
+        const value = try self.parseExpression();
+        return .{
+            .kind = .{ .fail_stmt = .{ .value = value } },
+            .location = Location.span(tok.location, value.location),
+        };
     }
 };
 
@@ -1574,4 +1823,162 @@ test "parse self" {
 
     const expr = try result.parser.parseExpression();
     try testing.expect(expr.kind == .self_expr);
+}
+
+// -- statement tests --
+
+test "parse binding" {
+    var result = try testParser("x := 42");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .binding);
+    try testing.expectEqualStrings("x", stmt.kind.binding.name);
+    try testing.expect(!stmt.kind.binding.is_mut);
+    try testing.expect(stmt.kind.binding.type_expr == null);
+}
+
+test "parse mutable binding" {
+    var result = try testParser("mut count := 0");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .binding);
+    try testing.expect(stmt.kind.binding.is_mut);
+}
+
+test "parse typed binding" {
+    var result = try testParser("x: Int := 42");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .binding);
+    try testing.expect(stmt.kind.binding.type_expr != null);
+    try testing.expectEqualStrings("Int", stmt.kind.binding.type_expr.?.kind.named);
+}
+
+test "parse assignment" {
+    var result = try testParser("x = 10");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .assignment);
+    try testing.expect(stmt.kind.assignment.op == .assign);
+}
+
+test "parse compound assignment" {
+    var result = try testParser("x += 1");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .assignment);
+    try testing.expect(stmt.kind.assignment.op == .add);
+}
+
+test "parse expression statement" {
+    var result = try testParser("foo(42)");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .expr_stmt);
+    try testing.expect(stmt.kind.expr_stmt.kind == .call);
+}
+
+test "parse return with value" {
+    var result = try testParser("return 42");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .return_stmt);
+    try testing.expect(stmt.kind.return_stmt.value != null);
+}
+
+test "parse return without value" {
+    var result = try testParser("return\n");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .return_stmt);
+    try testing.expect(stmt.kind.return_stmt.value == null);
+}
+
+test "parse fail statement" {
+    var result = try testParser("fail error");
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .fail_stmt);
+}
+
+test "parse break and continue" {
+    var b = try testParser("break");
+    defer b.deinit();
+    const s1 = try b.parser.parseStatement();
+    try testing.expect(s1.kind == .break_stmt);
+
+    var c = try testParser("continue");
+    defer c.deinit();
+    const s2 = try c.parser.parseStatement();
+    try testing.expect(s2.kind == .continue_stmt);
+}
+
+test "parse if statement with block" {
+    const source = "if x:\n    y := 1\n";
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .if_stmt);
+    try testing.expectEqual(@as(usize, 1), stmt.kind.if_stmt.then_block.stmts.len);
+    try testing.expect(stmt.kind.if_stmt.else_block == null);
+}
+
+test "parse if-else statement" {
+    const source = "if x:\n    a\nelse:\n    b\n";
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .if_stmt);
+    try testing.expect(stmt.kind.if_stmt.else_block != null);
+}
+
+test "parse for statement" {
+    const source = "for item in items:\n    print(item)\n";
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .for_stmt);
+    try testing.expectEqualStrings("item", stmt.kind.for_stmt.binding);
+    try testing.expect(stmt.kind.for_stmt.index == null);
+}
+
+test "parse for with index" {
+    const source = "for item, i in items:\n    print(i)\n";
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .for_stmt);
+    try testing.expectEqualStrings("i", stmt.kind.for_stmt.index.?);
+}
+
+test "parse while statement" {
+    const source = "while x > 0:\n    x -= 1\n";
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .while_stmt);
+}
+
+test "parse block with multiple statements" {
+    const source = "if true:\n    a := 1\n    b := 2\n    c := 3\n";
+    var result = try testParser(source);
+    defer result.deinit();
+
+    const stmt = try result.parser.parseStatement();
+    try testing.expect(stmt.kind == .if_stmt);
+    try testing.expectEqual(@as(usize, 3), stmt.kind.if_stmt.then_block.stmts.len);
 }
