@@ -348,7 +348,7 @@ pub const Checker = struct {
             .while_stmt => |w| self.checkWhileStmt(w, scope),
             .for_stmt => |f| self.checkForStmt(f, scope),
             .fail_stmt => |f| _ = self.checkExpr(f.value, scope),
-            .match_stmt => |m| _ = self.checkExpr(m.subject, scope),
+            .match_stmt => |m| self.checkMatchStmt(m, scope),
             .break_stmt => {
                 if (!scope.in_loop) {
                     self.diagnostics.addError(stmt.location, "break outside of loop") catch {};
@@ -620,7 +620,7 @@ pub const Checker = struct {
             .index => .err,
             .unwrap => .err,
             .try_expr => .err,
-            .match_expr => .err,
+            .match_expr => |m| self.checkMatchExpr(m, scope),
             .lambda => |lam| self.checkLambda(lam, scope),
             .list => .err,
             .map => .err,
@@ -932,6 +932,212 @@ pub const Checker = struct {
             .{ struct_data.name, fa.field },
         )) catch {};
         return .err;
+    }
+
+    fn checkMatchExpr(self: *Checker, m: ast.MatchExpr, scope: *const Scope) TypeId {
+        const subject_type = self.checkExpr(m.subject, scope);
+        if (subject_type.isErr()) return .err;
+
+        var expected_type: TypeId = .err;
+
+        for (m.arms) |arm| {
+            const arm_type = self.checkMatchArm(arm, subject_type, scope);
+            if (arm_type.isErr()) continue;
+
+            if (expected_type.isErr()) {
+                // first non-error arm establishes the expected type
+                expected_type = arm_type;
+            } else if (arm_type != expected_type) {
+                self.diagnostics.addError(arm.location, self.fmt(
+                    "match arm type mismatch: expected {s}, got {s}",
+                    .{ self.type_table.typeName(expected_type), self.type_table.typeName(arm_type) },
+                )) catch {};
+            }
+        }
+
+        return expected_type;
+    }
+
+    fn checkMatchStmt(self: *Checker, m: ast.MatchExpr, scope: *const Scope) void {
+        const subject_type = self.checkExpr(m.subject, scope);
+        if (subject_type.isErr()) return;
+
+        // match statement — no arm type agreement needed
+        for (m.arms) |arm| {
+            _ = self.checkMatchArm(arm, subject_type, scope);
+        }
+    }
+
+    fn checkMatchArm(self: *Checker, arm: ast.MatchArm, subject_type: TypeId, scope: *const Scope) TypeId {
+        // each arm gets its own scope for pattern bindings
+        var arm_scope = Scope.init(self.allocator, @constCast(scope));
+        defer arm_scope.deinit();
+
+        self.checkPattern(arm.pattern, subject_type, &arm_scope);
+
+        // check guard expression if present
+        if (arm.guard) |guard| {
+            const guard_type = self.checkExpr(guard, &arm_scope);
+            if (!guard_type.isErr() and guard_type != .bool) {
+                self.diagnostics.addError(guard.location, self.fmt(
+                    "match guard must be Bool, got {s}",
+                    .{self.type_table.typeName(guard_type)},
+                )) catch {};
+            }
+        }
+
+        // check arm body
+        return switch (arm.body) {
+            .expr => |e| self.checkExpr(e, &arm_scope),
+            .block => |block| {
+                var block_scope = Scope.init(self.allocator, &arm_scope);
+                defer block_scope.deinit();
+                self.checkBlock(block, &block_scope);
+                return .void;
+            },
+        };
+    }
+
+    fn checkPattern(self: *Checker, pattern: ast.Pattern, subject_type: TypeId, scope: *Scope) void {
+        switch (pattern.kind) {
+            .wildcard => {},
+            .int_lit => {
+                if (!subject_type.isErr() and subject_type != .int) {
+                    self.diagnostics.addError(pattern.location, self.fmt(
+                        "cannot match Int literal against {s}",
+                        .{self.type_table.typeName(subject_type)},
+                    )) catch {};
+                }
+            },
+            .float_lit => {
+                if (!subject_type.isErr() and subject_type != .float) {
+                    self.diagnostics.addError(pattern.location, self.fmt(
+                        "cannot match Float literal against {s}",
+                        .{self.type_table.typeName(subject_type)},
+                    )) catch {};
+                }
+            },
+            .string_lit => {
+                if (!subject_type.isErr() and subject_type != .string) {
+                    self.diagnostics.addError(pattern.location, self.fmt(
+                        "cannot match String literal against {s}",
+                        .{self.type_table.typeName(subject_type)},
+                    )) catch {};
+                }
+            },
+            .bool_lit => {
+                if (!subject_type.isErr() and subject_type != .bool) {
+                    self.diagnostics.addError(pattern.location, self.fmt(
+                        "cannot match Bool literal against {s}",
+                        .{self.type_table.typeName(subject_type)},
+                    )) catch {};
+                }
+            },
+            .none_lit => {}, // needs Optional types — skip for now
+            .binding => |name| {
+                scope.define(name, .{ .type_id = subject_type, .is_mut = false }) catch {};
+            },
+            .variant => |v| self.checkVariantPattern(v, subject_type, pattern.location, scope),
+            .tuple => |elems| self.checkTuplePattern(elems, subject_type, pattern.location, scope),
+        }
+    }
+
+    fn checkVariantPattern(
+        self: *Checker,
+        v: ast.VariantPattern,
+        subject_type: TypeId,
+        location: Location,
+        scope: *Scope,
+    ) void {
+        if (subject_type.isErr()) return;
+
+        // look up the enum type by name
+        const enum_type_id = self.type_table.lookup(v.type_name) orelse {
+            self.diagnostics.addError(location, self.fmt(
+                "unknown type '{s}'",
+                .{v.type_name},
+            )) catch {};
+            return;
+        };
+
+        if (enum_type_id != subject_type) {
+            self.diagnostics.addError(location, self.fmt(
+                "pattern type {s} does not match subject type {s}",
+                .{ v.type_name, self.type_table.typeName(subject_type) },
+            )) catch {};
+            return;
+        }
+
+        const ty = self.type_table.get(enum_type_id) orelse return;
+        const enum_data = switch (ty) {
+            .@"enum" => |e| e,
+            else => {
+                self.diagnostics.addError(location, self.fmt(
+                    "{s} is not an enum type",
+                    .{v.type_name},
+                )) catch {};
+                return;
+            },
+        };
+
+        // find the variant
+        for (enum_data.variants) |variant| {
+            if (std.mem.eql(u8, variant.name, v.variant)) {
+                // check field count
+                if (v.fields.len != variant.fields.len) {
+                    self.diagnostics.addError(location, self.fmt(
+                        "variant {s}.{s} has {d} field(s), pattern has {d}",
+                        .{ v.type_name, v.variant, variant.fields.len, v.fields.len },
+                    )) catch {};
+                    return;
+                }
+
+                // recurse into sub-patterns with field types
+                for (v.fields, variant.fields) |sub_pattern, field_type| {
+                    self.checkPattern(sub_pattern, field_type, scope);
+                }
+                return;
+            }
+        }
+
+        self.diagnostics.addError(location, self.fmt(
+            "enum {s} has no variant '{s}'",
+            .{ v.type_name, v.variant },
+        )) catch {};
+    }
+
+    fn checkTuplePattern(
+        self: *Checker,
+        elems: []const ast.Pattern,
+        subject_type: TypeId,
+        location: Location,
+        scope: *Scope,
+    ) void {
+        if (subject_type.isErr()) return;
+
+        const ty = self.type_table.get(subject_type) orelse return;
+        const tuple_data = switch (ty) {
+            .tuple => |t| t,
+            else => {
+                self.diagnostics.addError(location, self.fmt(
+                    "cannot match tuple pattern against {s}",
+                    .{self.type_table.typeName(subject_type)},
+                )) catch {};
+                return;
+            },
+        };
+
+        if (elems.len != tuple_data.elements.len) {
+            self.diagnostics.addError(location, self.fmt(
+                "tuple has {d} element(s), pattern has {d}",
+                .{ tuple_data.elements.len, elems.len },
+            )) catch {};
+            return;
+        }
+
+        for (elems, tuple_data.elements) |sub_pattern, elem_type| {
+            self.checkPattern(sub_pattern, elem_type, scope);
+        }
     }
 
     fn checkLambda(self: *Checker, lam: ast.Lambda, scope: *const Scope) TypeId {
@@ -1851,6 +2057,318 @@ test "break at top level is an error" {
     const stmt = ast.Stmt{ .kind = .break_stmt, .location = Location.zero };
     checker.checkStmt(&stmt, &scope);
     try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+// -- match expression tests --
+
+test "checkMatchExpr: literal patterns with type agreement" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // match 1: 1 => "one", 2 => "two"
+    const subject = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const one_result = ast.Expr{ .kind = .{ .string_lit = "one" }, .location = Location.zero };
+    const two_result = ast.Expr{ .kind = .{ .string_lit = "two" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{ .kind = .{ .int_lit = "1" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &one_result },
+                    .location = Location.zero,
+                },
+                .{
+                    .pattern = .{ .kind = .{ .int_lit = "2" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &two_result },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&match_expr, scope);
+    try std.testing.expectEqual(TypeId.string, result);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
+}
+
+test "checkMatchExpr: binding pattern defines variable in arm" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // match 42: x => x (binding pattern, arm body uses x)
+    const subject = ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+    const x_expr = ast.Expr{ .kind = .{ .ident = "x" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{ .kind = .{ .binding = "x" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &x_expr },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&match_expr, scope);
+    try std.testing.expectEqual(TypeId.int, result);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
+}
+
+test "checkMatchExpr: guard must be Bool" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    const subject = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const result_expr = ast.Expr{ .kind = .{ .string_lit = "yes" }, .location = Location.zero };
+    const bad_guard = ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{ .kind = .wildcard, .location = Location.zero },
+                    .guard = &bad_guard,
+                    .body = .{ .expr = &result_expr },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    _ = checker.checkExpr(&match_expr, scope);
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "checkMatchExpr: mismatched arm types" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // match 1: 1 => "string", 2 => 42 (type mismatch)
+    const subject = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const str_result = ast.Expr{ .kind = .{ .string_lit = "one" }, .location = Location.zero };
+    const int_result = ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{ .kind = .{ .int_lit = "1" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &str_result },
+                    .location = Location.zero,
+                },
+                .{
+                    .pattern = .{ .kind = .{ .int_lit = "2" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &int_result },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    _ = checker.checkExpr(&match_expr, scope);
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "checkMatchExpr: variant pattern binds field" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    // register enum Shape with Circle(Float)
+    const float_te = ast.TypeExpr{ .kind = .{ .named = "Float" }, .location = Location.zero };
+    const enum_decl = ast.Decl{
+        .kind = .{ .enum_decl = .{
+            .name = "Shape",
+            .generic_params = &.{},
+            .variants = &.{
+                .{ .name = "Circle", .fields = &.{&float_te}, .location = Location.zero },
+                .{ .name = "Point", .fields = &.{}, .location = Location.zero },
+            },
+        } },
+        .is_pub = false,
+        .location = Location.zero,
+    };
+    const module = ast.Module{ .imports = &.{}, .decls = &.{enum_decl} };
+    checker.check(&module);
+
+    // define s: Shape
+    const shape_id = checker.type_table.lookup("Shape").?;
+    try checker.module_scope.define("s", .{ .type_id = shape_id, .is_mut = false });
+
+    // match s: Shape.Circle(r) => r
+    const subject = ast.Expr{ .kind = .{ .ident = "s" }, .location = Location.zero };
+    const r_expr = ast.Expr{ .kind = .{ .ident = "r" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{
+                        .kind = .{ .variant = .{
+                            .type_name = "Shape",
+                            .variant = "Circle",
+                            .fields = &.{
+                                .{ .kind = .{ .binding = "r" }, .location = Location.zero },
+                            },
+                        } },
+                        .location = Location.zero,
+                    },
+                    .guard = null,
+                    .body = .{ .expr = &r_expr },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&match_expr, &checker.module_scope);
+    try std.testing.expectEqual(TypeId.float, result);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
+}
+
+test "checkMatchExpr: variant pattern wrong field count" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const float_te = ast.TypeExpr{ .kind = .{ .named = "Float" }, .location = Location.zero };
+    const enum_decl = ast.Decl{
+        .kind = .{ .enum_decl = .{
+            .name = "Shape",
+            .generic_params = &.{},
+            .variants = &.{
+                .{ .name = "Circle", .fields = &.{&float_te}, .location = Location.zero },
+            },
+        } },
+        .is_pub = false,
+        .location = Location.zero,
+    };
+    const module = ast.Module{ .imports = &.{}, .decls = &.{enum_decl} };
+    checker.check(&module);
+
+    const shape_id = checker.type_table.lookup("Shape").?;
+    try checker.module_scope.define("s", .{ .type_id = shape_id, .is_mut = false });
+
+    // Shape.Circle(a, b) — too many fields
+    const subject = ast.Expr{ .kind = .{ .ident = "s" }, .location = Location.zero };
+    const result_expr = ast.Expr{ .kind = .{ .int_lit = "0" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{
+                        .kind = .{ .variant = .{
+                            .type_name = "Shape",
+                            .variant = "Circle",
+                            .fields = &.{
+                                .{ .kind = .{ .binding = "a" }, .location = Location.zero },
+                                .{ .kind = .{ .binding = "b" }, .location = Location.zero },
+                            },
+                        } },
+                        .location = Location.zero,
+                    },
+                    .guard = null,
+                    .body = .{ .expr = &result_expr },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    _ = checker.checkExpr(&match_expr, &checker.module_scope);
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "checkMatchExpr: wildcard matches anything" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    const subject = ast.Expr{ .kind = .{ .string_lit = "hello" }, .location = Location.zero };
+    const result_expr = ast.Expr{ .kind = .{ .int_lit = "0" }, .location = Location.zero };
+
+    const match_expr = ast.Expr{
+        .kind = .{ .match_expr = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{ .kind = .wildcard, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &result_expr },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    const result = checker.checkExpr(&match_expr, scope);
+    try std.testing.expectEqual(TypeId.int, result);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
+}
+
+test "checkMatchStmt: no arm type agreement needed" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    // match 1: 1 => "string", 2 => 42 (as statement, no type agreement needed)
+    const subject = ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const str_result = ast.Expr{ .kind = .{ .string_lit = "one" }, .location = Location.zero };
+    const int_result = ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+
+    const stmt = ast.Stmt{
+        .kind = .{ .match_stmt = .{
+            .subject = &subject,
+            .arms = &.{
+                .{
+                    .pattern = .{ .kind = .{ .int_lit = "1" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &str_result },
+                    .location = Location.zero,
+                },
+                .{
+                    .pattern = .{ .kind = .{ .int_lit = "2" }, .location = Location.zero },
+                    .guard = null,
+                    .body = .{ .expr = &int_result },
+                    .location = Location.zero,
+                },
+            },
+        } },
+        .location = Location.zero,
+    };
+
+    var scope = Scope.init(std.testing.allocator, &checker.module_scope);
+    defer scope.deinit();
+    checker.checkStmt(&stmt, &scope);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
 }
 
 // -- lambda tests --
