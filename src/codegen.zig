@@ -418,6 +418,17 @@ pub const CEmitter = struct {
                             try self.emitInferredType(bin.left);
                         }
                     },
+                    .pipe => {
+                        // x | f → result type is f's return type
+                        const fn_name = switch (bin.right.kind) {
+                            .ident => |n| n,
+                            else => {
+                                try self.emitInferredType(bin.left);
+                                return;
+                            },
+                        };
+                        try self.emitFnReturnType(fn_name);
+                    },
                     else => try self.emitInferredType(bin.left),
                 }
             },
@@ -1111,6 +1122,22 @@ pub const CEmitter = struct {
                         const left_type = self.inferExprType(bin.left);
                         if (left_type == .string) return .string;
                         return left_type;
+                    },
+                    .pipe => {
+                        // x | f → result type is f's return type
+                        const fn_name = switch (bin.right.kind) {
+                            .ident => |n| n,
+                            else => return self.inferExprType(bin.left),
+                        };
+                        if (self.module_scope.lookup(fn_name)) |binding| {
+                            if (self.type_table.get(binding.type_id)) |ty| {
+                                switch (ty) {
+                                    .function => |f| return f.return_type,
+                                    else => {},
+                                }
+                            }
+                        }
+                        return self.inferExprType(bin.left);
                     },
                     else => return self.inferExprType(bin.left),
                 }
