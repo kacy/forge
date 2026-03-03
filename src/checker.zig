@@ -1322,7 +1322,8 @@ pub const Checker = struct {
         const rhs_name = switch (bin.right.kind) {
             .ident => |name| name,
             else => {
-                self.diagnostics.addError(location,
+                self.diagnostics.addError(
+                    location,
                     "pipe operator requires a function name on the right-hand side",
                 ) catch {};
                 return .err;
@@ -1537,14 +1538,16 @@ pub const Checker = struct {
                             return ty.result.ok_type;
                         }
                     }
-                    self.diagnostics.addError(location,
+                    self.diagnostics.addError(
+                        location,
                         "'!' can only be used in a function that returns a result type",
                     ) catch {};
                     return .err;
                 }
 
                 // no return type at all (top-level expression)
-                self.diagnostics.addError(location,
+                self.diagnostics.addError(
+                    location,
                     "'!' can only be used in a function that returns a result type",
                 ) catch {};
                 return .err;
@@ -5649,11 +5652,13 @@ test "checkMethodCall: wrong arg count errors" {
 
     const p_ref = ast.Expr{ .kind = .{ .ident = "p" }, .location = Location.zero };
     const method_call = ast.Expr{
-        .kind = .{ .method_call = .{
-            .receiver = &p_ref,
-            .method = "magnitude",
-            .args = &.{}, // no args — should be 1
-        } },
+        .kind = .{
+            .method_call = .{
+                .receiver = &p_ref,
+                .method = "magnitude",
+                .args = &.{}, // no args — should be 1
+            },
+        },
         .location = Location.zero,
     };
     const call_stmt = ast.Stmt{
