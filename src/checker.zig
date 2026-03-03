@@ -1247,12 +1247,12 @@ pub const Checker = struct {
 
             .method_call => |mc| self.checkMethodCall(mc, expr.location, scope),
 
-            // index, unwrap, try_expr return .err because they require
-            // generics that aren't implemented yet. returning .err
-            // suppresses cascading diagnostics downstream.
+            // index returns .err because it requires generics that aren't
+            // implemented yet. returning .err suppresses cascading
+            // diagnostics downstream.
             .field_access => |fa| self.checkFieldAccess(fa, expr.location, scope),
             .index => |idx| self.checkIndexExpr(idx, expr.location, scope),
-            .unwrap => .err,
+            .unwrap => |inner| self.checkUnwrapExpr(inner, expr.location, scope),
             .try_expr => .err,
             .spawn_expr => |inner| self.checkSpawnExpr(inner, expr.location, scope),
             .await_expr => |inner| self.checkAwaitExpr(inner, expr.location, scope),
@@ -1440,6 +1440,24 @@ pub const Checker = struct {
 
         self.diagnostics.addError(location, self.fmt(
             "expected Task, got {s}",
+            .{self.type_table.typeName(inner_type)},
+        )) catch {};
+        return .err;
+    }
+
+    fn checkUnwrapExpr(self: *Checker, inner: *const ast.Expr, location: Location, scope: *const Scope) TypeId {
+        const inner_type = self.checkExpr(inner, scope);
+        if (inner_type.isErr()) return .err;
+
+        // the operand must be an Optional[T]
+        if (self.type_table.get(inner_type)) |ty| {
+            if (ty == .optional) {
+                return ty.optional.inner;
+            }
+        }
+
+        self.diagnostics.addError(location, self.fmt(
+            "cannot unwrap non-optional type {s}",
             .{self.type_table.typeName(inner_type)},
         )) catch {};
         return .err;
@@ -6550,4 +6568,65 @@ test "self field access type mismatch in method body" {
     checker.check(&module);
 
     try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+// -- unwrap operator tests --
+
+test "unwrap Optional[Int] yields Int" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // create an Optional[Int] type
+    const opt_id = try checker.type_table.addType(.{ .optional = .{ .inner = .int } });
+    try scope.define("x", .{ .type_id = opt_id, .is_mut = false });
+
+    const ident = &ast.Expr{ .kind = .{ .ident = "x" }, .location = Location.zero };
+    const unwrap_expr = ast.Expr{ .kind = .{ .unwrap = ident }, .location = Location.zero };
+    try std.testing.expectEqual(TypeId.int, checker.checkExpr(&unwrap_expr, scope));
+}
+
+test "unwrap Optional[String] yields String" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    const opt_id = try checker.type_table.addType(.{ .optional = .{ .inner = .string } });
+    try scope.define("x", .{ .type_id = opt_id, .is_mut = false });
+
+    const ident = &ast.Expr{ .kind = .{ .ident = "x" }, .location = Location.zero };
+    const unwrap_expr = ast.Expr{ .kind = .{ .unwrap = ident }, .location = Location.zero };
+    try std.testing.expectEqual(TypeId.string, checker.checkExpr(&unwrap_expr, scope));
+}
+
+test "unwrap non-optional type is an error" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+    try scope.define("x", .{ .type_id = .int, .is_mut = false });
+
+    const ident = &ast.Expr{ .kind = .{ .ident = "x" }, .location = Location.zero };
+    const unwrap_expr = ast.Expr{ .kind = .{ .unwrap = ident }, .location = Location.zero };
+    try std.testing.expect(checker.checkExpr(&unwrap_expr, scope).isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "unwrap on error-typed expr suppresses cascade" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // inner expression resolves to .err (unknown variable)
+    const ident = &ast.Expr{ .kind = .{ .ident = "unknown" }, .location = Location.zero };
+    const unwrap_expr = ast.Expr{ .kind = .{ .unwrap = ident }, .location = Location.zero };
+
+    const error_count_before = checker.diagnostics.errorCount();
+    const result = checker.checkExpr(&unwrap_expr, scope);
+    try std.testing.expect(result.isErr());
+    // only one error (undefined variable), not two (no "cannot unwrap" cascade)
+    try std.testing.expectEqual(error_count_before + 1, checker.diagnostics.errorCount());
 }
