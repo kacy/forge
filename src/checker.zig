@@ -618,9 +618,10 @@ pub const Checker = struct {
         if (ret.value) |value| {
             const actual = self.checkExpr(value, scope);
             if (!actual.isErr() and !expected.isErr() and actual != expected) {
-                // allow returning the ok-type from a result-returning function
+                // allow returning the inner type from a result- or optional-returning function
                 const ok_match = if (self.type_table.get(expected)) |ty| switch (ty) {
                     .result => |r| actual == r.ok_type,
+                    .optional => |o| actual == o.inner,
                     else => false,
                 } else false;
 

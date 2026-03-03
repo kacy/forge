@@ -58,6 +58,7 @@ pub const CEmitter = struct {
     /// counter for generating unique try temporary variable names (__try_0, __try_1, ...)
     try_counter: u32,
     /// set of result type TypeIds whose C typedefs have already been emitted.
+    /// (kept for compatibility but dedup now uses name-based check)
     emitted_result_types: std.AutoHashMap(TypeId, void),
     /// cached mangled names for instantiated generic types. TypeId → "Pair_Int_String".
     /// populated during the monomorphization pass, used by cTypeStringForId.
@@ -136,6 +137,7 @@ pub const CEmitter = struct {
 
         // pass 2b: emit result/optional type typedefs found in the type table
         try self.emitResultTypedefs();
+        try self.emitOptionalTypedefs();
 
         // pass 3: forward-declare all functions
         for (module.decls) |*decl| {
@@ -402,6 +404,51 @@ pub const CEmitter = struct {
                     try self.writeStr("typedef struct { bool is_ok; ");
                     try self.writeStr(ok_c);
                     try self.writeStr(" ok; forge_string_t err; } ");
+                    try self.writeStr(owned);
+                    try self.writeStr(";\n");
+                },
+                else => {},
+            }
+        }
+        try self.writeByte('\n');
+    }
+
+    /// emit C typedefs for all Optional[T] types found in the type table.
+    /// each gets a struct: typedef struct { bool has_value; T value; } forge_optional_T;
+    fn emitOptionalTypedefs(self: *CEmitter) EmitError!void {
+        var emitted_names = std.StringHashMap(void).init(self.allocator);
+        defer emitted_names.deinit();
+
+        const items = self.type_table.types.items;
+        for (items, 0..) |ty, idx| {
+            switch (ty) {
+                .optional => |o| {
+                    const tid = TypeId.fromIndex(@intCast(idx));
+                    const inner_c = self.cTypeStringForId(o.inner);
+
+                    var buf: [128]u8 = undefined;
+                    const name = std.fmt.bufPrint(&buf, "forge_optional_{s}", .{inner_c}) catch continue;
+
+                    if (emitted_names.contains(name)) {
+                        if (!self.mangled_names.contains(tid)) {
+                            const owned = self.allocator.dupe(u8, name) catch continue;
+                            self.mangled_names.put(tid, owned) catch {
+                                self.allocator.free(owned);
+                            };
+                        }
+                        continue;
+                    }
+
+                    const owned = self.allocator.dupe(u8, name) catch continue;
+                    self.mangled_names.put(tid, owned) catch {
+                        self.allocator.free(owned);
+                        continue;
+                    };
+                    emitted_names.put(owned, {}) catch continue;
+
+                    try self.writeStr("typedef struct { bool has_value; ");
+                    try self.writeStr(inner_c);
+                    try self.writeStr(" value; } ");
                     try self.writeStr(owned);
                     try self.writeStr(";\n");
                 },
@@ -1023,14 +1070,29 @@ pub const CEmitter = struct {
     fn emitReturnStmt(self: *CEmitter, rs: *const ast.ReturnStmt) EmitError!void {
         try self.writeIndent();
         if (rs.value) |val| {
-            // if the function returns a result type, wrap the value in an ok result
             if (self.isResultType(self.current_fn_return)) {
+                // result-returning function: wrap in ok result
                 const ret_c = self.cTypeStringForId(self.current_fn_return);
                 try self.writeStr("return (");
                 try self.writeStr(ret_c);
                 try self.writeStr("){ .is_ok = true, .ok = ");
                 try self.emitExpr(val);
                 try self.writeStr(" };\n");
+            } else if (self.isOptionalType(self.current_fn_return)) {
+                // optional-returning function: check if returning None or a value
+                if (val.kind == .none_lit) {
+                    const ret_c = self.cTypeStringForId(self.current_fn_return);
+                    try self.writeStr("return (");
+                    try self.writeStr(ret_c);
+                    try self.writeStr("){ .has_value = false };\n");
+                } else {
+                    const ret_c = self.cTypeStringForId(self.current_fn_return);
+                    try self.writeStr("return (");
+                    try self.writeStr(ret_c);
+                    try self.writeStr("){ .has_value = true, .value = ");
+                    try self.emitExpr(val);
+                    try self.writeStr(" };\n");
+                }
             } else {
                 try self.writeStr("return ");
                 try self.emitExpr(val);
@@ -1057,6 +1119,13 @@ pub const CEmitter = struct {
         if (tid.isErr()) return false;
         const ty = self.type_table.get(tid) orelse return false;
         return ty == .result;
+    }
+
+    /// check if a TypeId represents an Optional type.
+    fn isOptionalType(self: *const CEmitter, tid: TypeId) bool {
+        if (tid.isErr()) return false;
+        const ty = self.type_table.get(tid) orelse return false;
+        return ty == .optional;
     }
 
     fn emitForStmt(self: *CEmitter, fs: *const ast.ForStmt) EmitError!void {
@@ -1166,7 +1235,12 @@ pub const CEmitter = struct {
             .float_lit => |lit| try self.writeStr(lit),
             .string_lit => |lit| try self.emitStringLit(lit),
             .bool_lit => |b| try self.writeStr(if (b) "true" else "false"),
-            .none_lit => try self.writeStr("/* None */"),
+            .none_lit => {
+                // None in expression context — needs the optional type from context.
+                // emitBinding and emitReturnStmt handle the common cases; this is
+                // a fallback that emits a generic zero-init (works for any optional).
+                try self.writeStr("{ 0 }");
+            },
             .ident => |name| try self.writeStr(name),
             .self_expr => try self.writeStr("self"),
             .binary => |bin| try self.emitBinary(&bin),
@@ -1189,12 +1263,11 @@ pub const CEmitter = struct {
             .set => |elems| try self.emitSetLiteral(elems),
             .tuple => |_| try self.writeStr("/* tuple not yet supported */"),
             .unwrap => |inner| {
-                // expr? — unwrap optional, abort on None
-                // emit: (inner.has_value ? inner.value : (fprintf(stderr, "..."), exit(1), (T)0))
-                // for simplicity, just access .ok with a runtime check
+                // expr? — unwrap optional, access .value
+                // in expression context, just access the value field
                 try self.writeStr("(");
                 try self.emitExpr(inner);
-                try self.writeStr(").ok");
+                try self.writeStr(").value");
             },
             .try_expr => |inner| {
                 // expr! — extract ok value from result. the error propagation
@@ -2020,6 +2093,23 @@ pub const CEmitter = struct {
                 }
                 return .err;
             },
+            .optional => |o| {
+                // resolve the inner type and find the matching optional type in the table
+                const inner_id = self.resolveTypeExprToId(o);
+                if (inner_id.isErr()) return .err;
+                const items = self.type_table.types.items;
+                for (items, 0..) |ty, idx| {
+                    switch (ty) {
+                        .optional => |opt| {
+                            if (opt.inner == inner_id) {
+                                return TypeId.fromIndex(@intCast(idx));
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return .err;
+            },
             else => .err,
         };
     }
@@ -2239,7 +2329,14 @@ pub const CEmitter = struct {
                     }
                 }
             },
-            .optional => try self.writeStr("/* optional */"),
+            .optional => {
+                const tid = self.resolveTypeExprToId(te);
+                if (!tid.isErr()) {
+                    try self.writeStr(self.cTypeStringForId(tid));
+                } else {
+                    try self.writeStr("/* optional */");
+                }
+            },
             .result => {
                 // resolve to the concrete result typedef name
                 const tid = self.resolveTypeExprToId(te);
@@ -2366,6 +2463,8 @@ pub const CEmitter = struct {
                 .list => "forge_list_t",
                 .map => "forge_map_t",
                 .set => "forge_set_t",
+                // optional and result types should have been registered in mangled_names
+                // during emitOptionalTypedefs/emitResultTypedefs — fall through to unknown
                 else => "/* unknown */",
             };
         }

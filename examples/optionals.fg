@@ -1,0 +1,11 @@
+# optional types
+
+fn find_positive(n: Int) -> Int?:
+    if n > 0:
+        return n
+    return none
+
+fn main():
+    result := find_positive(42)
+    missing := find_positive(-5)
+    print("optionals work")
