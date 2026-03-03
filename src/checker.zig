@@ -1149,11 +1149,15 @@ pub const Checker = struct {
                     error.ConflictingInference => {
                         // find which param conflicted for the error message
                         const param_name = te.kind.named;
+                        const prev_name = if (subst.get(param_name)) |prev|
+                            self.type_table.typeName(prev)
+                        else
+                            "unknown";
                         self.diagnostics.addError(location, self.fmt(
                             "conflicting types for generic parameter '{s}': {s} vs {s}",
                             .{
                                 param_name,
-                                self.type_table.typeName(subst.get(param_name).?),
+                                prev_name,
                                 self.type_table.typeName(arg_type),
                             },
                         )) catch {};
@@ -1728,7 +1732,7 @@ pub const Checker = struct {
         defer ordered_ids.deinit(self.allocator);
 
         for (fn_d.generic_params) |gp| {
-            ordered_ids.append(self.allocator, subst.get(gp.name).?) catch return .err;
+            ordered_ids.append(self.allocator, subst.get(gp.name) orelse return .err) catch return .err;
         }
 
         // instantiate the concrete function type
@@ -1801,7 +1805,14 @@ pub const Checker = struct {
         location: Location,
         scope: *const Scope,
     ) TypeId {
-        const struct_data = self.type_table.get(type_id).?.@"struct";
+        const type_info = self.type_table.get(type_id) orelse return .err;
+        const struct_data = switch (type_info) {
+            .@"struct" => |s| s,
+            else => {
+                self.diagnostics.addError(location, "expected struct type in constructor") catch {};
+                return .err;
+            },
+        };
 
         // check argument count matches field count
         if (call.args.len != struct_data.fields.len) {
