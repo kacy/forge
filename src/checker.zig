@@ -1329,7 +1329,13 @@ pub const Checker = struct {
             // logical: both sides must be Bool
             .@"and", .@"or" => self.checkLogical(left, right, location),
 
-            .pipe => unreachable, // handled above
+            .pipe => {
+                // pipe is handled by the early return above. if we reach
+                // here, the dispatch logic has a bug — return an error
+                // instead of crashing.
+                self.diagnostics.addError(location, "internal: unexpected pipe in binary dispatch") catch {};
+                return .err;
+            },
         };
     }
 
