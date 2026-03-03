@@ -11,6 +11,7 @@ const checker_mod = @import("checker.zig");
 const Checker = checker_mod.Checker;
 const CEmitter = @import("codegen.zig").CEmitter;
 const formatter = @import("formatter.zig");
+const lint = @import("lint.zig");
 const ast = @import("ast.zig");
 const io = @import("io.zig");
 
@@ -26,6 +27,7 @@ comptime {
     _ = @import("checker.zig");
     _ = @import("codegen.zig");
     _ = @import("formatter.zig");
+    _ = @import("lint.zig");
 }
 
 const version = "0.1.0";
@@ -190,6 +192,13 @@ pub fn main() !void {
             return;
         };
         try runFmt(allocator, path, check_only);
+    } else if (std.mem.eql(u8, cmd, "lint")) {
+        const file_path = args.next() orelse {
+            io.writeErr("error: forge lint requires a file path\n", .{});
+            return;
+        };
+        const json = hasFlag(&args, "--json");
+        try runLint(allocator, file_path, json);
     } else {
         io.writeErr("error: unknown command '{s}'\n", .{cmd});
         printUsage();
@@ -293,6 +302,48 @@ fn runFmt(allocator: std.mem.Allocator, path: []const u8, check_only: bool) !voi
             io.writeErr("error: could not write '{s}': {}\n", .{ path, err });
             return;
         };
+    }
+}
+
+/// lex, parse, type-check, then run lint rules. reports naming violations,
+/// unused variables, missing doc comments, and deep nesting.
+fn runLint(allocator: std.mem.Allocator, path: []const u8, json: bool) !void {
+    const source = readSourceFile(allocator, path) orelse return;
+    defer allocator.free(source);
+
+    var result = try lexAndParse(allocator, source, json) orelse return;
+    defer result.deinit(allocator);
+
+    var checker = Checker.init(allocator, source) catch {
+        io.writeErr("error: checker init failed (out of memory)\n", .{});
+        return;
+    };
+    defer checker.deinit();
+
+    checker.check(&result.module);
+
+    if (checker.diagnostics.hasErrors()) {
+        renderDiagnostics(&checker.diagnostics, json);
+        return;
+    }
+
+    // run lint pass on the checked module.
+    // use an arena for diagnostic messages so they're freed together.
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const lint_alloc = arena.allocator();
+
+    var lint_diags = errors.DiagnosticList.init(lint_alloc, source);
+    defer lint_diags.deinit();
+
+    lint.lint(&result.module, &lint_diags, source);
+
+    if (lint_diags.diagnostics.items.len > 0) {
+        renderDiagnostics(&lint_diags, json);
+        // exit 1 if any errors (warnings don't cause failure)
+        if (lint_diags.hasErrors()) {
+            std.process.exit(1);
+        }
     }
 }
 
@@ -594,6 +645,8 @@ fn printUsage() void {
         \\  test <file>           run tests
         \\  fmt <file>            format source code
         \\  fmt <file> --check    check formatting (exit 1 if unformatted)
+        \\  lint <file>           check conventions and best practices
+        \\  lint <file> --json    lint with JSON output
         \\  check <file>          type check a source file
         \\  check <file> --json   type check with JSON output
         \\  lex <file>            tokenize a source file

@@ -97,6 +97,13 @@ pub const ErrorCode = enum {
     E232, // spawn/await type error
     E233, // not yet supported
 
+    // -- linter (E3xx) --
+    E300, // naming: function/variable not snake_case
+    E301, // naming: type not PascalCase
+    E302, // unused variable
+    E304, // public function missing doc comment
+    E305, // indentation depth exceeds 4 levels
+
     pub fn label(self: ErrorCode) []const u8 {
         return @tagName(self);
     }
@@ -159,6 +166,22 @@ pub const DiagnosticList = struct {
     pub fn addCodedErrorWithFix(self: *DiagnosticList, code: ErrorCode, location: Location, message: []const u8, fix: ?[]const u8) !void {
         try self.diagnostics.append(self.allocator, .{
             .severity = .@"error",
+            .location = location,
+            .message = message,
+            .fix = fix,
+            .code = code,
+        });
+    }
+
+    /// record a warning diagnostic with a stable warning code.
+    pub fn addCodedWarning(self: *DiagnosticList, code: ErrorCode, location: Location, message: []const u8) !void {
+        try self.addCodedWarningWithFix(code, location, message, null);
+    }
+
+    /// record a warning diagnostic with a stable warning code and fix suggestion.
+    pub fn addCodedWarningWithFix(self: *DiagnosticList, code: ErrorCode, location: Location, message: []const u8, fix: ?[]const u8) !void {
+        try self.diagnostics.append(self.allocator, .{
+            .severity = .warning,
             .location = location,
             .message = message,
             .fix = fix,
