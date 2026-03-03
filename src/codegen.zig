@@ -236,8 +236,7 @@ pub const CEmitter = struct {
                     else => continue,
                 } else continue;
 
-                var tmp: [64]u8 = undefined;
-                const decl = std.fmt.bufPrint(&tmp, "static {s} __lambda_{d}(", .{
+                const decl = std.fmt.allocPrint(self.allocator, "static {s} __lambda_{d}(", .{
                     self.cTypeStringForId(func.return_type),
                     lam.index,
                 }) catch continue;
@@ -259,7 +258,7 @@ pub const CEmitter = struct {
             }
 
             // insert forward declarations at the marked position
-            self.output.insertSlice(self.allocator, lambda_fwd_insert_pos, fwd_buf.items) catch {};
+            try self.output.insertSlice(self.allocator, lambda_fwd_insert_pos, fwd_buf.items);
 
             // emit lambda function definitions
             try self.emitHoistedLambdas();
@@ -348,23 +347,16 @@ pub const CEmitter = struct {
     // ---------------------------------------------------------------
 
     /// mangle a generic type name for C: "Pair[Int,String]" → "Pair_Int_String"
-    fn mangleName(buf: *[256]u8, name: []const u8) []const u8 {
-        var pos: usize = 0;
+    fn mangleName(allocator: std.mem.Allocator, name: []const u8) EmitError![]const u8 {
+        var result: std.ArrayList(u8) = .empty;
         for (name) |c| {
-            if (pos >= buf.len) break;
             switch (c) {
-                '[', ',' => {
-                    buf[pos] = '_';
-                    pos += 1;
-                },
-                ']', ' ' => {}, // strip closing bracket and spaces
-                else => {
-                    buf[pos] = c;
-                    pos += 1;
-                },
+                '[', ',' => try result.append(allocator, '_'),
+                ']', ' ' => {},
+                else => try result.append(allocator, c),
             }
         }
-        return buf[0..pos];
+        return result.toOwnedSlice(allocator);
     }
 
     /// emit C typedefs for all instantiated generic structs.
@@ -391,14 +383,9 @@ pub const CEmitter = struct {
                             else => continue,
                         };
 
-                        var mbuf: [256]u8 = undefined;
-                        const mangled = mangleName(&mbuf, inst_name);
+                        const mangled = mangleName(self.allocator, inst_name) catch continue;
                         // cache the mangled name for cTypeStringForId lookups
-                        const owned = self.allocator.dupe(u8, mangled) catch continue;
-                        self.mangled_names.put(tid, owned) catch {
-                            self.allocator.free(owned);
-                            continue;
-                        };
+                        self.mangled_names.put(tid, mangled) catch continue;
 
                         try self.writeStr("typedef struct {\n");
                         self.indent_level += 1;
@@ -445,8 +432,7 @@ pub const CEmitter = struct {
                 };
 
                 // emit: return_type fg_name_T(...);
-                var mbuf: [256]u8 = undefined;
-                const mangled = mangleName(&mbuf, inst_name);
+                const mangled = mangleName(self.allocator, inst_name) catch continue;
                 try self.writeStr(self.cTypeStringForId(func.return_type));
                 try self.writeStr(" fg_");
                 try self.writeStr(mangled);
@@ -493,13 +479,12 @@ pub const CEmitter = struct {
                 self.current_fn_return = func.return_type;
                 for (fn_d.params, 0..) |param, pi| {
                     if (pi < func.param_types.len) {
-                        self.local_types.put(param.name, func.param_types[pi]) catch {};
+                        self.local_types.put(param.name, func.param_types[pi]) catch return error.OutOfMemory;
                     }
                 }
 
                 // emit: return_type fg_name_T(...) { body }
-                var mbuf: [256]u8 = undefined;
-                const mangled = mangleName(&mbuf, inst_name);
+                const mangled = mangleName(self.allocator, inst_name) catch continue;
                 try self.writeStr(self.cTypeStringForId(func.return_type));
                 try self.writeStr(" fg_");
                 try self.writeStr(mangled);
@@ -538,32 +523,24 @@ pub const CEmitter = struct {
                     const ok_c = self.cTypeStringForId(r.ok_type);
 
                     // build the result type name
-                    var buf: [128]u8 = undefined;
-                    const name = std.fmt.bufPrint(&buf, "forge_result_{s}", .{ok_c}) catch continue;
+                    const name = std.fmt.allocPrint(self.allocator, "forge_result_{s}", .{ok_c}) catch continue;
 
                     // skip if we already emitted a typedef with this name
                     if (emitted_names.contains(name)) {
                         // still cache the mangled name so cTypeStringForId works for this TypeId
                         if (!self.mangled_names.contains(tid)) {
-                            const owned = self.allocator.dupe(u8, name) catch continue;
-                            self.mangled_names.put(tid, owned) catch {
-                                self.allocator.free(owned);
-                            };
+                            self.mangled_names.put(tid, name) catch {};
                         }
                         continue;
                     }
 
-                    const owned = self.allocator.dupe(u8, name) catch continue;
-                    self.mangled_names.put(tid, owned) catch {
-                        self.allocator.free(owned);
-                        continue;
-                    };
-                    emitted_names.put(owned, {}) catch continue;
+                    self.mangled_names.put(tid, name) catch continue;
+                    emitted_names.put(name, {}) catch continue;
 
                     try self.writeStr("typedef struct { bool is_ok; ");
                     try self.writeStr(ok_c);
                     try self.writeStr(" ok; forge_string_t err; } ");
-                    try self.writeStr(owned);
+                    try self.writeStr(name);
                     try self.writeStr(";\n");
                 },
                 else => {},
@@ -585,30 +562,22 @@ pub const CEmitter = struct {
                     const tid = TypeId.fromIndex(@intCast(idx));
                     const inner_c = self.cTypeStringForId(o.inner);
 
-                    var buf: [128]u8 = undefined;
-                    const name = std.fmt.bufPrint(&buf, "forge_optional_{s}", .{inner_c}) catch continue;
+                    const name = std.fmt.allocPrint(self.allocator, "forge_optional_{s}", .{inner_c}) catch continue;
 
                     if (emitted_names.contains(name)) {
                         if (!self.mangled_names.contains(tid)) {
-                            const owned = self.allocator.dupe(u8, name) catch continue;
-                            self.mangled_names.put(tid, owned) catch {
-                                self.allocator.free(owned);
-                            };
+                            self.mangled_names.put(tid, name) catch {};
                         }
                         continue;
                     }
 
-                    const owned = self.allocator.dupe(u8, name) catch continue;
-                    self.mangled_names.put(tid, owned) catch {
-                        self.allocator.free(owned);
-                        continue;
-                    };
-                    emitted_names.put(owned, {}) catch continue;
+                    self.mangled_names.put(tid, name) catch continue;
+                    emitted_names.put(name, {}) catch continue;
 
                     try self.writeStr("typedef struct { bool has_value; ");
                     try self.writeStr(inner_c);
                     try self.writeStr(" value; } ");
-                    try self.writeStr(owned);
+                    try self.writeStr(name);
                     try self.writeStr(";\n");
                 },
                 else => {},
@@ -631,46 +600,23 @@ pub const CEmitter = struct {
                     const tid = TypeId.fromIndex(@intCast(idx));
 
                     // build the tuple type name from element types
-                    var name_buf: [256]u8 = undefined;
-                    var name_pos: usize = 0;
-                    const prefix = "forge_tuple_";
-                    for (prefix) |c| {
-                        if (name_pos < name_buf.len) {
-                            name_buf[name_pos] = c;
-                            name_pos += 1;
-                        }
-                    }
+                    var name_parts: std.ArrayList(u8) = .empty;
+                    name_parts.appendSlice(self.allocator, "forge_tuple_") catch continue;
                     for (t.elements, 0..) |elem, i| {
-                        if (i > 0 and name_pos < name_buf.len) {
-                            name_buf[name_pos] = '_';
-                            name_pos += 1;
-                        }
-                        const elem_c = self.cTypeStringForId(elem);
-                        for (elem_c) |c| {
-                            if (name_pos < name_buf.len) {
-                                name_buf[name_pos] = c;
-                                name_pos += 1;
-                            }
-                        }
+                        if (i > 0) name_parts.append(self.allocator, '_') catch continue;
+                        name_parts.appendSlice(self.allocator, self.cTypeStringForId(elem)) catch continue;
                     }
-                    const name = name_buf[0..name_pos];
+                    const name = name_parts.toOwnedSlice(self.allocator) catch continue;
 
                     if (emitted_names.contains(name)) {
                         if (!self.mangled_names.contains(tid)) {
-                            const owned = self.allocator.dupe(u8, name) catch continue;
-                            self.mangled_names.put(tid, owned) catch {
-                                self.allocator.free(owned);
-                            };
+                            self.mangled_names.put(tid, name) catch {};
                         }
                         continue;
                     }
 
-                    const owned = self.allocator.dupe(u8, name) catch continue;
-                    self.mangled_names.put(tid, owned) catch {
-                        self.allocator.free(owned);
-                        continue;
-                    };
-                    emitted_names.put(owned, {}) catch continue;
+                    self.mangled_names.put(tid, name) catch continue;
+                    emitted_names.put(name, {}) catch continue;
 
                     try self.writeStr("typedef struct { ");
                     for (t.elements, 0..) |elem, i| {
@@ -678,7 +624,7 @@ pub const CEmitter = struct {
                         try self.writeFmt(" _{d}; ", .{i});
                     }
                     try self.writeStr("} ");
-                    try self.writeStr(owned);
+                    try self.writeStr(name);
                     try self.writeStr(";\n");
                 },
                 else => {},
@@ -826,42 +772,26 @@ pub const CEmitter = struct {
     /// e.g., for `Pair(1, "hello")` returns "Pair[Int,String]".
     /// returns null if type inference fails.
     fn buildGenericInstName(self: *const CEmitter, base_name: []const u8, args: []const ast.Arg) ?[]const u8 {
-        var buf: [128]u8 = undefined;
-        var pos: usize = 0;
-        for (base_name) |c| {
-            if (pos >= buf.len) return null;
-            buf[pos] = c;
-            pos += 1;
-        }
-        if (pos >= buf.len) return null;
-        buf[pos] = '[';
-        pos += 1;
+        var parts: std.ArrayList(u8) = .empty;
+        parts.appendSlice(self.allocator, base_name) catch return null;
+        parts.append(self.allocator, '[') catch return null;
 
         for (args, 0..) |arg, i| {
-            if (i > 0) {
-                if (pos >= buf.len) return null;
-                buf[pos] = ',';
-                pos += 1;
-            }
+            if (i > 0) parts.append(self.allocator, ',') catch return null;
             const tid = self.inferExprType(arg.value);
             const type_name = self.type_table.typeName(tid);
-            for (type_name) |c| {
-                if (pos >= buf.len) return null;
-                buf[pos] = c;
-                pos += 1;
-            }
+            parts.appendSlice(self.allocator, type_name) catch return null;
         }
-        if (pos >= buf.len) return null;
-        buf[pos] = ']';
-        pos += 1;
+        parts.append(self.allocator, ']') catch return null;
+
+        const lookup = parts.toOwnedSlice(self.allocator) catch return null;
 
         // look up in type table — the checker must have registered this name
         // for it to be valid. return the type table key for stable lifetime.
-        if (self.type_table.lookup(buf[0..pos])) |_| {
-            // get the key from the name_map iterator for stable pointer
+        if (self.type_table.lookup(lookup)) |_| {
             var it = self.type_table.name_map.iterator();
             while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*, buf[0..pos])) {
+                if (std.mem.eql(u8, entry.key_ptr.*, lookup)) {
                     return entry.key_ptr.*;
                 }
             }
@@ -1106,13 +1036,13 @@ pub const CEmitter = struct {
 
         // register `self` as local with the struct's type
         const self_tid = self.type_table.lookup(type_name) orelse .err;
-        self.local_types.put("self", self_tid) catch {};
+        self.local_types.put("self", self_tid) catch return error.OutOfMemory;
 
         // register method parameters
         for (fd.params) |param| {
             if (param.type_expr) |te| {
                 const tid = self.resolveTypeExprToId(te);
-                self.local_types.put(param.name, tid) catch {};
+                self.local_types.put(param.name, tid) catch return error.OutOfMemory;
             }
         }
 
@@ -1168,7 +1098,7 @@ pub const CEmitter = struct {
         for (fd.params) |param| {
             if (param.type_expr) |te| {
                 const tid = self.resolveTypeExprToId(te);
-                self.local_types.put(param.name, tid) catch {};
+                self.local_types.put(param.name, tid) catch return error.OutOfMemory;
             }
         }
 
@@ -1328,7 +1258,7 @@ pub const CEmitter = struct {
             self.resolveTypeExprToId(te)
         else
             self.inferExprType(b.value);
-        self.local_types.put(b.name, tid) catch {};
+        self.local_types.put(b.name, tid) catch return error.OutOfMemory;
 
         // try propagation: x := foo()! → hoist result to temp, check, early return
         if (b.value.kind == .try_expr) {
@@ -1586,7 +1516,7 @@ pub const CEmitter = struct {
 
         // temporarily register lambda params as locals to infer body type
         for (lam.params, resolved) |param, tid| {
-            self.local_types.put(param.name, tid) catch {};
+            self.local_types.put(param.name, tid) catch return .err;
         }
         const ret_type: TypeId = switch (lam.body) {
             .expr => |body_expr| self.inferExprType(body_expr),
@@ -1663,8 +1593,8 @@ pub const CEmitter = struct {
                     try self.writeStr(elem_c);
                     try self.writeFmt(", {s});\n", .{idx_name});
                     // track the binding type so the body can use it
-                    self.local_types.put(fs.binding, l.element) catch {};
-                    if (fs.index != null) self.local_types.put(idx_name, .int) catch {};
+                    self.local_types.put(fs.binding, l.element) catch return error.OutOfMemory;
+                    if (fs.index != null) self.local_types.put(idx_name, .int) catch return error.OutOfMemory;
                     try self.emitBlock(&fs.body);
                     self.indent_level -= 1;
                     try self.writeIndent();
@@ -1683,8 +1613,8 @@ pub const CEmitter = struct {
                     try self.writeFmt(" {s} = (({s} *)", .{ fs.binding, key_c });
                     try self.emitExpr(fs.iterable);
                     try self.writeFmt(".keys)[{s}];\n", .{idx_name});
-                    self.local_types.put(fs.binding, m.key) catch {};
-                    if (fs.index != null) self.local_types.put(idx_name, .int) catch {};
+                    self.local_types.put(fs.binding, m.key) catch return error.OutOfMemory;
+                    if (fs.index != null) self.local_types.put(idx_name, .int) catch return error.OutOfMemory;
                     try self.emitBlock(&fs.body);
                     self.indent_level -= 1;
                     try self.writeIndent();
@@ -1705,8 +1635,8 @@ pub const CEmitter = struct {
                     try self.writeStr(", ");
                     try self.writeStr(elem_c);
                     try self.writeFmt(", {s});\n", .{idx_name});
-                    self.local_types.put(fs.binding, s.element) catch {};
-                    if (fs.index != null) self.local_types.put(idx_name, .int) catch {};
+                    self.local_types.put(fs.binding, s.element) catch return error.OutOfMemory;
+                    if (fs.index != null) self.local_types.put(idx_name, .int) catch return error.OutOfMemory;
                     try self.emitBlock(&fs.body);
                     self.indent_level -= 1;
                     try self.writeIndent();
@@ -1770,11 +1700,11 @@ pub const CEmitter = struct {
                 // find the function type for this lambda in the type table.
                 // we match by param types — the checker has already created the type.
                 const fn_tid = self.findLambdaType(lam);
-                self.hoisted_lambdas.append(self.allocator, .{
+                try self.hoisted_lambdas.append(self.allocator, .{
                     .index = idx,
                     .lambda = lam,
                     .fn_type_id = fn_tid,
-                }) catch {};
+                });
                 try self.writeFmt("__lambda_{d}", .{idx});
             },
             .list => |elems| try self.emitListLiteral(elems),
@@ -2073,8 +2003,7 @@ pub const CEmitter = struct {
                 .function => {
                     // generic function call: emit mangled name
                     if (self.buildGenericInstName(name, call.args)) |inst_name| {
-                        var mbuf: [256]u8 = undefined;
-                        const mangled = mangleName(&mbuf, inst_name);
+                        const mangled = mangleName(self.allocator, inst_name) catch return error.OutOfMemory;
                         try self.writeStr("fg_");
                         try self.writeStr(mangled);
                         try self.emitArgList(call.args);
@@ -2557,13 +2486,11 @@ pub const CEmitter = struct {
             std.mem.eql(u8, method, "clear")) return .void;
         if (std.mem.eql(u8, method, "keys")) {
             // look up List[K] type
-            var buf: [128]u8 = undefined;
-            const lookup_name = std.fmt.bufPrint(&buf, "List[{s}]", .{self.type_table.typeName(key_type)}) catch return null;
+            const lookup_name = std.fmt.allocPrint(self.allocator, "List[{s}]", .{self.type_table.typeName(key_type)}) catch return null;
             return self.type_table.lookup(lookup_name);
         }
         if (std.mem.eql(u8, method, "values")) {
-            var buf: [128]u8 = undefined;
-            const lookup_name = std.fmt.bufPrint(&buf, "List[{s}]", .{self.type_table.typeName(val_type)}) catch return null;
+            const lookup_name = std.fmt.allocPrint(self.allocator, "List[{s}]", .{self.type_table.typeName(val_type)}) catch return null;
             return self.type_table.lookup(lookup_name);
         }
         return null;
@@ -2594,9 +2521,7 @@ pub const CEmitter = struct {
     /// look up a method's function type id from the checker's method_types.
     /// key format is "TypeName.methodName".
     fn lookupMethodKey(self: *const CEmitter, type_name: []const u8, method_name: []const u8) ?TypeId {
-        // build the key in a stack buffer to avoid allocation
-        var buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
+        const key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, method_name }) catch return null;
         const entry = self.method_types.get(key) orelse return null;
         return entry.type_id;
     }
@@ -3040,39 +2965,20 @@ pub const CEmitter = struct {
             },
             .generic => |g| {
                 // build the instantiated name: "List[Int]", "Map[String,Int]"
-                var buf: [128]u8 = undefined;
-                var pos: usize = 0;
-                for (g.name) |c| {
-                    if (pos < buf.len) {
-                        buf[pos] = c;
-                        pos += 1;
-                    }
-                }
-                if (pos < buf.len) {
-                    buf[pos] = '[';
-                    pos += 1;
-                }
+                var parts: std.ArrayList(u8) = .empty;
+                parts.appendSlice(self.allocator, g.name) catch return .err;
+                parts.append(self.allocator, '[') catch return .err;
                 for (g.args, 0..) |arg, i| {
-                    if (i > 0 and pos < buf.len) {
-                        buf[pos] = ',';
-                        pos += 1;
-                    }
+                    if (i > 0) parts.append(self.allocator, ',') catch return .err;
                     const arg_name = switch (arg.kind) {
                         .named => |n| n,
                         else => continue,
                     };
-                    for (arg_name) |c| {
-                        if (pos < buf.len) {
-                            buf[pos] = c;
-                            pos += 1;
-                        }
-                    }
+                    parts.appendSlice(self.allocator, arg_name) catch return .err;
                 }
-                if (pos < buf.len) {
-                    buf[pos] = ']';
-                    pos += 1;
-                }
-                return self.type_table.lookup(buf[0..pos]) orelse .err;
+                parts.append(self.allocator, ']') catch return .err;
+                const lookup = parts.toOwnedSlice(self.allocator) catch return .err;
+                return self.type_table.lookup(lookup) orelse .err;
             },
             .result => |r| {
                 // resolve the ok type and find the matching result type in the table
