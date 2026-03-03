@@ -618,10 +618,23 @@ pub const Checker = struct {
         if (ret.value) |value| {
             const actual = self.checkExpr(value, scope);
             if (!actual.isErr() and !expected.isErr() and actual != expected) {
-                // allow returning the inner type from a result- or optional-returning function
-                const ok_match = if (self.type_table.get(expected)) |ty| switch (ty) {
+                // allow returning the inner type from a result- or optional-returning function,
+                // and structurally equivalent tuples (may have different TypeIds)
+                const ok_match = if (self.type_table.get(expected)) |ety| switch (ety) {
                     .result => |r| actual == r.ok_type,
                     .optional => |o| actual == o.inner,
+                    .tuple => |exp_tup| blk: {
+                        const act_ty = self.type_table.get(actual) orelse break :blk false;
+                        const act_tup = switch (act_ty) {
+                            .tuple => |t| t,
+                            else => break :blk false,
+                        };
+                        if (exp_tup.elements.len != act_tup.elements.len) break :blk false;
+                        for (exp_tup.elements, act_tup.elements) |a, b| {
+                            if (a != b) break :blk false;
+                        }
+                        break :blk true;
+                    },
                     else => false,
                 } else false;
 
@@ -1947,8 +1960,37 @@ pub const Checker = struct {
         if (object_type.isErr()) return .err;
 
         const ty = self.type_table.get(object_type) orelse return .err;
-        const struct_data = switch (ty) {
-            .@"struct" => |s| s,
+        switch (ty) {
+            .@"struct" => |struct_data| {
+                for (struct_data.fields) |field| {
+                    if (std.mem.eql(u8, field.name, fa.field)) {
+                        return field.type_id;
+                    }
+                }
+                self.diagnostics.addCodedError(.E209, location, self.fmt(
+                    "struct {s} has no field '{s}'",
+                    .{ struct_data.name, fa.field },
+                )) catch {};
+                return .err;
+            },
+            .tuple => |tup| {
+                // numeric field access: .0, .1, etc.
+                const idx = std.fmt.parseInt(usize, fa.field, 10) catch {
+                    self.diagnostics.addCodedError(.E209, location, self.fmt(
+                        "tuple has no field '{s}' (use numeric indices: .0, .1, ...)",
+                        .{fa.field},
+                    )) catch {};
+                    return .err;
+                };
+                if (idx < tup.elements.len) {
+                    return tup.elements[idx];
+                }
+                self.diagnostics.addCodedError(.E209, location, self.fmt(
+                    "tuple index {d} out of bounds (tuple has {d} elements)",
+                    .{ idx, tup.elements.len },
+                )) catch {};
+                return .err;
+            },
             else => {
                 self.diagnostics.addCodedError(.E209, location, self.fmt(
                     "{s} has no field '{s}'",
@@ -1956,20 +1998,7 @@ pub const Checker = struct {
                 )) catch {};
                 return .err;
             },
-        };
-
-        // look up the field
-        for (struct_data.fields) |field| {
-            if (std.mem.eql(u8, field.name, fa.field)) {
-                return field.type_id;
-            }
         }
-
-        self.diagnostics.addCodedError(.E209, location, self.fmt(
-            "struct {s} has no field '{s}'",
-            .{ struct_data.name, fa.field },
-        )) catch {};
-        return .err;
     }
 
     fn checkMatchExpr(self: *Checker, m: ast.MatchExpr, location: Location, scope: *const Scope) TypeId {

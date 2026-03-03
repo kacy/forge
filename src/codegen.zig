@@ -135,9 +135,10 @@ pub const CEmitter = struct {
             }
         }
 
-        // pass 2b: emit result/optional type typedefs found in the type table
+        // pass 2b: emit result/optional/tuple type typedefs found in the type table
         try self.emitResultTypedefs();
         try self.emitOptionalTypedefs();
+        try self.emitTupleTypedefs();
 
         // pass 3: forward-declare all functions
         for (module.decls) |*decl| {
@@ -449,6 +450,76 @@ pub const CEmitter = struct {
                     try self.writeStr("typedef struct { bool has_value; ");
                     try self.writeStr(inner_c);
                     try self.writeStr(" value; } ");
+                    try self.writeStr(owned);
+                    try self.writeStr(";\n");
+                },
+                else => {},
+            }
+        }
+        try self.writeByte('\n');
+    }
+
+    /// emit C typedefs for all tuple types found in the type table.
+    /// each gets a struct with fields named _0, _1, etc:
+    ///   typedef struct { int64_t _0; forge_string_t _1; } forge_tuple_int64_t_forge_string_t;
+    fn emitTupleTypedefs(self: *CEmitter) EmitError!void {
+        var emitted_names = std.StringHashMap(void).init(self.allocator);
+        defer emitted_names.deinit();
+
+        const items = self.type_table.types.items;
+        for (items, 0..) |ty, idx| {
+            switch (ty) {
+                .tuple => |t| {
+                    const tid = TypeId.fromIndex(@intCast(idx));
+
+                    // build the tuple type name from element types
+                    var name_buf: [256]u8 = undefined;
+                    var name_pos: usize = 0;
+                    const prefix = "forge_tuple_";
+                    for (prefix) |c| {
+                        if (name_pos < name_buf.len) {
+                            name_buf[name_pos] = c;
+                            name_pos += 1;
+                        }
+                    }
+                    for (t.elements, 0..) |elem, i| {
+                        if (i > 0 and name_pos < name_buf.len) {
+                            name_buf[name_pos] = '_';
+                            name_pos += 1;
+                        }
+                        const elem_c = self.cTypeStringForId(elem);
+                        for (elem_c) |c| {
+                            if (name_pos < name_buf.len) {
+                                name_buf[name_pos] = c;
+                                name_pos += 1;
+                            }
+                        }
+                    }
+                    const name = name_buf[0..name_pos];
+
+                    if (emitted_names.contains(name)) {
+                        if (!self.mangled_names.contains(tid)) {
+                            const owned = self.allocator.dupe(u8, name) catch continue;
+                            self.mangled_names.put(tid, owned) catch {
+                                self.allocator.free(owned);
+                            };
+                        }
+                        continue;
+                    }
+
+                    const owned = self.allocator.dupe(u8, name) catch continue;
+                    self.mangled_names.put(tid, owned) catch {
+                        self.allocator.free(owned);
+                        continue;
+                    };
+                    emitted_names.put(owned, {}) catch continue;
+
+                    try self.writeStr("typedef struct { ");
+                    for (t.elements, 0..) |elem, i| {
+                        try self.writeStr(self.cTypeStringForId(elem));
+                        try self.writeFmt(" _{d}; ", .{i});
+                    }
+                    try self.writeStr("} ");
                     try self.writeStr(owned);
                     try self.writeStr(";\n");
                 },
@@ -1261,7 +1332,20 @@ pub const CEmitter = struct {
             .list => |elems| try self.emitListLiteral(elems),
             .map => |entries| try self.emitMapLiteral(entries),
             .set => |elems| try self.emitSetLiteral(elems),
-            .tuple => |_| try self.writeStr("/* tuple not yet supported */"),
+            .tuple => |elems| {
+                // emit: (forge_tuple_T0_T1){ ._0 = a, ._1 = b }
+                const tuple_tid = self.inferExprType(expr);
+                const tuple_c = self.cTypeStringForId(tuple_tid);
+                try self.writeStr("(");
+                try self.writeStr(tuple_c);
+                try self.writeStr("){ ");
+                for (elems, 0..) |elem, i| {
+                    if (i > 0) try self.writeStr(", ");
+                    try self.writeFmt("._{d} = ", .{i});
+                    try self.emitExpr(elem);
+                }
+                try self.writeStr(" }");
+            },
             .unwrap => |inner| {
                 // expr? — unwrap optional, access .value
                 // in expression context, just access the value field
@@ -1609,6 +1693,10 @@ pub const CEmitter = struct {
     fn emitFieldAccess(self: *CEmitter, fa: *const ast.FieldAccess) EmitError!void {
         try self.emitExpr(fa.object);
         try self.writeByte('.');
+        // tuple field access: t.0 → t._0 (fields are named _0, _1, etc in C)
+        if (fa.field.len > 0 and fa.field[0] >= '0' and fa.field[0] <= '9') {
+            try self.writeByte('_');
+        }
         try self.writeStr(fa.field);
     }
 
@@ -2110,6 +2198,37 @@ pub const CEmitter = struct {
                 }
                 return .err;
             },
+            .tuple => |elems| {
+                // resolve each element type and find the matching tuple type
+                var elem_ids: [16]TypeId = undefined;
+                if (elems.len > elem_ids.len) return .err;
+                for (elems, 0..) |elem, i| {
+                    const eid = self.resolveTypeExprToId(elem);
+                    if (eid.isErr()) return .err;
+                    elem_ids[i] = eid;
+                }
+                const resolved = elem_ids[0..elems.len];
+
+                const items = self.type_table.types.items;
+                for (items, 0..) |ty, idx| {
+                    switch (ty) {
+                        .tuple => |tup| {
+                            if (tup.elements.len == resolved.len) {
+                                var match = true;
+                                for (tup.elements, resolved) |a, b| {
+                                    if (a != b) {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (match) return TypeId.fromIndex(@intCast(idx));
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return .err;
+            },
             else => .err,
         };
     }
@@ -2223,7 +2342,7 @@ pub const CEmitter = struct {
                 return .err;
             },
             .field_access => |fa| {
-                // resolve the struct type and look up the field
+                // resolve the object type and look up the field
                 const obj_type = self.inferExprType(fa.object);
                 if (self.type_table.get(obj_type)) |ty| {
                     switch (ty) {
@@ -2232,6 +2351,11 @@ pub const CEmitter = struct {
                                 if (std.mem.eql(u8, field.name, fa.field))
                                     return field.type_id;
                             }
+                        },
+                        .tuple => |tup| {
+                            // numeric field access: .0, .1, etc.
+                            const idx = std.fmt.parseInt(usize, fa.field, 10) catch return .err;
+                            if (idx < tup.elements.len) return tup.elements[idx];
                         },
                         else => {},
                     }
@@ -2300,6 +2424,34 @@ pub const CEmitter = struct {
                 }
                 return .err;
             },
+            .tuple => |elems| {
+                // infer element types and scan type table for matching tuple
+                var elem_ids: [16]TypeId = undefined;
+                if (elems.len > elem_ids.len) return .err;
+                for (elems, 0..) |elem, i| {
+                    elem_ids[i] = self.inferExprType(elem);
+                }
+                const resolved = elem_ids[0..elems.len];
+                const items = self.type_table.types.items;
+                for (items, 0..) |ty, idx| {
+                    switch (ty) {
+                        .tuple => |tup| {
+                            if (tup.elements.len == resolved.len) {
+                                var match = true;
+                                for (tup.elements, resolved) |a, b| {
+                                    if (a != b) {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (match) return TypeId.fromIndex(@intCast(idx));
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return .err;
+            },
             else => .err,
         };
     }
@@ -2346,7 +2498,14 @@ pub const CEmitter = struct {
                     try self.writeStr("/* result */");
                 }
             },
-            .tuple => try self.writeStr("/* tuple type */"),
+            .tuple => {
+                const tid = self.resolveTypeExprToId(te);
+                if (!tid.isErr()) {
+                    try self.writeStr(self.cTypeStringForId(tid));
+                } else {
+                    try self.writeStr("/* tuple type */");
+                }
+            },
             .fn_type => try self.writeStr("/* fn type */"),
         }
     }
