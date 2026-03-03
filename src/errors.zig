@@ -39,6 +39,49 @@ pub const Severity = enum {
     }
 };
 
+/// stable error codes for machine-readable diagnostics.
+/// category-based: E0xx = lexer, E1xx = parser, E2xx = type checker.
+/// codes are stable across versions — never reuse a retired code.
+pub const ErrorCode = enum {
+    // -- lexer (E0xx) --
+    E001, // unexpected character
+    E002, // unterminated string
+    E003, // invalid escape sequence
+    E004, // invalid number literal
+
+    // -- parser (E1xx) --
+    E100, // unexpected token
+    E101, // expected expression
+    E102, // expected type annotation
+    E103, // expected identifier
+    E104, // expected block
+
+    // -- type checker (E2xx) --
+    E200, // type mismatch
+    E201, // undefined variable
+    E202, // undefined type
+    E203, // duplicate definition
+    E204, // non-exhaustive match
+    E205, // unreachable pattern
+    E206, // missing return type
+    E207, // wrong number of arguments
+    E208, // not callable
+    E209, // field not found
+    E210, // not a struct type
+    E211, // not an enum type
+    E212, // unknown variant
+    E213, // wrong field count in pattern
+    E214, // break/continue outside loop
+    E215, // match arm type mismatch
+    E216, // assignment to immutable binding
+    E217, // invalid operand types
+    E218, // match guard must be Bool
+
+    pub fn label(self: ErrorCode) []const u8 {
+        return @tagName(self);
+    }
+};
+
 /// a compiler diagnostic — an error, warning, or note with location info.
 pub const Diagnostic = struct {
     severity: Severity,
@@ -47,6 +90,9 @@ pub const Diagnostic = struct {
 
     /// optional suggestion for how to fix the error.
     fix: ?[]const u8 = null,
+
+    /// optional stable error code for machine-readable output.
+    code: ?ErrorCode = null,
 };
 
 /// accumulates diagnostics during a compilation phase.
@@ -84,6 +130,22 @@ pub const DiagnosticList = struct {
         });
     }
 
+    /// record an error diagnostic with a stable error code.
+    pub fn addCodedError(self: *DiagnosticList, code: ErrorCode, location: Location, message: []const u8) !void {
+        try self.addCodedErrorWithFix(code, location, message, null);
+    }
+
+    /// record an error diagnostic with a stable error code and fix suggestion.
+    pub fn addCodedErrorWithFix(self: *DiagnosticList, code: ErrorCode, location: Location, message: []const u8, fix: ?[]const u8) !void {
+        try self.diagnostics.append(self.allocator, .{
+            .severity = .@"error",
+            .location = location,
+            .message = message,
+            .fix = fix,
+            .code = code,
+        });
+    }
+
     pub fn hasErrors(self: *const DiagnosticList) bool {
         return self.errorCount() > 0;
     }
@@ -102,12 +164,28 @@ pub const DiagnosticList = struct {
             try renderDiagnostic(d, self.source, writer);
         }
     }
+
+    /// render all diagnostics as a JSON array. outputs valid JSON even
+    /// when there are no diagnostics (empty array). designed for agents
+    /// that parse `forge check --json` output.
+    pub fn renderJson(self: *const DiagnosticList, writer: anytype) !void {
+        try writer.writeAll("[");
+        for (self.diagnostics.items, 0..) |d, i| {
+            if (i > 0) try writer.writeAll(",");
+            try renderJsonDiagnostic(d, writer);
+        }
+        try writer.writeAll("]\n");
+    }
 };
 
 /// render a single diagnostic with source context and underline.
 fn renderDiagnostic(d: Diagnostic, source: []const u8, writer: anytype) !void {
-    // header: severity and message
-    try writer.print("{s}: {s}\n", .{ d.severity.label(), d.message });
+    // header: severity and message (with error code if present)
+    if (d.code) |code| {
+        try writer.print("{s}[{s}]: {s}\n", .{ d.severity.label(), code.label(), d.message });
+    } else {
+        try writer.print("{s}: {s}\n", .{ d.severity.label(), d.message });
+    }
 
     // source line + underline
     if (d.location.offset < source.len) {
@@ -134,6 +212,67 @@ fn renderDiagnostic(d: Diagnostic, source: []const u8, writer: anytype) !void {
     }
 
     try writer.print("\n", .{});
+}
+
+/// render a single diagnostic as a JSON object.
+fn renderJsonDiagnostic(d: Diagnostic, writer: anytype) !void {
+    try writer.writeAll("{");
+
+    // severity
+    try writer.writeAll("\"severity\":\"");
+    try writer.writeAll(d.severity.label());
+    try writer.writeAll("\"");
+
+    // code (null if not present)
+    try writer.writeAll(",\"code\":");
+    if (d.code) |code| {
+        try writer.writeAll("\"");
+        try writer.writeAll(code.label());
+        try writer.writeAll("\"");
+    } else {
+        try writer.writeAll("null");
+    }
+
+    // message
+    try writer.writeAll(",\"message\":\"");
+    try writeJsonEscaped(writer, d.message);
+    try writer.writeAll("\"");
+
+    // location
+    try writer.print(",\"line\":{d},\"col\":{d}", .{ d.location.line + 1, d.location.column + 1 });
+
+    // fix (null if not present)
+    try writer.writeAll(",\"fix\":");
+    if (d.fix) |fix| {
+        try writer.writeAll("\"");
+        try writeJsonEscaped(writer, fix);
+        try writer.writeAll("\"");
+    } else {
+        try writer.writeAll("null");
+    }
+
+    try writer.writeAll("}");
+}
+
+/// write a string with JSON escaping (backslash, quotes, control chars).
+fn writeJsonEscaped(writer: anytype, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (c < 0x20) {
+                    // other control characters as unicode escapes
+                    try writer.print("\\u{x:0>4}", .{c});
+                } else {
+                    try writer.writeByte(c);
+                }
+            },
+        }
+    }
 }
 
 fn findLineStart(source: []const u8, offset: u32) u32 {
@@ -208,4 +347,100 @@ test "diagnostic renders with source context" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "error: unexpected character: @") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "x := @bad") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "^") != null);
+}
+
+test "error code label" {
+    try std.testing.expectEqualStrings("E200", ErrorCode.E200.label());
+    try std.testing.expectEqualStrings("E204", ErrorCode.E204.label());
+}
+
+test "coded error renders with code in header" {
+    var list = DiagnosticList.init(std.testing.allocator, "x := 42");
+    defer list.deinit();
+
+    try list.addCodedError(.E200, .{ .line = 0, .column = 0, .offset = 0, .length = 1 }, "type mismatch");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try list.render(output.writer(std.testing.allocator));
+
+    const rendered = output.items;
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "error[E200]: type mismatch") != null);
+}
+
+test "uncoded error renders without brackets" {
+    var list = DiagnosticList.init(std.testing.allocator, "x := 42");
+    defer list.deinit();
+
+    try list.addError(.{ .line = 0, .column = 0, .offset = 0, .length = 1 }, "some error");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try list.render(output.writer(std.testing.allocator));
+
+    const rendered = output.items;
+    // should be "error: some error", not "error[null]: some error"
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "error: some error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[") == null);
+}
+
+test "renderJson: empty diagnostics" {
+    var list = DiagnosticList.init(std.testing.allocator, "");
+    defer list.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try list.renderJson(output.writer(std.testing.allocator));
+
+    try std.testing.expectEqualStrings("[]\n", output.items);
+}
+
+test "renderJson: single coded error" {
+    var list = DiagnosticList.init(std.testing.allocator, "x := 42");
+    defer list.deinit();
+
+    try list.addCodedErrorWithFix(
+        .E204,
+        .{ .line = 9, .column = 4, .offset = 50, .length = 5 },
+        "non-exhaustive match",
+        "add a wildcard '_' catch-all",
+    );
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try list.renderJson(output.writer(std.testing.allocator));
+
+    const json = output.items;
+    // check key fields are present and correctly formatted
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"severity\":\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"code\":\"E204\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"message\":\"non-exhaustive match\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"line\":10") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"col\":5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"fix\":\"add a wildcard") != null);
+}
+
+test "renderJson: uncoded error has null code" {
+    var list = DiagnosticList.init(std.testing.allocator, "x");
+    defer list.deinit();
+
+    try list.addError(Location.zero, "test error");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try list.renderJson(output.writer(std.testing.allocator));
+
+    const json = output.items;
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"code\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"fix\":null") != null);
+}
+
+test "writeJsonEscaped: special characters" {
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    const w = output.writer(std.testing.allocator);
+
+    try writeJsonEscaped(&w, "hello \"world\"\nnew\\line");
+
+    try std.testing.expectEqualStrings("hello \\\"world\\\"\\nnew\\\\line", output.items);
 }
