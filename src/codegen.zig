@@ -1352,3 +1352,55 @@ test "emitPreamble writes includes" {
     const output = emitter.getOutput();
     try std.testing.expect(std.mem.indexOf(u8, output, "forge_runtime.h") != null);
 }
+
+test "stripQuotes strips surrounding double quotes" {
+    try std.testing.expectEqualStrings("hello", CEmitter.stripQuotes("\"hello\""));
+    try std.testing.expectEqualStrings("", CEmitter.stripQuotes("\"\""));
+    try std.testing.expectEqualStrings("no quotes", CEmitter.stripQuotes("no quotes"));
+    try std.testing.expectEqualStrings("a", CEmitter.stripQuotes("a"));
+}
+
+test "full pipeline emits valid C for simple program" {
+    const allocator = std.testing.allocator;
+    const Lexer = @import("lexer.zig").Lexer;
+    const Parser = @import("parser.zig").Parser;
+
+    const source =
+        \\fn main():
+        \\    x := 42
+        \\    print("hello")
+        \\
+    ;
+
+    // lex
+    var lexer = try Lexer.init(source, allocator);
+    defer lexer.deinit();
+    const tokens = try lexer.tokenize();
+    defer allocator.free(tokens);
+
+    // parse
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var parser = Parser.init(tokens, source, arena.allocator());
+    defer parser.deinit();
+    const module = try parser.parseModule();
+
+    // check
+    var checker = try Checker.Checker.init(allocator, source);
+    defer checker.deinit();
+    checker.check(&module);
+    try std.testing.expect(!checker.diagnostics.hasErrors());
+
+    // emit
+    var emitter = CEmitter.init(allocator, &checker.type_table, &checker.module_scope);
+    defer emitter.deinit();
+    try emitter.emitModule(&module);
+
+    const output = emitter.getOutput();
+
+    // verify key elements in the output
+    try std.testing.expect(std.mem.indexOf(u8, output, "int main(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "int64_t x = 42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "forge_print(FORGE_STRING_LIT(\"hello\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "return 0;") != null);
+}
