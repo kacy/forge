@@ -164,12 +164,28 @@ pub const DiagnosticList = struct {
             try renderDiagnostic(d, self.source, writer);
         }
     }
+
+    /// render all diagnostics as a JSON array. outputs valid JSON even
+    /// when there are no diagnostics (empty array). designed for agents
+    /// that parse `forge check --json` output.
+    pub fn renderJson(self: *const DiagnosticList, writer: anytype) !void {
+        try writer.writeAll("[");
+        for (self.diagnostics.items, 0..) |d, i| {
+            if (i > 0) try writer.writeAll(",");
+            try renderJsonDiagnostic(d, writer);
+        }
+        try writer.writeAll("]\n");
+    }
 };
 
 /// render a single diagnostic with source context and underline.
 fn renderDiagnostic(d: Diagnostic, source: []const u8, writer: anytype) !void {
-    // header: severity and message
-    try writer.print("{s}: {s}\n", .{ d.severity.label(), d.message });
+    // header: severity and message (with error code if present)
+    if (d.code) |code| {
+        try writer.print("{s}[{s}]: {s}\n", .{ d.severity.label(), code.label(), d.message });
+    } else {
+        try writer.print("{s}: {s}\n", .{ d.severity.label(), d.message });
+    }
 
     // source line + underline
     if (d.location.offset < source.len) {
@@ -196,6 +212,67 @@ fn renderDiagnostic(d: Diagnostic, source: []const u8, writer: anytype) !void {
     }
 
     try writer.print("\n", .{});
+}
+
+/// render a single diagnostic as a JSON object.
+fn renderJsonDiagnostic(d: Diagnostic, writer: anytype) !void {
+    try writer.writeAll("{");
+
+    // severity
+    try writer.writeAll("\"severity\":\"");
+    try writer.writeAll(d.severity.label());
+    try writer.writeAll("\"");
+
+    // code (null if not present)
+    try writer.writeAll(",\"code\":");
+    if (d.code) |code| {
+        try writer.writeAll("\"");
+        try writer.writeAll(code.label());
+        try writer.writeAll("\"");
+    } else {
+        try writer.writeAll("null");
+    }
+
+    // message
+    try writer.writeAll(",\"message\":\"");
+    try writeJsonEscaped(writer, d.message);
+    try writer.writeAll("\"");
+
+    // location
+    try writer.print(",\"line\":{d},\"col\":{d}", .{ d.location.line + 1, d.location.column + 1 });
+
+    // fix (null if not present)
+    try writer.writeAll(",\"fix\":");
+    if (d.fix) |fix| {
+        try writer.writeAll("\"");
+        try writeJsonEscaped(writer, fix);
+        try writer.writeAll("\"");
+    } else {
+        try writer.writeAll("null");
+    }
+
+    try writer.writeAll("}");
+}
+
+/// write a string with JSON escaping (backslash, quotes, control chars).
+fn writeJsonEscaped(writer: anytype, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (c < 0x20) {
+                    // other control characters as unicode escapes
+                    try writer.print("\\u{x:0>4}", .{c});
+                } else {
+                    try writer.writeByte(c);
+                }
+            },
+        }
+    }
 }
 
 fn findLineStart(source: []const u8, offset: u32) u32 {
