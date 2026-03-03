@@ -37,11 +37,12 @@ fn main():
 
 ## what works today
 
-the bootstrap compiler handles lexing, parsing, and type checking.
+the bootstrap compiler handles the full pipeline: lex → parse → check → codegen.
+9 example programs compile to native binaries via C transpilation.
 
-**checked:**
+**checked and compiling:**
 - function declarations, typed parameters, return types, calls
-- struct declarations with typed fields, field access
+- struct declarations with typed fields, field access, constructors
 - enum declarations with variant data
 - variable bindings with type inference (`x := 42`)
 - mutability enforcement (`mut` required for reassignment)
@@ -50,17 +51,27 @@ the bootstrap compiler handles lexing, parsing, and type checking.
 - unary operators: negate, not
 - string interpolation
 - return type checking
+- match expressions with exhaustiveness checking
+- method calls and impl blocks
+- pipe operator (`x | f`)
+- collection literals: List, Map, Set with index expressions
+- generics (checked, codegen pending)
 
-**not yet checked** (parses fine, returns error sentinel in the checker):
-method calls, match, lambdas, collection literals, generics, interfaces,
-impl blocks, type aliases, try/unwrap, pipe operator.
+**not yet implemented in codegen** (parses and type-checks fine):
+lambdas, concurrency, type aliases, for loops over collections.
+
+**error codes:** every diagnostic has a stable code — E0xx (lexer),
+E1xx (parser), E2xx (checker). see `docs/errors.md` for the full reference.
 
 ## cli commands
 
 ```
-forge lex <file>     # print token stream
-forge parse <file>   # print AST
-forge check <file>   # type check and report errors
+forge lex <file>          # print token stream
+forge parse <file>        # print AST
+forge check <file>        # type check and report errors
+forge check --json <file> # machine-readable JSON diagnostics
+forge build <file>        # compile to native binary (via C transpilation)
+forge run <file>          # compile and run
 ```
 
 ## building
@@ -70,7 +81,7 @@ requires [zig 0.15.2](https://ziglang.org/download/).
 ```
 zig build          # compile
 zig build run      # compile and run
-zig build test     # run 191 tests
+zig build test     # run 347 tests
 ```
 
 or with make:
@@ -87,19 +98,22 @@ make clean         # remove build artifacts
 
 ```
 src/
-  main.zig         CLI entry point (lex, parse, check commands)
-  lexer.zig        tokenizer with indentation tracking
-  parser.zig       recursive descent parser
-  ast.zig          AST node types
-  checker.zig      type checker (two-pass: register, then check)
-  types.zig        type representation and type table
-  printer.zig      AST pretty-printer
-  errors.zig       diagnostics with source context
-  intern.zig       string interning (arena-backed)
-  io.zig           buffered I/O helpers
+  main.zig           CLI entry point (lex, parse, check, build, run)
+  lexer.zig          tokenizer with indentation tracking
+  parser.zig         recursive descent parser
+  ast.zig            AST node types
+  checker.zig        type checker (two-pass: register, then check)
+  types.zig          type representation and type table
+  codegen.zig        C transpilation backend
+  forge_runtime.h    C runtime header (embedded via @embedFile)
+  printer.zig        AST pretty-printer
+  errors.zig         diagnostics, error codes, and source context
+  intern.zig         string interning (arena-backed)
+  io.zig             buffered I/O helpers
 
-examples/          .fg programs that pass forge check
-docs/grammar.ebnf  complete EBNF for the language
+examples/            .fg programs (9 compile to native binaries)
+docs/grammar.ebnf    complete EBNF for the language
+docs/errors.md       error code reference
 ```
 
 ## license
