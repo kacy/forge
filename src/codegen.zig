@@ -363,24 +363,41 @@ pub const CEmitter = struct {
 
     /// emit C typedefs for all Result[T,E] types found in the type table.
     /// each gets a struct: typedef struct { bool is_ok; T ok; forge_string_t err; } forge_result_T;
+    /// deduplicates by name so that multiple TypeIds for the same ok_type
+    /// (e.g. two functions both returning Int!) only emit one typedef.
     fn emitResultTypedefs(self: *CEmitter) EmitError!void {
+        var emitted_names = std.StringHashMap(void).init(self.allocator);
+        defer emitted_names.deinit();
+
         const items = self.type_table.types.items;
         for (items, 0..) |ty, idx| {
             switch (ty) {
                 .result => |r| {
                     const tid = TypeId.fromIndex(@intCast(idx));
-                    if (self.emitted_result_types.contains(tid)) continue;
-                    self.emitted_result_types.put(tid, {}) catch continue;
-
                     const ok_c = self.cTypeStringForId(r.ok_type);
-                    // build and cache the result type name
+
+                    // build the result type name
                     var buf: [128]u8 = undefined;
                     const name = std.fmt.bufPrint(&buf, "forge_result_{s}", .{ok_c}) catch continue;
+
+                    // skip if we already emitted a typedef with this name
+                    if (emitted_names.contains(name)) {
+                        // still cache the mangled name so cTypeStringForId works for this TypeId
+                        if (!self.mangled_names.contains(tid)) {
+                            const owned = self.allocator.dupe(u8, name) catch continue;
+                            self.mangled_names.put(tid, owned) catch {
+                                self.allocator.free(owned);
+                            };
+                        }
+                        continue;
+                    }
+
                     const owned = self.allocator.dupe(u8, name) catch continue;
                     self.mangled_names.put(tid, owned) catch {
                         self.allocator.free(owned);
                         continue;
                     };
+                    emitted_names.put(owned, {}) catch continue;
 
                     try self.writeStr("typedef struct { bool is_ok; ");
                     try self.writeStr(ok_c);
@@ -812,9 +829,14 @@ pub const CEmitter = struct {
                 try self.writeStr("continue;\n");
             },
             .expr_stmt => |expr| {
-                try self.writeIndent();
-                try self.emitExpr(expr);
-                try self.writeStr(";\n");
+                // try propagation as statement: foo()! → hoist + check + early return
+                if (expr.kind == .try_expr) {
+                    try self.emitTryExprStmt(expr.kind.try_expr);
+                } else {
+                    try self.writeIndent();
+                    try self.emitExpr(expr);
+                    try self.writeStr(";\n");
+                }
             },
             .match_stmt => |m| try self.emitMatchStmt(&m),
             .for_stmt => |fs| try self.emitForStmt(&fs),
@@ -830,6 +852,12 @@ pub const CEmitter = struct {
             self.inferExprType(b.value);
         self.local_types.put(b.name, tid) catch {};
 
+        // try propagation: x := foo()! → hoist result to temp, check, early return
+        if (b.value.kind == .try_expr) {
+            try self.emitTryBinding(b, tid);
+            return;
+        }
+
         try self.writeIndent();
         if (b.type_expr) |te| {
             try self.emitTypeExpr(te);
@@ -844,6 +872,83 @@ pub const CEmitter = struct {
         try self.writeStr(" = ");
         try self.emitExpr(b.value);
         try self.writeStr(";\n");
+    }
+
+    /// emit a try-propagating binding: `x := foo()!`
+    ///
+    /// generates:
+    ///   forge_result_T __try_N = fg_foo();
+    ///   if (!__try_N.is_ok) return (enclosing_result){ .is_ok = false, .err = __try_N.err };
+    ///   T x = __try_N.ok;
+    fn emitTryBinding(self: *CEmitter, b: *const ast.Binding, ok_tid: TypeId) EmitError!void {
+        const inner = b.value.kind.try_expr;
+        // infer the result type of the inner expression (before unwrapping)
+        const result_tid = self.inferExprType(inner);
+        const result_c = self.cTypeStringForId(result_tid);
+        const ok_c = self.cTypeStringForId(ok_tid);
+
+        // unique temp name
+        var name_buf: [32]u8 = undefined;
+        const try_name = std.fmt.bufPrint(&name_buf, "__try_{d}", .{self.try_counter}) catch return;
+        self.try_counter += 1;
+
+        // emit: result_type __try_N = inner_expr;
+        try self.writeIndent();
+        try self.writeStr(result_c);
+        try self.writeByte(' ');
+        try self.writeStr(try_name);
+        try self.writeStr(" = ");
+        try self.emitExpr(inner);
+        try self.writeStr(";\n");
+
+        // emit: if (!__try_N.is_ok) return (enclosing_result){ .is_ok = false, .err = __try_N.err };
+        try self.writeIndent();
+        try self.writeStr("if (!");
+        try self.writeStr(try_name);
+        try self.writeStr(".is_ok) return (");
+        try self.writeStr(self.cTypeStringForId(self.current_fn_return));
+        try self.writeStr("){ .is_ok = false, .err = ");
+        try self.writeStr(try_name);
+        try self.writeStr(".err };\n");
+
+        // emit: T x = __try_N.ok;
+        try self.writeIndent();
+        try self.writeStr(ok_c);
+        try self.writeByte(' ');
+        try self.writeStr(b.name);
+        try self.writeStr(" = ");
+        try self.writeStr(try_name);
+        try self.writeStr(".ok;\n");
+    }
+
+    /// emit a try expression used as a statement: `foo()!`
+    /// generates the temp + check + early return, but discards the ok value.
+    fn emitTryExprStmt(self: *CEmitter, inner: *const ast.Expr) EmitError!void {
+        const result_tid = self.inferExprType(inner);
+        const result_c = self.cTypeStringForId(result_tid);
+
+        var name_buf: [32]u8 = undefined;
+        const try_name = std.fmt.bufPrint(&name_buf, "__try_{d}", .{self.try_counter}) catch return;
+        self.try_counter += 1;
+
+        // emit: result_type __try_N = inner_expr;
+        try self.writeIndent();
+        try self.writeStr(result_c);
+        try self.writeByte(' ');
+        try self.writeStr(try_name);
+        try self.writeStr(" = ");
+        try self.emitExpr(inner);
+        try self.writeStr(";\n");
+
+        // emit: if (!__try_N.is_ok) return (enclosing_result){ .is_ok = false, .err = __try_N.err };
+        try self.writeIndent();
+        try self.writeStr("if (!");
+        try self.writeStr(try_name);
+        try self.writeStr(".is_ok) return (");
+        try self.writeStr(self.cTypeStringForId(self.current_fn_return));
+        try self.writeStr("){ .is_ok = false, .err = ");
+        try self.writeStr(try_name);
+        try self.writeStr(".err };\n");
     }
 
     /// emit a C type string for an expression by inferring its TypeId.
