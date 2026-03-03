@@ -1289,6 +1289,9 @@ pub const Checker = struct {
     }
 
     fn checkBinary(self: *Checker, bin: ast.BinaryExpr, location: Location, scope: *const Scope) TypeId {
+        // pipe needs special handling — the RHS is a function name, not a value
+        if (bin.op == .pipe) return self.checkPipeExpr(bin, location, scope);
+
         const left = self.checkExpr(bin.left, scope);
         const right = self.checkExpr(bin.right, scope);
 
@@ -1307,9 +1310,66 @@ pub const Checker = struct {
             // logical: both sides must be Bool
             .@"and", .@"or" => self.checkLogical(left, right, location),
 
-            // pipe: not yet supported
-            .pipe => .err,
+            .pipe => unreachable, // handled above
         };
+    }
+
+    fn checkPipeExpr(self: *Checker, bin: ast.BinaryExpr, location: Location, scope: *const Scope) TypeId {
+        const lhs_type = self.checkExpr(bin.left, scope);
+        if (lhs_type.isErr()) return .err;
+
+        // the RHS must be a bare function name (identifier)
+        const rhs_name = switch (bin.right.kind) {
+            .ident => |name| name,
+            else => {
+                self.diagnostics.addError(location,
+                    "pipe operator requires a function name on the right-hand side",
+                ) catch {};
+                return .err;
+            },
+        };
+
+        // look up the function in scope
+        const binding = scope.lookup(rhs_name) orelse {
+            self.diagnostics.addError(location, self.fmt(
+                "undefined variable '{s}'",
+                .{rhs_name},
+            )) catch {};
+            return .err;
+        };
+
+        // verify it's a function
+        const ty = self.type_table.get(binding.type_id) orelse return .err;
+        const func = switch (ty) {
+            .function => |f| f,
+            else => {
+                self.diagnostics.addError(location, self.fmt(
+                    "'{s}' is not a function",
+                    .{rhs_name},
+                )) catch {};
+                return .err;
+            },
+        };
+
+        // verify it takes exactly 1 parameter
+        if (func.param_types.len != 1) {
+            self.diagnostics.addError(location, self.fmt(
+                "pipe requires a function that takes 1 argument, '{s}' takes {d}",
+                .{ rhs_name, func.param_types.len },
+            )) catch {};
+            return .err;
+        }
+
+        // verify the LHS type matches the parameter type
+        if (lhs_type != func.param_types[0]) {
+            self.diagnostics.addError(location, self.fmt(
+                "type mismatch in pipe: expected {s}, got {s}",
+                .{ self.type_table.typeName(func.param_types[0]), self.type_table.typeName(lhs_type) },
+            )) catch {};
+            return .err;
+        }
+
+        return func.return_type;
     }
 
     fn checkArithmetic(self: *Checker, left: TypeId, right: TypeId, bin: ast.BinaryExpr, location: Location) TypeId {
@@ -6760,4 +6820,160 @@ test "try on error-typed expr suppresses cascade" {
     try std.testing.expect(result.isErr());
     // only one error (undefined variable), not two
     try std.testing.expectEqual(error_count_before + 1, checker.diagnostics.errorCount());
+}
+
+// -- pipe operator tests --
+
+test "pipe: value |> function yields return type" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // define double(Int) -> Int
+    const fn_type = try checker.type_table.addType(.{ .function = .{
+        .param_types = &.{.int},
+        .return_type = .int,
+    } });
+    try scope.define("double", .{ .type_id = fn_type, .is_mut = false });
+
+    const left = &ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+    const right = &ast.Expr{ .kind = .{ .ident = "double" }, .location = Location.zero };
+    const pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = left, .op = .pipe, .right = right } },
+        .location = Location.zero,
+    };
+    try std.testing.expectEqual(TypeId.int, checker.checkExpr(&pipe, scope));
+}
+
+test "pipe: type mismatch is an error" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // define double(Int) -> Int
+    const fn_type = try checker.type_table.addType(.{ .function = .{
+        .param_types = &.{.int},
+        .return_type = .int,
+    } });
+    try scope.define("double", .{ .type_id = fn_type, .is_mut = false });
+
+    // "hello" |> double — String vs Int
+    const left = &ast.Expr{ .kind = .{ .string_lit = "hello" }, .location = Location.zero };
+    const right = &ast.Expr{ .kind = .{ .ident = "double" }, .location = Location.zero };
+    const pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = left, .op = .pipe, .right = right } },
+        .location = Location.zero,
+    };
+    try std.testing.expect(checker.checkExpr(&pipe, scope).isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "pipe: non-function RHS is an error" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+    try scope.define("x", .{ .type_id = .int, .is_mut = false });
+
+    const left = &ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const right = &ast.Expr{ .kind = .{ .ident = "x" }, .location = Location.zero };
+    const pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = left, .op = .pipe, .right = right } },
+        .location = Location.zero,
+    };
+    try std.testing.expect(checker.checkExpr(&pipe, scope).isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "pipe: undefined function is an error" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    const left = &ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const right = &ast.Expr{ .kind = .{ .ident = "nonexistent" }, .location = Location.zero };
+    const pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = left, .op = .pipe, .right = right } },
+        .location = Location.zero,
+    };
+    try std.testing.expect(checker.checkExpr(&pipe, scope).isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "pipe: multi-param function is an error" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // define add(Int, Int) -> Int
+    const fn_type = try checker.type_table.addType(.{ .function = .{
+        .param_types = &.{ .int, .int },
+        .return_type = .int,
+    } });
+    try scope.define("add", .{ .type_id = fn_type, .is_mut = false });
+
+    const left = &ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const right = &ast.Expr{ .kind = .{ .ident = "add" }, .location = Location.zero };
+    const pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = left, .op = .pipe, .right = right } },
+        .location = Location.zero,
+    };
+    try std.testing.expect(checker.checkExpr(&pipe, scope).isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "pipe: non-identifier RHS is an error" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // 1 |> 42 — RHS is a literal, not a function name
+    const left = &ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const right = &ast.Expr{ .kind = .{ .int_lit = "42" }, .location = Location.zero };
+    const pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = left, .op = .pipe, .right = right } },
+        .location = Location.zero,
+    };
+    try std.testing.expect(checker.checkExpr(&pipe, scope).isErr());
+    try std.testing.expect(checker.diagnostics.hasErrors());
+}
+
+test "pipe: chained pipes resolve correctly" {
+    var checker = try Checker.init(std.testing.allocator, "");
+    defer checker.deinit();
+
+    const scope = &checker.module_scope;
+
+    // define inc(Int) -> Int
+    const inc_type = try checker.type_table.addType(.{ .function = .{
+        .param_types = &.{.int},
+        .return_type = .int,
+    } });
+    try scope.define("inc", .{ .type_id = inc_type, .is_mut = false });
+
+    // define to_string(Int) -> String
+    const to_string_type = try checker.type_table.addType(.{ .function = .{
+        .param_types = &.{.int},
+        .return_type = .string,
+    } });
+    try scope.define("to_string", .{ .type_id = to_string_type, .is_mut = false });
+
+    // 1 |> inc |> to_string
+    const one = &ast.Expr{ .kind = .{ .int_lit = "1" }, .location = Location.zero };
+    const inc_ident = &ast.Expr{ .kind = .{ .ident = "inc" }, .location = Location.zero };
+    const inner_pipe = &ast.Expr{
+        .kind = .{ .binary = .{ .left = one, .op = .pipe, .right = inc_ident } },
+        .location = Location.zero,
+    };
+    const to_string_ident = &ast.Expr{ .kind = .{ .ident = "to_string" }, .location = Location.zero };
+    const outer_pipe = ast.Expr{
+        .kind = .{ .binary = .{ .left = inner_pipe, .op = .pipe, .right = to_string_ident } },
+        .location = Location.zero,
+    };
+    try std.testing.expectEqual(TypeId.string, checker.checkExpr(&outer_pipe, scope));
 }
