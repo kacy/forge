@@ -10,6 +10,7 @@ const printer = @import("printer.zig");
 const checker_mod = @import("checker.zig");
 const Checker = checker_mod.Checker;
 const CEmitter = @import("codegen.zig").CEmitter;
+const formatter = @import("formatter.zig");
 const ast = @import("ast.zig");
 const io = @import("io.zig");
 
@@ -24,6 +25,7 @@ comptime {
     _ = @import("types.zig");
     _ = @import("checker.zig");
     _ = @import("codegen.zig");
+    _ = @import("formatter.zig");
 }
 
 const version = "0.1.0";
@@ -166,6 +168,28 @@ pub fn main() !void {
         };
         const json = hasFlag(&args, "--json");
         try runBuild(allocator, file_path, true, json);
+    } else if (std.mem.eql(u8, cmd, "test")) {
+        const file_path = args.next() orelse {
+            io.writeErr("error: forge test requires a file path\n", .{});
+            return;
+        };
+        const json = hasFlag(&args, "--json");
+        try runTest(allocator, file_path, json);
+    } else if (std.mem.eql(u8, cmd, "fmt")) {
+        var check_only = false;
+        var file_path: ?[]const u8 = null;
+        while (args.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--check")) {
+                check_only = true;
+            } else if (file_path == null) {
+                file_path = arg;
+            }
+        }
+        const path = file_path orelse {
+            io.writeErr("error: forge fmt requires a file path\n", .{});
+            return;
+        };
+        try runFmt(allocator, path, check_only);
     } else {
         io.writeErr("error: unknown command '{s}'\n", .{cmd});
         printUsage();
@@ -240,6 +264,165 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, json: bool) !void {
         renderDiagnostics(&checker.diagnostics, false);
     } else {
         io.write("ok\n", .{});
+    }
+}
+
+/// format a source file. with --check, just reports whether the file
+/// would change (exit 1) without writing. otherwise writes back.
+fn runFmt(allocator: std.mem.Allocator, path: []const u8, check_only: bool) !void {
+    const source = readSourceFile(allocator, path) orelse return;
+    defer allocator.free(source);
+
+    const formatted = formatter.format(allocator, source) catch {
+        io.writeErr("error: formatting failed (out of memory)\n", .{});
+        return;
+    };
+    defer allocator.free(formatted);
+
+    if (check_only) {
+        if (!std.mem.eql(u8, source, formatted)) {
+            io.write("{s}\n", .{path});
+            std.process.exit(1);
+        }
+        return;
+    }
+
+    // only write if changed
+    if (!std.mem.eql(u8, source, formatted)) {
+        writeFile(path, formatted) catch |err| {
+            io.writeErr("error: could not write '{s}': {}\n", .{ path, err });
+            return;
+        };
+    }
+}
+
+/// lex, parse, type-check, generate C in test mode, compile, and run tests.
+fn runTest(allocator: std.mem.Allocator, path: []const u8, json: bool) !void {
+    const source = readSourceFile(allocator, path) orelse return;
+    defer allocator.free(source);
+
+    var result = try lexAndParse(allocator, source, json) orelse return;
+    defer result.deinit(allocator);
+
+    var checker = Checker.init(allocator, source) catch {
+        io.writeErr("error: checker init failed (out of memory)\n", .{});
+        return;
+    };
+    defer checker.deinit();
+
+    checker.check(&result.module);
+
+    if (checker.diagnostics.hasErrors()) {
+        renderDiagnostics(&checker.diagnostics, json);
+        return;
+    }
+
+    // generate C in test mode
+    var emitter = CEmitter.init(allocator, &checker.type_table, &checker.module_scope, &checker.method_types, &checker.generic_decls);
+    defer emitter.deinit();
+    emitter.test_mode = true;
+
+    emitter.emitModule(&result.module) catch {
+        io.writeErr("error: code generation failed (out of memory)\n", .{});
+        return;
+    };
+
+    // determine output paths
+    const stem = stripExtension(std.fs.path.basename(path));
+    const dir = std.fs.path.dirname(path) orelse ".";
+    const build_dir = std.fs.path.join(allocator, &.{ dir, ".forge-build" }) catch {
+        io.writeErr("error: out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(build_dir);
+
+    std.fs.cwd().makePath(build_dir) catch |err| {
+        io.writeErr("error: could not create build directory: {}\n", .{err});
+        return;
+    };
+
+    // write the runtime header
+    const header_path = std.fs.path.join(allocator, &.{ build_dir, "forge_runtime.h" }) catch {
+        io.writeErr("error: out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(header_path);
+    writeFile(header_path, runtime_header) catch |err| {
+        io.writeErr("error: could not write runtime header: {}\n", .{err});
+        return;
+    };
+
+    // write the generated C source
+    const c_filename = std.fmt.allocPrint(allocator, "{s}_test.c", .{stem}) catch {
+        io.writeErr("error: out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(c_filename);
+    const c_path = std.fs.path.join(allocator, &.{ build_dir, c_filename }) catch {
+        io.writeErr("error: out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(c_path);
+    writeFile(c_path, emitter.getOutput()) catch |err| {
+        io.writeErr("error: could not write generated C: {}\n", .{err});
+        return;
+    };
+
+    // compile with zig cc
+    const out_name = std.fmt.allocPrint(allocator, "{s}_test", .{stem}) catch {
+        io.writeErr("error: out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(out_name);
+    const out_path = std.fs.path.join(allocator, &.{ dir, out_name }) catch {
+        io.writeErr("error: out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(out_path);
+
+    const cc_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "zig", "cc", "-o", out_path, "-I", build_dir, c_path },
+    }) catch |err| {
+        io.writeErr("error: could not run zig cc: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(cc_result.stdout);
+    defer allocator.free(cc_result.stderr);
+
+    if (cc_result.term.Exited != 0) {
+        io.writeErr("error: C compilation failed:\n{s}", .{cc_result.stderr});
+        return;
+    }
+
+    // run the test binary
+    const run_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{out_path},
+    }) catch |err| {
+        io.writeErr("error: could not run test binary: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // print output
+    if (run_result.stdout.len > 0) {
+        var buf: [io.write_buf_size]u8 = undefined;
+        var w = std.fs.File.stdout().writer(&buf);
+        w.interface.writeAll(run_result.stdout) catch {};
+        w.interface.flush() catch {};
+    }
+    if (run_result.stderr.len > 0) {
+        var buf: [io.write_buf_size]u8 = undefined;
+        var w = std.fs.File.stderr().writer(&buf);
+        w.interface.writeAll(run_result.stderr) catch {};
+        w.interface.flush() catch {};
+    }
+
+    // exit with the test binary's exit code
+    if (run_result.term.Exited != 0) {
+        std.process.exit(1);
     }
 }
 
@@ -408,6 +591,9 @@ fn printUsage() void {
         \\commands:
         \\  build <file>          compile to native binary
         \\  run <file>            compile and run
+        \\  test <file>           run tests
+        \\  fmt <file>            format source code
+        \\  fmt <file> --check    check formatting (exit 1 if unformatted)
         \\  check <file>          type check a source file
         \\  check <file> --json   type check with JSON output
         \\  lex <file>            tokenize a source file
