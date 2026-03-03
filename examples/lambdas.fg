@@ -1,0 +1,8 @@
+# lambdas (non-capturing)
+
+fn apply(x: Int, f: fn(Int) -> Int) -> Int:
+    return f(x)
+
+fn main():
+    result := apply(5, fn(x: Int) => x * 2)
+    print("lambdas work")

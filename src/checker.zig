@@ -618,9 +618,23 @@ pub const Checker = struct {
         if (ret.value) |value| {
             const actual = self.checkExpr(value, scope);
             if (!actual.isErr() and !expected.isErr() and actual != expected) {
-                // allow returning the ok-type from a result-returning function
-                const ok_match = if (self.type_table.get(expected)) |ty| switch (ty) {
+                // allow returning the inner type from a result- or optional-returning function,
+                // and structurally equivalent tuples (may have different TypeIds)
+                const ok_match = if (self.type_table.get(expected)) |ety| switch (ety) {
                     .result => |r| actual == r.ok_type,
+                    .optional => |o| actual == o.inner,
+                    .tuple => |exp_tup| blk: {
+                        const act_ty = self.type_table.get(actual) orelse break :blk false;
+                        const act_tup = switch (act_ty) {
+                            .tuple => |t| t,
+                            else => break :blk false,
+                        };
+                        if (exp_tup.elements.len != act_tup.elements.len) break :blk false;
+                        for (exp_tup.elements, act_tup.elements) |a, b| {
+                            if (a != b) break :blk false;
+                        }
+                        break :blk true;
+                    },
                     else => false,
                 } else false;
 
@@ -1776,10 +1790,13 @@ pub const Checker = struct {
         for (call.args, func.param_types) |arg, expected| {
             const actual = self.checkExpr(arg.value, scope);
             if (!actual.isErr() and !expected.isErr() and actual != expected) {
-                self.diagnostics.addCodedError(.E219, arg.location, self.fmt(
-                    "expected {s}, got {s}",
-                    .{ self.type_table.typeName(expected), self.type_table.typeName(actual) },
-                )) catch {};
+                // allow structurally equivalent function types (e.g. lambda vs declared fn type)
+                if (!self.typesStructurallyEqual(expected, actual)) {
+                    self.diagnostics.addCodedError(.E219, arg.location, self.fmt(
+                        "expected {s}, got {s}",
+                        .{ self.type_table.typeName(expected), self.type_table.typeName(actual) },
+                    )) catch {};
+                }
             }
         }
 
@@ -1946,8 +1963,37 @@ pub const Checker = struct {
         if (object_type.isErr()) return .err;
 
         const ty = self.type_table.get(object_type) orelse return .err;
-        const struct_data = switch (ty) {
-            .@"struct" => |s| s,
+        switch (ty) {
+            .@"struct" => |struct_data| {
+                for (struct_data.fields) |field| {
+                    if (std.mem.eql(u8, field.name, fa.field)) {
+                        return field.type_id;
+                    }
+                }
+                self.diagnostics.addCodedError(.E209, location, self.fmt(
+                    "struct {s} has no field '{s}'",
+                    .{ struct_data.name, fa.field },
+                )) catch {};
+                return .err;
+            },
+            .tuple => |tup| {
+                // numeric field access: .0, .1, etc.
+                const idx = std.fmt.parseInt(usize, fa.field, 10) catch {
+                    self.diagnostics.addCodedError(.E209, location, self.fmt(
+                        "tuple has no field '{s}' (use numeric indices: .0, .1, ...)",
+                        .{fa.field},
+                    )) catch {};
+                    return .err;
+                };
+                if (idx < tup.elements.len) {
+                    return tup.elements[idx];
+                }
+                self.diagnostics.addCodedError(.E209, location, self.fmt(
+                    "tuple index {d} out of bounds (tuple has {d} elements)",
+                    .{ idx, tup.elements.len },
+                )) catch {};
+                return .err;
+            },
             else => {
                 self.diagnostics.addCodedError(.E209, location, self.fmt(
                     "{s} has no field '{s}'",
@@ -1955,20 +2001,7 @@ pub const Checker = struct {
                 )) catch {};
                 return .err;
             },
-        };
-
-        // look up the field
-        for (struct_data.fields) |field| {
-            if (std.mem.eql(u8, field.name, fa.field)) {
-                return field.type_id;
-            }
         }
-
-        self.diagnostics.addCodedError(.E209, location, self.fmt(
-            "struct {s} has no field '{s}'",
-            .{ struct_data.name, fa.field },
-        )) catch {};
-        return .err;
     }
 
     fn checkMatchExpr(self: *Checker, m: ast.MatchExpr, location: Location, scope: *const Scope) TypeId {
@@ -2492,6 +2525,40 @@ pub const Checker = struct {
     // ---------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------
+
+    /// check if two types are structurally equal even if they have different TypeIds.
+    /// handles function types and tuples where the checker creates distinct TypeIds
+    /// for structurally identical types.
+    fn typesStructurallyEqual(self: *Checker, a: TypeId, b: TypeId) bool {
+        if (a == b) return true;
+        const ty_a = self.type_table.get(a) orelse return false;
+        const ty_b = self.type_table.get(b) orelse return false;
+
+        return switch (ty_a) {
+            .function => |fa| switch (ty_b) {
+                .function => |fb| blk: {
+                    if (fa.return_type != fb.return_type) break :blk false;
+                    if (fa.param_types.len != fb.param_types.len) break :blk false;
+                    for (fa.param_types, fb.param_types) |pa, pb| {
+                        if (pa != pb) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            .tuple => |ta| switch (ty_b) {
+                .tuple => |tb| blk: {
+                    if (ta.elements.len != tb.elements.len) break :blk false;
+                    for (ta.elements, tb.elements) |ea, eb| {
+                        if (ea != eb) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            else => false,
+        };
+    }
 
     /// format a string onto the checker's arena. the returned slice lives
     /// as long as the checker does — safe to store in diagnostics.

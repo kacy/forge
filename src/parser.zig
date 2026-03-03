@@ -517,33 +517,46 @@ pub const Parser = struct {
                         .location = Location.span(expr.location, end_tok.location),
                     });
                 },
-                // field access or method call: expr.name or expr.name(args)
+                // field access or method call: expr.name or expr.name(args) or expr.0 (tuple)
                 .dot => {
                     _ = self.advance(); // skip .
-                    const name_tok = try self.expect(.identifier);
 
-                    // method call: expr.name(args)
-                    if (self.check(.lparen)) {
-                        _ = self.advance(); // skip (
-                        const args = try self.parseArgList();
-                        const end_tok = try self.expect(.rparen);
-                        expr = try self.create(ast.Expr, .{
-                            .kind = .{ .method_call = .{
-                                .receiver = expr,
-                                .method = name_tok.lexeme,
-                                .args = args,
-                            } },
-                            .location = Location.span(expr.location, end_tok.location),
-                        });
-                    } else {
-                        // field access: expr.name
+                    // tuple field access: expr.0, expr.1, etc.
+                    if (self.check(.int_lit)) {
+                        const idx_tok = self.advance();
                         expr = try self.create(ast.Expr, .{
                             .kind = .{ .field_access = .{
                                 .object = expr,
-                                .field = name_tok.lexeme,
+                                .field = idx_tok.lexeme,
                             } },
-                            .location = Location.span(expr.location, name_tok.location),
+                            .location = Location.span(expr.location, idx_tok.location),
                         });
+                    } else {
+                        const name_tok = try self.expect(.identifier);
+
+                        // method call: expr.name(args)
+                        if (self.check(.lparen)) {
+                            _ = self.advance(); // skip (
+                            const args = try self.parseArgList();
+                            const end_tok = try self.expect(.rparen);
+                            expr = try self.create(ast.Expr, .{
+                                .kind = .{ .method_call = .{
+                                    .receiver = expr,
+                                    .method = name_tok.lexeme,
+                                    .args = args,
+                                } },
+                                .location = Location.span(expr.location, end_tok.location),
+                            });
+                        } else {
+                            // field access: expr.name
+                            expr = try self.create(ast.Expr, .{
+                                .kind = .{ .field_access = .{
+                                    .object = expr,
+                                    .field = name_tok.lexeme,
+                                } },
+                                .location = Location.span(expr.location, name_tok.location),
+                            });
+                        }
                     }
                 },
                 else => break,
