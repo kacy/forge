@@ -20,10 +20,12 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const types = @import("types.zig");
+const Checker = @import("checker.zig");
 
 const TypeId = types.TypeId;
 const TypeTable = types.TypeTable;
 const Type = types.Type;
+const Scope = Checker.Scope;
 
 // ---------------------------------------------------------------
 // C emitter
@@ -33,18 +35,25 @@ pub const CEmitter = struct {
     output: std.ArrayList(u8),
     indent_level: u32,
     type_table: *const TypeTable,
+    module_scope: *const Scope,
     allocator: std.mem.Allocator,
+    /// tracks variable types in the current function scope so we can
+    /// choose the right C type for bindings and string operations.
+    local_types: std.StringHashMap(TypeId),
 
-    pub fn init(allocator: std.mem.Allocator, type_table: *const TypeTable) CEmitter {
+    pub fn init(allocator: std.mem.Allocator, type_table: *const TypeTable, module_scope: *const Scope) CEmitter {
         return .{
             .output = .empty,
             .indent_level = 0,
             .type_table = type_table,
+            .module_scope = module_scope,
             .allocator = allocator,
+            .local_types = std.StringHashMap(TypeId).init(allocator),
         };
     }
 
     pub fn deinit(self: *CEmitter) void {
+        self.local_types.deinit();
         self.output.deinit(self.allocator);
     }
 
@@ -251,6 +260,17 @@ pub const CEmitter = struct {
         // skip generic functions
         if (fd.generic_params.len > 0) return;
 
+        // clear local type tracking for each function
+        self.local_types.clearRetainingCapacity();
+
+        // register parameters as local variables
+        for (fd.params) |param| {
+            if (param.type_expr) |te| {
+                const tid = self.resolveTypeExprToId(te);
+                self.local_types.put(param.name, tid) catch {};
+            }
+        }
+
         if (std.mem.eql(u8, fd.name, "main")) {
             try self.writeStr("int main(void) {\n");
         } else {
@@ -342,11 +362,20 @@ pub const CEmitter = struct {
     }
 
     fn emitBinding(self: *CEmitter, b: *const ast.Binding) !void {
+        // determine the type and track it for later lookups
+        const tid = if (b.type_expr) |te|
+            self.resolveTypeExprToId(te)
+        else
+            self.inferExprType(b.value);
+        self.local_types.put(b.name, tid) catch {};
+
         try self.writeIndent();
         if (b.type_expr) |te| {
             try self.emitTypeExpr(te);
+        } else if (!tid.isErr()) {
+            try self.writeStr(mapTypeId(tid));
         } else {
-            // infer type from value — use the AST expression to guess
+            // fallback: infer from expression structure
             try self.emitInferredType(b.value);
         }
         try self.writeByte(' ');
@@ -432,12 +461,22 @@ pub const CEmitter = struct {
         }
     }
 
-    /// look up a function's return type from the type table (by name in module scope).
+    /// look up a function's return type from the module scope and emit it.
     fn emitFnReturnType(self: *CEmitter, name: []const u8) !void {
-        // this is a best-effort lookup — we don't have the scope here,
-        // but the type table has all registered function types
-        // for now, use a conservative fallback
-        _ = name;
+        if (self.module_scope.lookup(name)) |binding| {
+            if (self.type_table.get(binding.type_id)) |ty| {
+                switch (ty) {
+                    .function => |f| {
+                        const c_type = mapTypeId(f.return_type);
+                        if (c_type.len > 0) {
+                            try self.writeStr(c_type);
+                            return;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
         try self.writeStr("/* fn_result */");
     }
 
@@ -573,6 +612,15 @@ pub const CEmitter = struct {
     }
 
     fn emitBinary(self: *CEmitter, bin: *const ast.BinaryExpr) !void {
+        // pipe operator: x |> f  →  f(x)
+        if (bin.op == .pipe) {
+            try self.emitExpr(bin.right);
+            try self.writeByte('(');
+            try self.emitExpr(bin.left);
+            try self.writeByte(')');
+            return;
+        }
+
         // string operations need special handling
         const is_string_op = self.isStringExpr(bin.left);
 
@@ -612,7 +660,7 @@ pub const CEmitter = struct {
             .gte => " >= ",
             .@"and" => " && ",
             .@"or" => " || ",
-            .pipe => " /* pipe */ ",
+            .pipe => unreachable, // handled above
         });
         try self.emitExpr(bin.right);
         try self.writeByte(')');
@@ -627,17 +675,10 @@ pub const CEmitter = struct {
         try self.writeByte(')');
     }
 
-    /// heuristic: is this expression a string? used to choose between
-    /// C operators and forge_string_* functions. not perfect — the real
-    /// solution is storing resolved types on AST nodes, but this works
-    /// for the bootstrap compiler.
-    fn isStringExpr(_: *const CEmitter, expr: *const ast.Expr) bool {
-        return switch (expr.kind) {
-            .string_lit, .string_interp => true,
-            // a call to a function returning String — we can't easily tell
-            // without storing types on the AST, so we're conservative
-            else => false,
-        };
+    /// is this expression a string? checks literal types, variable types,
+    /// and function return types via the module scope.
+    fn isStringExpr(self: *const CEmitter, expr: *const ast.Expr) bool {
+        return self.inferExprType(expr) == .string;
     }
 
     fn emitUnary(self: *CEmitter, un: *const ast.UnaryExpr) !void {
@@ -753,9 +794,7 @@ pub const CEmitter = struct {
 
     fn emitStringInterp(self: *CEmitter, interp: *const ast.StringInterp) !void {
         // string interpolation: "hello {name}!" → forge_string_concat chain
-        // count non-empty parts
-        var part_count: usize = 0;
-        for (interp.parts) |_| part_count += 1;
+        const part_count = interp.parts.len;
 
         if (part_count == 0) {
             try self.writeStr("forge_string_empty");
@@ -767,19 +806,23 @@ pub const CEmitter = struct {
         }
 
         // nested concat calls: concat(concat(a, b), c)
-        var opens: usize = 0;
-        for (interp.parts[0 .. part_count - 1]) |_| {
-            if (opens > 0) {
-                try self.writeStr("forge_string_concat(");
-            }
-            opens += 1;
+        // for N parts we need N-1 concat calls, so N-2 leading opens
+        // (the first concat wraps parts 0 and 1, each subsequent wraps
+        // the previous result and the next part)
+        var i: usize = 0;
+        while (i + 2 < part_count) : (i += 1) {
+            try self.writeStr("forge_string_concat(");
         }
 
-        // emit first part
+        // emit first concat pair
+        try self.writeStr("forge_string_concat(");
         try self.emitStringPart(&interp.parts[0]);
+        try self.writeStr(", ");
+        try self.emitStringPart(&interp.parts[1]);
+        try self.writeByte(')');
 
-        // emit rest with concat
-        for (interp.parts[1..]) |*part| {
+        // emit remaining parts, each wrapped in a concat with the result so far
+        for (interp.parts[2..]) |*part| {
             try self.writeStr(", ");
             try self.emitStringPart(part);
             try self.writeByte(')');
@@ -800,40 +843,54 @@ pub const CEmitter = struct {
         }
     }
 
-    /// emit an expression converted to forge_string_t.
+    /// emit an expression converted to forge_string_t. uses type inference
+    /// to pick the right conversion function.
     fn emitExprAsString(self: *CEmitter, expr: *const ast.Expr) !void {
+        const tid = self.inferExprType(expr);
+        if (tid == .string) {
+            // already a string — emit directly
+            try self.emitExpr(expr);
+            return;
+        }
+        if (tid == .int or tid.isInteger()) {
+            try self.writeStr("forge_int_to_string(");
+            try self.emitExpr(expr);
+            try self.writeByte(')');
+            return;
+        }
+        if (tid == .float) {
+            try self.writeStr("forge_float_to_string(");
+            try self.emitExpr(expr);
+            try self.writeByte(')');
+            return;
+        }
+        if (tid == .bool) {
+            try self.writeStr("forge_bool_to_string(");
+            try self.emitExpr(expr);
+            try self.writeByte(')');
+            return;
+        }
+        // fallback: use the expression kind for literals
         switch (expr.kind) {
             .string_lit => |lit| try self.emitStringLit(lit),
             .string_interp => |interp| try self.emitStringInterp(&interp),
-            .ident => |_| {
-                // we don't know the type here — wrap in forge_int_to_string as guess
-                // TODO: use stored type info to choose the right conversion
+            .int_lit => {
                 try self.writeStr("forge_int_to_string(");
                 try self.emitExpr(expr);
                 try self.writeByte(')');
             },
-            .field_access => |_| {
-                try self.writeStr("forge_int_to_string(");
-                try self.emitExpr(expr);
-                try self.writeByte(')');
-            },
-            .int_lit => |_| {
-                try self.writeStr("forge_int_to_string(");
-                try self.emitExpr(expr);
-                try self.writeByte(')');
-            },
-            .float_lit => |_| {
+            .float_lit => {
                 try self.writeStr("forge_float_to_string(");
                 try self.emitExpr(expr);
                 try self.writeByte(')');
             },
-            .bool_lit => |_| {
+            .bool_lit => {
                 try self.writeStr("forge_bool_to_string(");
                 try self.emitExpr(expr);
                 try self.writeByte(')');
             },
             else => {
-                // fallback — just emit the expression and hope it's a string
+                // last resort — assume it's already a string expression
                 try self.emitExpr(expr);
             },
         }
@@ -971,6 +1028,86 @@ pub const CEmitter = struct {
             },
             .tuple => |_| try self.writeStr("1 /* tuple pattern */"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // type inference helpers
+    // ---------------------------------------------------------------
+
+    /// resolve the TypeId for an AST type expression. used to track
+    /// parameter and binding types during emission.
+    fn resolveTypeExprToId(_: *const CEmitter, te: *const ast.TypeExpr) TypeId {
+        return switch (te.kind) {
+            .named => |name| {
+                if (std.mem.eql(u8, name, "Int")) return .int;
+                if (std.mem.eql(u8, name, "UInt")) return .uint;
+                if (std.mem.eql(u8, name, "Float")) return .float;
+                if (std.mem.eql(u8, name, "Bool")) return .bool;
+                if (std.mem.eql(u8, name, "String")) return .string;
+                if (std.mem.eql(u8, name, "Void")) return .void;
+                if (std.mem.eql(u8, name, "Bytes")) return .bytes;
+                return .err; // user-defined — we don't track these yet
+            },
+            else => .err,
+        };
+    }
+
+    /// infer the TypeId of an expression. uses local variable types,
+    /// module scope (for function return types), and expression structure.
+    fn inferExprType(self: *const CEmitter, expr: *const ast.Expr) TypeId {
+        return switch (expr.kind) {
+            .int_lit => .int,
+            .float_lit => .float,
+            .string_lit, .string_interp => .string,
+            .bool_lit => .bool,
+            .none_lit => .void,
+            .ident => |name| {
+                // check local variables first
+                if (self.local_types.get(name)) |tid| return tid;
+                // then module scope (functions, etc.)
+                if (self.module_scope.lookup(name)) |binding| {
+                    return binding.type_id;
+                }
+                return .err;
+            },
+            .binary => |bin| {
+                switch (bin.op) {
+                    .eq, .neq, .lt, .gt, .lte, .gte, .@"and", .@"or" => return .bool,
+                    .add => {
+                        const left_type = self.inferExprType(bin.left);
+                        if (left_type == .string) return .string;
+                        return left_type;
+                    },
+                    else => return self.inferExprType(bin.left),
+                }
+            },
+            .unary => |un| {
+                return switch (un.op) {
+                    .not => .bool,
+                    .negate => self.inferExprType(un.operand),
+                };
+            },
+            .call => |call| {
+                // look up the function's return type
+                const name = switch (call.callee.kind) {
+                    .ident => |n| n,
+                    else => return .err,
+                };
+                if (self.module_scope.lookup(name)) |binding| {
+                    if (self.type_table.get(binding.type_id)) |ty| {
+                        switch (ty) {
+                            .function => |f| return f.return_type,
+                            .@"struct" => return binding.type_id,
+                            else => {},
+                        }
+                    }
+                }
+                return .err;
+            },
+            .grouped => |inner| return self.inferExprType(inner),
+            .if_expr => |if_e| return self.inferExprType(if_e.then_expr),
+            else => .err,
+        };
     }
 
     // ---------------------------------------------------------------
@@ -1142,7 +1279,10 @@ test "emitter init and deinit" {
     var table = try TypeTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var emitter = CEmitter.init(std.testing.allocator, &table);
+    var scope = Scope.init(std.testing.allocator, null);
+    defer scope.deinit();
+
+    var emitter = CEmitter.init(std.testing.allocator, &table, &scope);
     defer emitter.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), emitter.getOutput().len);
@@ -1152,7 +1292,10 @@ test "emitPreamble writes includes" {
     var table = try TypeTable.init(std.testing.allocator);
     defer table.deinit();
 
-    var emitter = CEmitter.init(std.testing.allocator, &table);
+    var scope = Scope.init(std.testing.allocator, null);
+    defer scope.deinit();
+
+    var emitter = CEmitter.init(std.testing.allocator, &table, &scope);
     defer emitter.deinit();
 
     try emitter.emitPreamble();
