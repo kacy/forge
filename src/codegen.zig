@@ -543,7 +543,7 @@ pub const CEmitter = struct {
             try self.emitCType(tid);
         } else {
             // fallback: infer from expression structure
-            try self.emitInferredType(b.value);
+            try self.emitTypeForExpr(b.value);
         }
         try self.writeByte(' ');
         try self.writeStr(b.name);
@@ -552,143 +552,16 @@ pub const CEmitter = struct {
         try self.writeStr(";\n");
     }
 
-    /// emit a C type for a binding whose type annotation is omitted.
-    /// we look at the expression to figure out the C type. this is a
-    /// best-effort approach — the checker has already validated types.
-    fn emitInferredType(self: *CEmitter, expr: *const ast.Expr) EmitError!void {
-        switch (expr.kind) {
-            .int_lit => try self.writeStr("int64_t"),
-            .float_lit => try self.writeStr("double"),
-            .string_lit, .string_interp => try self.writeStr("forge_string_t"),
-            .bool_lit => try self.writeStr("bool"),
-            .binary => |bin| {
-                // comparison and logical ops produce bool
-                switch (bin.op) {
-                    .eq, .neq, .lt, .gt, .lte, .gte, .@"and", .@"or" => try self.writeStr("bool"),
-                    .add => {
-                        // could be string concat or numeric — check left operand
-                        if (bin.left.kind == .string_lit or bin.left.kind == .string_interp) {
-                            try self.writeStr("forge_string_t");
-                        } else {
-                            try self.emitInferredType(bin.left);
-                        }
-                    },
-                    .pipe => {
-                        // x | f → result type is f's return type
-                        const fn_name = switch (bin.right.kind) {
-                            .ident => |n| n,
-                            else => {
-                                try self.emitInferredType(bin.left);
-                                return;
-                            },
-                        };
-                        try self.emitFnReturnType(fn_name);
-                    },
-                    else => try self.emitInferredType(bin.left),
-                }
-            },
-            .unary => |un| {
-                switch (un.op) {
-                    .not => try self.writeStr("bool"),
-                    .negate => try self.emitInferredType(un.operand),
-                }
-            },
-            .call => |call| {
-                // struct constructor or function call — try to resolve
-                switch (call.callee.kind) {
-                    .ident => |name| {
-                        // check if it's a known struct type
-                        if (self.type_table.lookup(name)) |tid| {
-                            if (self.type_table.get(tid)) |ty| {
-                                if (ty == .@"struct") {
-                                    try self.writeStr(name);
-                                    return;
-                                }
-                                if (ty == .@"enum") {
-                                    try self.writeStr(name);
-                                    return;
-                                }
-                            }
-                        }
-                        // function call — look up return type
-                        try self.emitFnReturnType(name);
-                    },
-                    else => try self.writeStr("/* unknown */"),
-                }
-            },
-            .method_call => |mc| {
-                // resolve receiver type and look up method return type
-                const receiver_tid = self.inferExprType(mc.receiver);
-                const type_name = self.typeNameFromId(receiver_tid);
-                if (type_name) |tn| {
-                    if (self.lookupMethodKey(tn, mc.method)) |method_tid| {
-                        if (self.type_table.get(method_tid)) |ty| {
-                            switch (ty) {
-                                .function => |f| {
-                                    try self.emitCType(f.return_type);
-                                    return;
-                                },
-                                else => {},
-                            }
-                        }
-                    }
-                }
-                try self.writeStr("/* method_result */");
-            },
-            .field_access => |_| {
-                try self.writeStr("/* field_type */");
-            },
-            .grouped => |inner| try self.emitInferredType(inner),
-            .if_expr => |if_e| try self.emitInferredType(if_e.then_expr),
-            .match_expr => |m| {
-                if (m.arms.len > 0) {
-                    switch (m.arms[0].body) {
-                        .expr => |e| try self.emitInferredType(e),
-                        .block => try self.writeStr("/* block_result */"),
-                    }
-                } else {
-                    try self.writeStr("/* empty match */");
-                }
-            },
-            .list => try self.writeStr("forge_list_t"),
-            .map => try self.writeStr("forge_map_t"),
-            .set => try self.writeStr("forge_set_t"),
-            .index => |idx| {
-                // infer the element/value type from the object's collection type
-                const obj_tid = self.inferExprType(idx.object);
-                if (self.type_table.get(obj_tid)) |ty| {
-                    switch (ty) {
-                        .list => |l| {
-                            try self.writeStr(self.cTypeStringForId(l.element));
-                            return;
-                        },
-                        .map => |m| {
-                            try self.writeStr(self.cTypeStringForId(m.value));
-                            return;
-                        },
-                        else => {},
-                    }
-                }
-                try self.writeStr("/* unknown index type */");
-            },
-            else => try self.writeStr("/* unknown */"),
+    /// emit a C type string for an expression by inferring its TypeId.
+    /// replaces the old emitInferredType — delegates to inferExprType
+    /// which already handles all expression kinds.
+    fn emitTypeForExpr(self: *CEmitter, expr: *const ast.Expr) EmitError!void {
+        const tid = self.inferExprType(expr);
+        if (!tid.isErr()) {
+            try self.writeStr(self.cTypeStringForId(tid));
+        } else {
+            try self.writeStr("/* unknown */");
         }
-    }
-
-    /// look up a function's return type from the module scope and emit it.
-    fn emitFnReturnType(self: *CEmitter, name: []const u8) EmitError!void {
-        if (self.module_scope.lookup(name)) |binding| {
-            if (self.type_table.get(binding.type_id)) |ty| {
-                switch (ty) {
-                    .function => |f| {
-                        try self.emitCType(f.return_type);
-                        return;
-                    },
-                    else => {},
-                }
-            }
-        }
-        try self.writeStr("/* fn_result */");
     }
 
     fn emitAssignment(self: *CEmitter, a: *const ast.Assignment) EmitError!void {
@@ -1323,7 +1196,7 @@ pub const CEmitter = struct {
                     if (!subject_type.isErr()) {
                         try self.emitCType(subject_type);
                     } else {
-                        try self.emitInferredType(m.subject);
+                        try self.emitTypeForExpr(m.subject);
                     }
                     try self.writeByte(' ');
                     try self.writeStr(arm.pattern.kind.binding);
