@@ -1790,10 +1790,13 @@ pub const Checker = struct {
         for (call.args, func.param_types) |arg, expected| {
             const actual = self.checkExpr(arg.value, scope);
             if (!actual.isErr() and !expected.isErr() and actual != expected) {
-                self.diagnostics.addCodedError(.E219, arg.location, self.fmt(
-                    "expected {s}, got {s}",
-                    .{ self.type_table.typeName(expected), self.type_table.typeName(actual) },
-                )) catch {};
+                // allow structurally equivalent function types (e.g. lambda vs declared fn type)
+                if (!self.typesStructurallyEqual(expected, actual)) {
+                    self.diagnostics.addCodedError(.E219, arg.location, self.fmt(
+                        "expected {s}, got {s}",
+                        .{ self.type_table.typeName(expected), self.type_table.typeName(actual) },
+                    )) catch {};
+                }
             }
         }
 
@@ -2522,6 +2525,40 @@ pub const Checker = struct {
     // ---------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------
+
+    /// check if two types are structurally equal even if they have different TypeIds.
+    /// handles function types and tuples where the checker creates distinct TypeIds
+    /// for structurally identical types.
+    fn typesStructurallyEqual(self: *Checker, a: TypeId, b: TypeId) bool {
+        if (a == b) return true;
+        const ty_a = self.type_table.get(a) orelse return false;
+        const ty_b = self.type_table.get(b) orelse return false;
+
+        return switch (ty_a) {
+            .function => |fa| switch (ty_b) {
+                .function => |fb| blk: {
+                    if (fa.return_type != fb.return_type) break :blk false;
+                    if (fa.param_types.len != fb.param_types.len) break :blk false;
+                    for (fa.param_types, fb.param_types) |pa, pb| {
+                        if (pa != pb) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            .tuple => |ta| switch (ty_b) {
+                .tuple => |tb| blk: {
+                    if (ta.elements.len != tb.elements.len) break :blk false;
+                    for (ta.elements, tb.elements) |ea, eb| {
+                        if (ea != eb) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            else => false,
+        };
+    }
 
     /// format a string onto the checker's arena. the returned slice lives
     /// as long as the checker does — safe to store in diagnostics.

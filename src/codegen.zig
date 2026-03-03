@@ -35,6 +35,13 @@ const Scope = Checker.Scope;
 /// failures since we're just building a string buffer.
 pub const EmitError = std.mem.Allocator.Error;
 
+/// a lambda body recorded for hoisting as a top-level C function.
+const HoistedLambda = struct {
+    index: u32,
+    lambda: ast.Lambda,
+    fn_type_id: TypeId,
+};
+
 pub const CEmitter = struct {
     output: std.ArrayList(u8),
     indent_level: u32,
@@ -63,6 +70,10 @@ pub const CEmitter = struct {
     /// cached mangled names for instantiated generic types. TypeId → "Pair_Int_String".
     /// populated during the monomorphization pass, used by cTypeStringForId.
     mangled_names: std.AutoHashMap(TypeId, []const u8),
+    /// counter for generating unique lambda function names (__lambda_0, __lambda_1, ...)
+    lambda_counter: u32,
+    /// accumulated lambda bodies to hoist as top-level C functions.
+    hoisted_lambdas: std.ArrayList(HoistedLambda),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -85,6 +96,8 @@ pub const CEmitter = struct {
             .try_counter = 0,
             .emitted_result_types = std.AutoHashMap(TypeId, void).init(allocator),
             .mangled_names = std.AutoHashMap(TypeId, []const u8).init(allocator),
+            .lambda_counter = 0,
+            .hoisted_lambdas = .empty,
         };
     }
 
@@ -97,6 +110,7 @@ pub const CEmitter = struct {
         self.mangled_names.deinit();
         self.emitted_result_types.deinit();
         self.local_types.deinit();
+        self.hoisted_lambdas.deinit(self.allocator);
         self.output.deinit(self.allocator);
     }
 
@@ -160,6 +174,10 @@ pub const CEmitter = struct {
         try self.emitInstantiatedFnForwardDecls(module);
         try self.writeByte('\n');
 
+        // mark position for lambda forward declarations — we'll insert them
+        // after all function bodies have been emitted and lambdas discovered
+        const lambda_fwd_insert_pos = self.output.items.len;
+
         // pass 4: function definitions
         for (module.decls) |*decl| {
             switch (decl.kind) {
@@ -178,6 +196,50 @@ pub const CEmitter = struct {
 
         // pass 6: instantiated generic function definitions
         try self.emitInstantiatedFnDefs(module);
+
+        // pass 7: hoisted lambda functions.
+        // lambdas are discovered during function body emission — we emit their
+        // definitions here at the end, and insert forward declarations at the
+        // position we recorded earlier so C can resolve the references.
+        if (self.hoisted_lambdas.items.len > 0) {
+            // build forward declarations for all lambdas
+            var fwd_buf: std.ArrayList(u8) = .empty;
+            defer fwd_buf.deinit(self.allocator);
+
+            for (self.hoisted_lambdas.items) |lam| {
+                const func = if (self.type_table.get(lam.fn_type_id)) |ty| switch (ty) {
+                    .function => |f| f,
+                    else => continue,
+                } else continue;
+
+                var tmp: [64]u8 = undefined;
+                const decl = std.fmt.bufPrint(&tmp, "static {s} __lambda_{d}(", .{
+                    self.cTypeStringForId(func.return_type),
+                    lam.index,
+                }) catch continue;
+                fwd_buf.appendSlice(self.allocator, decl) catch continue;
+
+                if (lam.lambda.params.len == 0) {
+                    fwd_buf.appendSlice(self.allocator, "void") catch continue;
+                } else {
+                    for (lam.lambda.params, 0..) |param, i| {
+                        if (i > 0) fwd_buf.appendSlice(self.allocator, ", ") catch continue;
+                        if (i < func.param_types.len) {
+                            fwd_buf.appendSlice(self.allocator, self.cTypeStringForId(func.param_types[i])) catch continue;
+                        }
+                        fwd_buf.append(self.allocator, ' ') catch continue;
+                        fwd_buf.appendSlice(self.allocator, param.name) catch continue;
+                    }
+                }
+                fwd_buf.appendSlice(self.allocator, ");\n") catch continue;
+            }
+
+            // insert forward declarations at the marked position
+            self.output.insertSlice(self.allocator, lambda_fwd_insert_pos, fwd_buf.items) catch {};
+
+            // emit lambda function definitions
+            try self.emitHoistedLambdas();
+        }
     }
 
     fn emitPreamble(self: *CEmitter) EmitError!void {
@@ -529,6 +591,51 @@ pub const CEmitter = struct {
         try self.writeByte('\n');
     }
 
+    /// emit all hoisted lambda function bodies.
+    /// lambdas are accumulated during expression emission and emitted as
+    /// static top-level C functions after all other function definitions.
+    fn emitHoistedLambdas(self: *CEmitter) EmitError!void {
+        for (self.hoisted_lambdas.items) |lam| {
+            // resolve the function type to get param/return types
+            const func = if (self.type_table.get(lam.fn_type_id)) |ty| switch (ty) {
+                .function => |f| f,
+                else => continue,
+            } else continue;
+
+            // emit: static return_type __lambda_N(param_types...) { body }
+            try self.writeStr("static ");
+            try self.writeStr(self.cTypeStringForId(func.return_type));
+            try self.writeFmt(" __lambda_{d}(", .{lam.index});
+
+            if (lam.lambda.params.len == 0) {
+                try self.writeStr("void");
+            } else {
+                for (lam.lambda.params, 0..) |param, i| {
+                    if (i > 0) try self.writeStr(", ");
+                    if (i < func.param_types.len) {
+                        try self.writeStr(self.cTypeStringForId(func.param_types[i]));
+                    }
+                    try self.writeByte(' ');
+                    try self.writeStr(param.name);
+                }
+            }
+            try self.writeStr(") {\n");
+
+            self.indent_level += 1;
+            switch (lam.lambda.body) {
+                .expr => |body_expr| {
+                    try self.writeIndent();
+                    try self.writeStr("return ");
+                    try self.emitExpr(body_expr);
+                    try self.writeStr(";\n");
+                },
+                .block => |*blk| try self.emitBlock(blk),
+            }
+            self.indent_level -= 1;
+            try self.writeStr("}\n\n");
+        }
+    }
+
     /// build a generic instantiation name by inferring type args from call arguments.
     /// e.g., for `Pair(1, "hello")` returns "Pair[Int,String]".
     /// returns null if type inference fails.
@@ -771,12 +878,17 @@ pub const CEmitter = struct {
         for (fd.params) |param| {
             try self.writeStr(", ");
             if (param.type_expr) |te| {
-                try self.emitTypeExpr(te);
+                if (te.kind == .fn_type) {
+                    try self.emitFnPtrParam(te.kind.fn_type, param.name);
+                } else {
+                    try self.emitTypeExpr(te);
+                    try self.writeByte(' ');
+                    try self.writeStr(param.name);
+                }
             } else {
-                try self.writeStr("/* unknown */");
+                try self.writeStr("/* unknown */ ");
+                try self.writeStr(param.name);
             }
-            try self.writeByte(' ');
-            try self.writeStr(param.name);
         }
         try self.writeByte(')');
         try self.writeStr(";\n");
@@ -828,12 +940,17 @@ pub const CEmitter = struct {
         for (fd.params) |param| {
             try self.writeStr(", ");
             if (param.type_expr) |te| {
-                try self.emitTypeExpr(te);
+                if (te.kind == .fn_type) {
+                    try self.emitFnPtrParam(te.kind.fn_type, param.name);
+                } else {
+                    try self.emitTypeExpr(te);
+                    try self.writeByte(' ');
+                    try self.writeStr(param.name);
+                }
             } else {
-                try self.writeStr("/* unknown */");
+                try self.writeStr("/* unknown */ ");
+                try self.writeStr(param.name);
             }
-            try self.writeByte(' ');
-            try self.writeStr(param.name);
         }
         try self.writeStr(") {\n");
 
@@ -910,12 +1027,60 @@ pub const CEmitter = struct {
             for (params, 0..) |param, i| {
                 if (i > 0) try self.writeStr(", ");
                 if (param.type_expr) |te| {
-                    try self.emitTypeExpr(te);
+                    // function pointer params need special C syntax: ret (*name)(params)
+                    if (te.kind == .fn_type) {
+                        try self.emitFnPtrParam(te.kind.fn_type, param.name);
+                    } else {
+                        try self.emitTypeExpr(te);
+                        try self.writeByte(' ');
+                        try self.writeStr(param.name);
+                    }
                 } else {
-                    try self.writeStr("/* unknown */");
+                    try self.writeStr("/* unknown */ ");
+                    try self.writeStr(param.name);
                 }
-                try self.writeByte(' ');
-                try self.writeStr(param.name);
+            }
+        }
+        try self.writeByte(')');
+    }
+
+    /// emit a function pointer binding from a TypeId: `ret_type (*name)(param_types)`
+    fn emitFnPtrBindingFromTypeId(self: *CEmitter, fn_tid: TypeId, name: []const u8) EmitError!void {
+        const func = switch (self.type_table.get(fn_tid) orelse return) {
+            .function => |f| f,
+            else => return,
+        };
+        try self.writeStr(self.cTypeStringForId(func.return_type));
+        try self.writeStr(" (*");
+        try self.writeStr(name);
+        try self.writeStr(")(");
+        if (func.param_types.len == 0) {
+            try self.writeStr("void");
+        } else {
+            for (func.param_types, 0..) |pt, i| {
+                if (i > 0) try self.writeStr(", ");
+                try self.writeStr(self.cTypeStringForId(pt));
+            }
+        }
+        try self.writeByte(')');
+    }
+
+    /// emit a function pointer parameter: `ret_type (*name)(param_types)`
+    fn emitFnPtrParam(self: *CEmitter, ft: ast.FnType, name: []const u8) EmitError!void {
+        if (ft.return_type) |rt| {
+            try self.emitTypeExpr(rt);
+        } else {
+            try self.writeStr("void");
+        }
+        try self.writeStr(" (*");
+        try self.writeStr(name);
+        try self.writeStr(")(");
+        if (ft.params.len == 0) {
+            try self.writeStr("void");
+        } else {
+            for (ft.params, 0..) |param, i| {
+                if (i > 0) try self.writeStr(", ");
+                try self.emitTypeExpr(param);
             }
         }
         try self.writeByte(')');
@@ -974,6 +1139,29 @@ pub const CEmitter = struct {
         if (b.value.kind == .try_expr) {
             try self.emitTryBinding(b, tid);
             return;
+        }
+
+        // function pointer bindings need special C syntax: ret (*name)(params) = value
+        if (b.type_expr) |te| {
+            if (te.kind == .fn_type) {
+                try self.writeIndent();
+                try self.emitFnPtrParam(te.kind.fn_type, b.name);
+                try self.writeStr(" = ");
+                try self.emitExpr(b.value);
+                try self.writeStr(";\n");
+                return;
+            }
+        } else if (!tid.isErr()) {
+            if (self.type_table.get(tid)) |ty| {
+                if (ty == .function) {
+                    try self.writeIndent();
+                    try self.emitFnPtrBindingFromTypeId(tid, b.name);
+                    try self.writeStr(" = ");
+                    try self.emitExpr(b.value);
+                    try self.writeStr(";\n");
+                    return;
+                }
+            }
         }
 
         try self.writeIndent();
@@ -1185,6 +1373,57 @@ pub const CEmitter = struct {
         try self.writeStr(" };\n");
     }
 
+    /// find the function TypeId for a lambda by matching its parameter types
+    /// and return type against function types in the type table.
+    fn findLambdaType(self: *CEmitter, lam: ast.Lambda) TypeId {
+        // resolve param types from AST
+        var param_ids: [16]TypeId = undefined;
+        if (lam.params.len > param_ids.len) return .err;
+        for (lam.params, 0..) |param, i| {
+            if (param.type_expr) |te| {
+                param_ids[i] = self.resolveTypeExprToId(te);
+                if (param_ids[i].isErr()) return .err;
+            } else {
+                return .err;
+            }
+        }
+        const resolved = param_ids[0..lam.params.len];
+
+        // temporarily register lambda params as locals to infer body type
+        for (lam.params, resolved) |param, tid| {
+            self.local_types.put(param.name, tid) catch {};
+        }
+        const ret_type: TypeId = switch (lam.body) {
+            .expr => |body_expr| self.inferExprType(body_expr),
+            .block => .void,
+        };
+        // clean up temp locals (they'll be shadowed by actual fn locals)
+        for (lam.params) |param| {
+            _ = self.local_types.fetchRemove(param.name);
+        }
+
+        // scan the type table for a function type with matching params and return
+        const items = self.type_table.types.items;
+        for (items, 0..) |ty, idx| {
+            switch (ty) {
+                .function => |func| {
+                    if (func.return_type == ret_type and func.param_types.len == resolved.len) {
+                        var match = true;
+                        for (func.param_types, resolved) |a, b| {
+                            if (a != b) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) return TypeId.fromIndex(@intCast(idx));
+                    }
+                },
+                else => {},
+            }
+        }
+        return .err;
+    }
+
     /// check if a TypeId represents a Result type.
     fn isResultType(self: *const CEmitter, tid: TypeId) bool {
         if (tid.isErr()) return false;
@@ -1328,7 +1567,21 @@ pub const CEmitter = struct {
             .if_expr => |if_e| try self.emitIfExpr(&if_e),
             .match_expr => |m| try self.emitMatchAsIfChain(&m, false, false),
             .string_interp => |interp| try self.emitStringInterp(&interp),
-            .lambda => |_| try self.writeStr("/* lambda not yet supported */"),
+            .lambda => |lam| {
+                // non-capturing lambda: hoist body to a top-level C function,
+                // emit the function name as the reference at use site.
+                const idx = self.lambda_counter;
+                self.lambda_counter += 1;
+                // find the function type for this lambda in the type table.
+                // we match by param types — the checker has already created the type.
+                const fn_tid = self.findLambdaType(lam);
+                self.hoisted_lambdas.append(self.allocator, .{
+                    .index = idx,
+                    .lambda = lam,
+                    .fn_type_id = fn_tid,
+                }) catch {};
+                try self.writeFmt("__lambda_{d}", .{idx});
+            },
             .list => |elems| try self.emitListLiteral(elems),
             .map => |entries| try self.emitMapLiteral(entries),
             .set => |elems| try self.emitSetLiteral(elems),
@@ -1562,6 +1815,20 @@ pub const CEmitter = struct {
                     }
                 },
                 else => {},
+            }
+        }
+
+        // check if this is a local function pointer variable (e.g., lambda binding)
+        if (self.local_types.get(name)) |tid| {
+            if (!tid.isErr()) {
+                if (self.type_table.get(tid)) |ty| {
+                    if (ty == .function) {
+                        // function pointer call — emit name directly, no fg_ prefix
+                        try self.writeStr(name);
+                        try self.emitArgList(call.args);
+                        return;
+                    }
+                }
             }
         }
 
@@ -2229,7 +2496,39 @@ pub const CEmitter = struct {
                 }
                 return .err;
             },
-            else => .err,
+            .fn_type => |ft| {
+                // resolve param and return types, find matching function type
+                var param_ids: [16]TypeId = undefined;
+                if (ft.params.len > param_ids.len) return .err;
+                for (ft.params, 0..) |param, i| {
+                    const pid = self.resolveTypeExprToId(param);
+                    if (pid.isErr()) return .err;
+                    param_ids[i] = pid;
+                }
+                const ret_id = if (ft.return_type) |rt| self.resolveTypeExprToId(rt) else .void;
+                if (ret_id.isErr()) return .err;
+                const resolved = param_ids[0..ft.params.len];
+
+                const items = self.type_table.types.items;
+                for (items, 0..) |ty, idx| {
+                    switch (ty) {
+                        .function => |func| {
+                            if (func.return_type == ret_id and func.param_types.len == resolved.len) {
+                                var match = true;
+                                for (func.param_types, resolved) |a, b| {
+                                    if (a != b) {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (match) return TypeId.fromIndex(@intCast(idx));
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return .err;
+            },
         };
     }
 
@@ -2424,6 +2723,44 @@ pub const CEmitter = struct {
                 }
                 return .err;
             },
+            .lambda => |lam| {
+                // infer param types and return type, find matching function type
+                var param_ids: [16]TypeId = undefined;
+                if (lam.params.len > param_ids.len) return .err;
+                for (lam.params, 0..) |param, i| {
+                    if (param.type_expr) |te| {
+                        param_ids[i] = self.resolveTypeExprToId(te);
+                    } else {
+                        return .err;
+                    }
+                }
+                const ret_type: TypeId = switch (lam.body) {
+                    .expr => |body_expr| self.inferExprType(body_expr),
+                    .block => .void,
+                };
+                const resolved_params = param_ids[0..lam.params.len];
+
+                // scan type table for matching function type
+                const items = self.type_table.types.items;
+                for (items, 0..) |ty, idx| {
+                    switch (ty) {
+                        .function => |func| {
+                            if (func.return_type == ret_type and func.param_types.len == resolved_params.len) {
+                                var match = true;
+                                for (func.param_types, resolved_params) |a, b| {
+                                    if (a != b) {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (match) return TypeId.fromIndex(@intCast(idx));
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return .err;
+            },
             .tuple => |elems| {
                 // infer element types and scan type table for matching tuple
                 var elem_ids: [16]TypeId = undefined;
@@ -2506,7 +2843,25 @@ pub const CEmitter = struct {
                     try self.writeStr("/* tuple type */");
                 }
             },
-            .fn_type => try self.writeStr("/* fn type */"),
+            .fn_type => |ft| {
+                // emit C function pointer type: return_type (*)(param_types)
+                // note: without a name, we can only emit the unnamed pointer type
+                if (ft.return_type) |rt| {
+                    try self.emitTypeExpr(rt);
+                } else {
+                    try self.writeStr("void");
+                }
+                try self.writeStr(" (*)(");
+                if (ft.params.len == 0) {
+                    try self.writeStr("void");
+                } else {
+                    for (ft.params, 0..) |param, i| {
+                        if (i > 0) try self.writeStr(", ");
+                        try self.emitTypeExpr(param);
+                    }
+                }
+                try self.writeByte(')');
+            },
         }
     }
 
