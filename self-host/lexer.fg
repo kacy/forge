@@ -4,6 +4,15 @@
 # the token stream in the same format as `forge lex`.
 #
 # usage: forge run self-host/lexer.fg <file.fg>
+# import: from lexer import Token, init_lexer, lex_all
+
+# ---------------------------------------------------------------
+# token type
+# ---------------------------------------------------------------
+
+pub struct Token:
+    pub kind: String
+    pub value: String
 
 # ---------------------------------------------------------------
 # helpers
@@ -751,6 +760,33 @@ fn scan_operator():
         return
 
     emit("err", c)
+
+# ---------------------------------------------------------------
+# public api for module use
+# ---------------------------------------------------------------
+
+pub fn init_lexer(src: String):
+    # init brace characters via chr() since we can't write them as literals
+    LBRACE = chr(123)
+    RBRACE = chr(125)
+    source = src
+    pos = 0
+    at_line_start = true
+    done = false
+    indent_stack = [0]
+    pending_kinds = []
+    pending_values = []
+    pending_dedents = 0
+
+pub fn lex_all(src: String) -> List[Token]:
+    init_lexer(src)
+    mut tokens: List[Token] := []
+    while true:
+        next_token()
+        tokens.push(Token(tok_kind, tok_value))
+        if tok_kind == "eof":
+            break
+    return tokens
 
 # ---------------------------------------------------------------
 # main
