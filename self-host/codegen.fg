@@ -267,24 +267,17 @@ fn g_emit_c_type(tid: Int):
 
 # mangle a generic type name: "Pair[Int,String]" -> "Pair_Int_String"
 fn g_mangle_name(name: String) -> String:
-    mut result := ""
+    mut parts: List[String] := []
     mut i := 0
     while i < name.len():
         ch := name[i]
-        if ch == "[":
-            result = result + "_"
-        elif ch == ",":
-            result = result + "_"
-        elif ch == "]":
-            # skip
-            result = result
-        elif ch == " ":
-            # skip
-            result = result
-        else:
-            result = result + ch
+        if ch == "[" or ch == ",":
+            parts.push("_")
+        elif ch != "]" and ch != " ":
+            parts.push(ch)
         i = i + 1
-    return result
+    return parts.join("")
+
 
 # ---------------------------------------------------------------
 # string helpers
