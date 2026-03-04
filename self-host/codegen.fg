@@ -63,6 +63,11 @@ mut g_test_names: List[String] := []
 # local variable types in current function
 mut g_local_types: Map[String, Int] := {}
 
+# generic function instantiation tracking — parallel lists
+# collected during pre-scan, used for forward decls + definitions
+mut g_generic_fn_insts: List[String] := []    # instantiation names like "identity[Int]"
+mut g_generic_fn_nodes: List[Int] := []       # corresponding fn_decl AST node indices
+
 # ---------------------------------------------------------------
 # initialization
 # ---------------------------------------------------------------
@@ -90,6 +95,8 @@ pub fn g_init():
     g_lambda_fwd_pos = 0
     g_test_names = []
     g_local_types = {}
+    g_generic_fn_insts = []
+    g_generic_fn_nodes = []
 
 pub fn g_get_output() -> String:
     result := g_buf.join("")
@@ -237,6 +244,17 @@ fn g_c_type_string(tid: Int) -> String:
                 return "forge_map_t"
             if info.kind == "set":
                 return "forge_set_t"
+            if info.kind == "result":
+                ok_c := g_c_type_string(info.inner)
+                return "forge_result_" + ok_c
+            if info.kind == "optional":
+                inner_c := g_c_type_string(info.inner)
+                return "forge_optional_" + inner_c
+            if info.kind == "tuple":
+                mut parts := "forge_tuple"
+                for elem in info.elements:
+                    parts = parts + "_" + g_c_type_string(elem)
+                return parts
     return "/* unknown */"
 
 # emit a C type for a TypeId — writes to output buffer
@@ -441,6 +459,115 @@ fn g_build_inst_name(base: String, arg_tids: List[Int]) -> String:
         result = result + tt_type_name(tid)
     result = result + "]"
     return result
+
+# parse generic params from fn name like "identity[T]" -> ["T"]
+# handles bounds: "show[T: Display]" -> ["T"]
+fn g_parse_generic_params(fn_name: String) -> List[String]:
+    mut params: List[String] := []
+    mut bracket_pos := -1
+    mut i := 0
+    while i < fn_name.len():
+        if fn_name[i] == "[":
+            bracket_pos = i
+            break
+        i = i + 1
+    if bracket_pos < 0:
+        return params
+    inner := fn_name.substring(bracket_pos + 1, fn_name.len() - 1)
+    parts := inner.split(",")
+    for part in parts:
+        trimmed := part.trim()
+        # handle bounds: "T: Display" -> "T"
+        mut colon_pos := -1
+        mut j := 0
+        while j < trimmed.len():
+            if trimmed[j] == ":":
+                colon_pos = j
+                break
+            j = j + 1
+        if colon_pos >= 0:
+            params.push(trimmed.substring(0, colon_pos).trim())
+        else:
+            params.push(trimmed)
+    return params
+
+# parse type args from inst name like "identity[Int]" -> ["Int"]
+fn g_parse_type_args(inst_name: String) -> List[String]:
+    mut type_args: List[String] := []
+    mut bracket_pos := -1
+    mut i := 0
+    while i < inst_name.len():
+        if inst_name[i] == "[":
+            bracket_pos = i
+            break
+        i = i + 1
+    if bracket_pos < 0:
+        return type_args
+    inner := inst_name.substring(bracket_pos + 1, inst_name.len() - 1)
+    parts := inner.split(",")
+    for part in parts:
+        type_args.push(part.trim())
+    return type_args
+
+# build substitution map: generic param name -> TypeId
+fn g_build_subst_map(fn_name: String, inst_name: String) -> Map[String, Int]:
+    mut subst: Map[String, Int] := {}
+    params := g_parse_generic_params(fn_name)
+    type_args := g_parse_type_args(inst_name)
+    mut i := 0
+    while i < params.len():
+        if i < type_args.len():
+            tid := tt_lookup(type_args[i])
+            if tid >= 0:
+                subst.insert(params[i], tid)
+        i = i + 1
+    return subst
+
+# resolve a type annotation node with generic substitution
+fn g_resolve_type_with_subst(type_node_idx: Int, subst: Map[String, Int]) -> Int:
+    tnode := get_node(type_node_idx)
+    if tnode.kind == "type":
+        if subst.contains_key(tnode.value):
+            return subst[tnode.value]
+    return c_resolve_type(type_node_idx)
+
+# resolve fn return type with generic substitution
+fn g_resolve_fn_return_with_subst(fn_node_idx: Int, subst: Map[String, Int]) -> Int:
+    fn_node := get_node(fn_node_idx)
+    for child in fn_node.children:
+        cn := get_node(child)
+        if cn.kind == "returns":
+            if cn.children.len() > 0:
+                return g_resolve_type_with_subst(cn.children[0], subst)
+    return TID_VOID
+
+# pre-scan AST to collect all generic function instantiations
+fn g_collect_generic_fn_instances(node_idx: Int):
+    node := get_node(node_idx)
+    if node.kind == "call":
+        name := g_call_name(node_idx)
+        if c_generic_decls.contains_key(name):
+            decl_idx := c_generic_decls[name]
+            decl_node := get_node(decl_idx)
+            mut actual_idx := decl_idx
+            mut dk := decl_node.kind
+            if dk == "pub":
+                if decl_node.children.len() > 0:
+                    actual_idx = decl_node.children[0]
+                    dk = get_node(actual_idx).kind
+            if dk == "fn_decl":
+                inst := g_build_inst_name_from_args(name, node_idx)
+                # dedup
+                mut found := false
+                for existing in g_generic_fn_insts:
+                    if existing == inst:
+                        found = true
+                        break
+                if found == false:
+                    g_generic_fn_insts.push(inst)
+                    g_generic_fn_nodes.push(actual_idx)
+    for child in node.children:
+        g_collect_generic_fn_instances(child)
 
 # resolve the type of a struct field from the type table
 fn g_resolve_field_type(struct_name: String, field_name: String) -> Int:
@@ -1059,36 +1186,38 @@ fn g_emit_method_forward_decl(type_name: String, node_idx: Int):
 # ---------------------------------------------------------------
 
 fn g_emit_instantiated_fn_forward_decls():
-    # iterate generic function declarations
-    # for each, scan the type table for instantiations
-    # we need to iterate the generic_decls keys
-    # since we can't iterate Map keys directly, scan type table for function types
-    # whose names match "base[..."
-    mut tid := TID_FIRST_USER
-    while tid < tt_count():
-        info := tt_get(tid)
-        if info.kind == "function":
-            # check if this function type is registered with a name containing "["
-            # we need to find the name for this tid
-            # scan the type table name map by trying known generic decl bases
-            tid = tid + 1
-            continue
-        tid = tid + 1
-    # alternative approach: for each generic_decl, find its instantiations
-    # by scanning the type table for names starting with "base["
-    # since we can't iterate Map keys in forge, use the AST to find generic fn names
-    # and then scan tt_lookup for matches
-    # This is a known limitation — we'll handle it by scanning the AST
-    g_emit_generic_fn_fwd_from_ast()
-
-fn g_emit_generic_fn_fwd_from_ast():
-    # for each generic decl that's a function, scan type table for instantiations
-    # we know generic fn bases from c_generic_decls
-    # but we can't iterate a map in forge — we need to scan the AST instead
-    # the root AST has fn_decl nodes with names like "swap[T]"
-    # we extract the base name and scan the type table
-    # This is handled in g_emit_module by iterating root children
-    return
+    # emit forward declarations for all collected generic function instances
+    mut i := 0
+    while i < g_generic_fn_insts.len():
+        inst_name := g_generic_fn_insts[i]
+        fn_node_idx := g_generic_fn_nodes[i]
+        fn_node := get_node(fn_node_idx)
+        subst := g_build_subst_map(fn_node.value, inst_name)
+        mangled := g_mangle_name(inst_name)
+        # emit return type
+        ret_tid := g_resolve_fn_return_with_subst(fn_node_idx, subst)
+        g_write(g_c_type_string(ret_tid))
+        g_write(" fg_")
+        g_write(mangled)
+        g_write("(")
+        mut first := true
+        mut has_params := false
+        for child in fn_node.children:
+            cn := get_node(child)
+            if cn.kind == "param":
+                has_params = true
+                if first == false:
+                    g_write(", ")
+                first = false
+                if cn.children.len() > 0:
+                    ptid := g_resolve_type_with_subst(cn.children[0], subst)
+                    g_write(g_c_type_string(ptid))
+                g_write(" ")
+                g_write(cn.value)
+        if has_params == false:
+            g_write("void")
+        g_write(");\n")
+        i = i + 1
 
 # ---------------------------------------------------------------
 # block and statements
@@ -1328,8 +1457,8 @@ fn g_emit_for_stmt(node_idx: Int):
         ci = ci + 1
     mut elem_name := binding
     if comma_pos >= 0:
-        elem_name = binding.substring(0, comma_pos)
-        idx_name = binding.substring(comma_pos + 1, binding.len())
+        elem_name = binding.substring(0, comma_pos).trim()
+        idx_name = binding.substring(comma_pos + 1, binding.len()).trim()
 
     if idx_name == "":
         idx_name = "__idx_" + g_for_counter.to_string()
@@ -1462,7 +1591,7 @@ fn g_emit_return_stmt(node_idx: Int):
         elif g_is_optional_type(g_current_fn_return):
             val_node := get_node(node.children[0])
             ret_c := g_c_type_string(g_current_fn_return)
-            if val_node.kind == "none":
+            if val_node.kind == "none_lit":
                 g_write("return (")
                 g_write(ret_c)
                 g_write(")" + LB + " .has_value = false " + RB + ";\n")
@@ -1675,7 +1804,7 @@ fn g_emit_string_cmp(func: String, node_idx: Int):
 
 fn g_emit_unary(node_idx: Int):
     node := get_node(node_idx)
-    if node.value == "-":
+    if node.value == "-" or node.value == "negate":
         g_write("(-")
         g_emit_expr(node.children[0])
         g_write(")")
@@ -1757,7 +1886,7 @@ fn g_emit_call(node_idx: Int):
         if info.kind == "enum":
             g_emit_enum_constructor(node_idx, name)
             return
-    # check if generic struct constructor (e.g. Pair(1, "hello"))
+    # check if generic struct constructor or function
     if c_generic_decls.contains_key(name):
         inst := g_build_inst_name_from_args(name, node_idx)
         if inst != "":
@@ -1776,6 +1905,21 @@ fn g_emit_call(node_idx: Int):
                     g_emit_arg_list(node_idx)
                     g_write(")")
                     return
+            # generic function not in type table — check AST node kind
+            decl_idx := c_generic_decls[name]
+            decl_node := get_node(decl_idx)
+            mut decl_kind := decl_node.kind
+            if decl_kind == "pub":
+                if decl_node.children.len() > 0:
+                    decl_kind = get_node(decl_node.children[0]).kind
+            if decl_kind == "fn_decl":
+                mangled := g_mangle_name(inst)
+                g_write("fg_")
+                g_write(mangled)
+                g_write("(")
+                g_emit_arg_list(node_idx)
+                g_write(")")
+                return
     # check if local fn pointer variable
     if g_local_types.contains_key(name):
         local_tid := g_local_types[name]
@@ -1865,10 +2009,7 @@ fn g_build_inst_name_from_args(base: String, node_idx: Int) -> String:
         arg_tid := c_get_expr_type(expr_idx)
         result = result + tt_type_name(arg_tid)
     result = result + "]"
-    # verify it exists in type table
-    if tt_lookup(result) >= 0:
-        return result
-    return ""
+    return result
 
 fn g_emit_struct_constructor(node_idx: Int, name: String, tid: Int):
     info := tt_get(tid)
@@ -2320,7 +2461,7 @@ fn g_emit_map_insert(node_idx: Int, key_tid: Int, key_c: String, val_c: String):
         g_write(val_c)
         g_write(")" + LB)
         g_emit_expr(g_call_arg(node_idx, 1))
-        g_write(RB + ", sizeof(")
+        g_write(RB + ", sizeof(forge_string_t), sizeof(")
         g_write(val_c)
         g_write("))")
     else:
@@ -2369,30 +2510,38 @@ fn g_emit_set_method(node_idx: Int, method: String, elem_tid: Int):
     if method == "contains":
         if elem_tid == TID_STRING:
             g_write("forge_set_contains_string(")
+            g_emit_expr(receiver_idx)
+            g_write(", ")
+            g_emit_expr(g_call_arg(node_idx, 0))
+            g_write(")")
         else:
             g_write("forge_set_contains(")
-        g_emit_expr(receiver_idx)
-        g_write(", &(")
-        g_write(elem_c)
-        g_write(")" + LB)
-        g_emit_expr(g_call_arg(node_idx, 0))
-        g_write(RB + ", sizeof(")
-        g_write(elem_c)
-        g_write("))")
+            g_emit_expr(receiver_idx)
+            g_write(", &(")
+            g_write(elem_c)
+            g_write(")" + LB)
+            g_emit_expr(g_call_arg(node_idx, 0))
+            g_write(RB + ", sizeof(")
+            g_write(elem_c)
+            g_write("))")
         return
     if method == "remove":
         if elem_tid == TID_STRING:
             g_write("forge_set_remove_string(&")
+            g_emit_expr(receiver_idx)
+            g_write(", ")
+            g_emit_expr(g_call_arg(node_idx, 0))
+            g_write(")")
         else:
             g_write("forge_set_remove(&")
-        g_emit_expr(receiver_idx)
-        g_write(", &(")
-        g_write(elem_c)
-        g_write(")" + LB)
-        g_emit_expr(g_call_arg(node_idx, 0))
-        g_write(RB + ", sizeof(")
-        g_write(elem_c)
-        g_write("))")
+            g_emit_expr(receiver_idx)
+            g_write(", &(")
+            g_write(elem_c)
+            g_write(")" + LB)
+            g_emit_expr(g_call_arg(node_idx, 0))
+            g_write(RB + ", sizeof(")
+            g_write(elem_c)
+            g_write("))")
         return
     if method == "clear":
         g_write("forge_set_clear(&")
@@ -2973,7 +3122,7 @@ fn g_find_lambda_type(node_idx: Int) -> Int:
                 g_local_types.insert(cn.value, ptid)
             else:
                 return TID_ERR
-        elif cn.kind == "lambda_body":
+        elif cn.kind == "body":
             # infer return type from body
             if cn.children.len() > 0:
                 body_child := get_node(cn.children[0])
@@ -3281,137 +3430,49 @@ fn g_emit_method_def(type_name: String, node_idx: Int):
 # instantiated generic function definitions
 # ---------------------------------------------------------------
 
-fn g_emit_instantiated_fn_defs_for(base: String, fn_node_idx: Int):
-    prefix := base + "["
-    mut tid := TID_FIRST_USER
-    while tid < tt_count():
-        info := tt_get(tid)
-        if info.kind == "function":
-            # check if the name map has this tid with the right prefix
-            # we need to find the name — scan the type table names
-            # since we can't iterate the names map, we build candidate names
-            # from the function's param types and check if they exist
-            tid = tid + 1
-            continue
-        tid = tid + 1
-
 fn g_emit_instantiated_fns_from_root(root_idx: Int):
-    root := get_node(root_idx)
-    for child in root.children:
-        mut node := get_node(child)
-        if node.kind == "pub":
-            node = get_node(node.children[0])
-        if node.kind == "fn_decl":
-            name := node.value
-            if g_is_generic(name):
-                base := g_extract_base_name(name)
-                g_emit_generic_fn_instances(base, child, node)
-
-fn g_emit_generic_fn_instances(base: String, fn_node_idx: Int, fn_node: Node):
-    # scan type table for function types whose name starts with "base["
-    prefix := base + "["
-    mut tid := TID_FIRST_USER
-    while tid < tt_count():
-        # check if any name maps to this tid with the right prefix
-        # brute force: try building names from the type table
-        info := tt_get(tid)
-        if info.kind == "function":
-            # try to find this in the name map
-            # we know the function signature — try to match by checking
-            # all type names that start with our prefix
-            # since we can't iterate the map, try a different approach:
-            # reconstruct names from param types
-            g_try_emit_generic_fn(base, fn_node_idx, fn_node, tid, info)
-        tid = tid + 1
-
-fn g_try_emit_generic_fn(base: String, fn_node_idx: Int, fn_node: Node, tid: Int, info: TypeInfo):
-    # build candidate name from param types
-    inst_name := g_build_inst_name(base, info.param_types)
-    # check if this exact name exists in the type table
-    lookup_tid := tt_lookup(inst_name)
-    if lookup_tid < 0:
-        # try from return type approach — build from all type args
-        return
-    if lookup_tid != tid:
-        return
-    # found a match — emit the function definition
-    mangled := g_mangle_name(inst_name)
-    # set up local types
-    g_local_types = {}
-    g_current_fn_return = info.return_type
-    # register params
-    mut pi := 0
-    for child in fn_node.children:
-        cn := get_node(child)
-        if cn.kind == "param":
-            if pi < info.param_types.len():
-                g_local_types.insert(cn.value, info.param_types[pi])
-            pi = pi + 1
-    # emit signature
-    g_write(g_c_type_string(info.return_type))
-    g_write(" fg_")
-    g_write(mangled)
-    g_write("(")
-    mut first := true
-    pi = 0
-    for child in fn_node.children:
-        cn := get_node(child)
-        if cn.kind == "param":
-            if first == false:
-                g_write(", ")
-            first = false
-            if pi < info.param_types.len():
-                g_write(g_c_type_string(info.param_types[pi]))
-            g_write(" ")
-            g_write(cn.value)
-            pi = pi + 1
-    g_write(") " + LB + "\n")
-    g_indent = g_indent + 1
-    g_emit_fn_body(fn_node_idx)
-    g_indent = g_indent - 1
-    g_write(RB + "\n\n")
-
-fn g_emit_generic_fn_fwd_from_root(root_idx: Int):
-    root := get_node(root_idx)
-    for child in root.children:
-        mut node := get_node(child)
-        if node.kind == "pub":
-            node = get_node(node.children[0])
-        if node.kind == "fn_decl":
-            name := node.value
-            if g_is_generic(name):
-                base := g_extract_base_name(name)
-                g_emit_generic_fn_fwd_instances(base, node)
-
-fn g_emit_generic_fn_fwd_instances(base: String, fn_node: Node):
-    prefix := base + "["
-    mut tid := TID_FIRST_USER
-    while tid < tt_count():
-        info := tt_get(tid)
-        if info.kind == "function":
-            inst_name := g_build_inst_name(base, info.param_types)
-            lookup_tid := tt_lookup(inst_name)
-            if lookup_tid == tid:
-                mangled := g_mangle_name(inst_name)
-                g_write(g_c_type_string(info.return_type))
-                g_write(" fg_")
-                g_write(mangled)
-                g_write("(")
-                mut first := true
-                mut pi := 0
-                for child in fn_node.children:
-                    cn := get_node(child)
-                    if cn.kind == "param":
-                        if first == false:
-                            g_write(", ")
-                        first = false
-                        if pi < info.param_types.len():
-                            g_write(g_c_type_string(info.param_types[pi]))
-                        g_write(" ")
-                        g_write(cn.value)
-                        pi = pi + 1
-                g_write(");\n")
-        tid = tid + 1
+    # emit definitions for all collected generic function instances
+    mut i := 0
+    while i < g_generic_fn_insts.len():
+        inst_name := g_generic_fn_insts[i]
+        fn_node_idx := g_generic_fn_nodes[i]
+        fn_node := get_node(fn_node_idx)
+        subst := g_build_subst_map(fn_node.value, inst_name)
+        mangled := g_mangle_name(inst_name)
+        # resolve return type
+        ret_tid := g_resolve_fn_return_with_subst(fn_node_idx, subst)
+        # set up local types for body emission
+        g_local_types = {}
+        g_current_fn_return = ret_tid
+        for child in fn_node.children:
+            cn := get_node(child)
+            if cn.kind == "param":
+                if cn.children.len() > 0:
+                    ptid := g_resolve_type_with_subst(cn.children[0], subst)
+                    g_local_types.insert(cn.value, ptid)
+        # emit signature
+        g_write(g_c_type_string(ret_tid))
+        g_write(" fg_")
+        g_write(mangled)
+        g_write("(")
+        mut first := true
+        for child in fn_node.children:
+            cn := get_node(child)
+            if cn.kind == "param":
+                if first == false:
+                    g_write(", ")
+                first = false
+                if cn.children.len() > 0:
+                    ptid := g_resolve_type_with_subst(cn.children[0], subst)
+                    g_write(g_c_type_string(ptid))
+                g_write(" ")
+                g_write(cn.value)
+        g_write(") " + LB + "\n")
+        g_indent = g_indent + 1
+        g_emit_fn_body(fn_node_idx)
+        g_indent = g_indent - 1
+        g_write(RB + "\n\n")
+        i = i + 1
 
 # ---------------------------------------------------------------
 # test definitions
@@ -3525,7 +3586,7 @@ fn g_emit_lambda_body(node_idx: Int, ret_type: Int):
     node := get_node(node_idx)
     for child in node.children:
         cn := get_node(child)
-        if cn.kind == "lambda_body":
+        if cn.kind == "body":
             if cn.children.len() > 0:
                 body := get_node(cn.children[0])
                 if body.kind == "block":
@@ -3584,6 +3645,8 @@ fn g_build_lambda_fwd_decls():
 
 pub fn g_emit_module(root_idx: Int):
     g_root_idx = root_idx
+    # pre-scan: collect generic function instantiations before emission
+    g_collect_generic_fn_instances(root_idx)
     g_emit_preamble()
     root := get_node(root_idx)
 
@@ -3635,7 +3698,7 @@ pub fn g_emit_module(root_idx: Int):
             g_emit_impl_forward_decls(decl_idx)
 
     # pass 3c: instantiated generic function forward declarations
-    g_emit_generic_fn_fwd_from_root(root_idx)
+    g_emit_instantiated_fn_forward_decls()
     g_write("\n")
 
     # pass 3d: global bindings
