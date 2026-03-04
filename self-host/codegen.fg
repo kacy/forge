@@ -3685,7 +3685,12 @@ pub fn g_emit_module(root_idx: Int):
     g_emit_preamble()
     root := get_node(root_idx)
 
-    # pass 1: struct definitions
+    # pre-bucket children by kind in a single pass (avoids 6 repeated scans)
+    mut struct_decls: List[Int] := []
+    mut enum_decls: List[Int] := []
+    mut fn_decls: List[Int] := []
+    mut impl_decls: List[Int] := []
+    mut test_decls: List[Int] := []
     for child in root.children:
         mut node := get_node(child)
         mut decl_idx := child
@@ -3693,20 +3698,26 @@ pub fn g_emit_module(root_idx: Int):
             decl_idx = node.children[0]
             node = get_node(decl_idx)
         if node.kind == "struct_decl":
-            g_emit_struct_def(decl_idx)
+            struct_decls.push(decl_idx)
+        elif node.kind == "enum_decl":
+            enum_decls.push(decl_idx)
+        elif node.kind == "fn_decl":
+            fn_decls.push(decl_idx)
+        elif node.kind == "impl_decl":
+            impl_decls.push(decl_idx)
+        elif node.kind == "test_decl":
+            test_decls.push(child)
+
+    # pass 1: struct definitions
+    for decl_idx in struct_decls:
+        g_emit_struct_def(decl_idx)
 
     # pass 1b: instantiated generic structs
     g_emit_instantiated_structs(root_idx)
 
     # pass 2: enum definitions
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "enum_decl":
-            g_emit_enum_def(decl_idx)
+    for decl_idx in enum_decls:
+        g_emit_enum_def(decl_idx)
 
     # pass 2b: result/optional/tuple typedefs
     g_emit_result_typedefs()
@@ -3717,24 +3728,12 @@ pub fn g_emit_module(root_idx: Int):
     g_emit_builtin_helpers()
 
     # pass 3: function forward declarations
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "fn_decl":
-            g_emit_fn_forward_decl(decl_idx, false)
+    for decl_idx in fn_decls:
+        g_emit_fn_forward_decl(decl_idx, false)
 
     # pass 3b: method forward declarations
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "impl_decl":
-            g_emit_impl_forward_decls(decl_idx)
+    for decl_idx in impl_decls:
+        g_emit_impl_forward_decls(decl_idx)
 
     # pass 3c: instantiated generic function forward declarations
     g_emit_instantiated_fn_forward_decls()
@@ -3747,24 +3746,12 @@ pub fn g_emit_module(root_idx: Int):
     g_lambda_fwd_pos = g_buf.len()
 
     # pass 4: function definitions
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "fn_decl":
-            g_emit_fn_def(decl_idx, false)
+    for decl_idx in fn_decls:
+        g_emit_fn_def(decl_idx, false)
 
     # pass 5: method definitions
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "impl_decl":
-            g_emit_impl_method_defs(decl_idx)
+    for decl_idx in impl_decls:
+        g_emit_impl_method_defs(decl_idx)
 
     # pass 6: instantiated generic function definitions
     g_emit_instantiated_fns_from_root(root_idx)
@@ -3772,10 +3759,8 @@ pub fn g_emit_module(root_idx: Int):
     # pass 6b: test definitions
     if g_test_mode:
         g_write("int __current_test_failed = 0;\n\n")
-        for child in root.children:
-            mut node := get_node(child)
-            if node.kind == "test_decl":
-                g_emit_test_def(child)
+        for decl_idx in test_decls:
+            g_emit_test_def(decl_idx)
 
     # pass 7: hoisted lambda functions
     if g_lambda_indices.len() > 0:
