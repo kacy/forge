@@ -1,0 +1,572 @@
+# codegen.fg — C transpilation backend (self-hosted)
+#
+# walks the type-checked AST and emits C source code. the generated C
+# is compiled by `zig cc` to produce a native binary.
+#
+# all globals use g_ prefix to avoid collisions with lexer/parser/checker
+# globals in the flat C namespace.
+
+from ast import Node, get_node
+from types import TypeInfo, tt_get, tt_lookup, tt_type_name, tt_count, tt_is_err, TID_INT, TID_UINT, TID_FLOAT, TID_BOOL, TID_STRING, TID_BYTES, TID_VOID, TID_INT8, TID_INT16, TID_INT32, TID_INT64, TID_UINT8, TID_UINT16, TID_UINT32, TID_UINT64, TID_ERR, TID_FIRST_USER
+from checker import c_get_expr_type, c_resolve_type, c_method_types, c_method_pub, c_generic_decls, c_scope
+from scope import sc_lookup
+
+# ---------------------------------------------------------------
+# output buffer
+# ---------------------------------------------------------------
+
+mut g_buf: List[String] := []
+
+fn g_write(s: String):
+    g_buf.push(s)
+
+# ---------------------------------------------------------------
+# global state
+# ---------------------------------------------------------------
+
+mut g_indent := 0
+mut g_current_fn_return := -1
+mut g_for_counter := 0
+mut g_try_counter := 0
+mut g_lambda_counter := 0
+mut g_push_counter := 0
+mut g_test_mode := false
+mut g_has_globals := false
+
+# mangled names for generic instantiations (TypeId -> "Pair_Int_String")
+mut g_mangled_names: Map[Int, String] := {}
+
+# dedup tracking for result/optional/tuple typedefs
+mut g_emitted_results: Map[String, Bool] := {}
+mut g_emitted_optionals: Map[String, Bool] := {}
+mut g_emitted_tuples: Map[String, Bool] := {}
+
+# lambda tracking — parallel lists since we can't pass structs through lists
+mut g_lambda_indices: List[Int] := []
+mut g_lambda_nodes: List[Int] := []
+mut g_lambda_fn_types: List[Int] := []
+
+# lambda forward declaration buffering
+mut g_lambda_fwd_buf: List[String] := []
+mut g_lambda_fwd_pos := 0
+
+# test names collected during emission
+mut g_test_names: List[String] := []
+
+# local variable types in current function
+mut g_local_types: Map[String, Int] := {}
+
+# ---------------------------------------------------------------
+# initialization
+# ---------------------------------------------------------------
+
+pub fn g_init():
+    g_buf = []
+    g_indent = 0
+    g_current_fn_return = -1
+    g_for_counter = 0
+    g_try_counter = 0
+    g_lambda_counter = 0
+    g_push_counter = 0
+    g_test_mode = false
+    g_has_globals = false
+    g_mangled_names = {}
+    g_emitted_results = {}
+    g_emitted_optionals = {}
+    g_emitted_tuples = {}
+    g_lambda_indices = []
+    g_lambda_nodes = []
+    g_lambda_fn_types = []
+    g_lambda_fwd_buf = []
+    g_lambda_fwd_pos = 0
+    g_test_names = []
+    g_local_types = {}
+
+pub fn g_get_output() -> String:
+    return g_buf.join("")
+
+# ---------------------------------------------------------------
+# output helpers
+# ---------------------------------------------------------------
+
+fn g_write_indent():
+    mut i := 0
+    while i < g_indent:
+        g_write("    ")
+        i = i + 1
+
+fn g_write_newline():
+    g_write("\n")
+
+# ---------------------------------------------------------------
+# type mapping
+# ---------------------------------------------------------------
+
+# map a forge type name to a C type string
+fn g_map_type(name: String) -> String:
+    if name == "Int":
+        return "int64_t"
+    if name == "UInt":
+        return "uint64_t"
+    if name == "Float":
+        return "double"
+    if name == "Bool":
+        return "bool"
+    if name == "String":
+        return "forge_string_t"
+    if name == "Bytes":
+        return "uint8_t*"
+    if name == "Void":
+        return "void"
+    if name == "Int8":
+        return "int8_t"
+    if name == "Int16":
+        return "int16_t"
+    if name == "Int32":
+        return "int32_t"
+    if name == "Int64":
+        return "int64_t"
+    if name == "UInt8":
+        return "uint8_t"
+    if name == "UInt16":
+        return "uint16_t"
+    if name == "UInt32":
+        return "uint32_t"
+    if name == "UInt64":
+        return "uint64_t"
+    # user-defined type — pass through as-is
+    return name
+
+# map a TypeId to a C type string (builtins only, "" for user-defined)
+fn g_map_type_id(tid: Int) -> String:
+    if tid == TID_INT:
+        return "int64_t"
+    if tid == TID_UINT:
+        return "uint64_t"
+    if tid == TID_FLOAT:
+        return "double"
+    if tid == TID_BOOL:
+        return "bool"
+    if tid == TID_STRING:
+        return "forge_string_t"
+    if tid == TID_BYTES:
+        return "uint8_t*"
+    if tid == TID_VOID:
+        return "void"
+    if tid == TID_INT8:
+        return "int8_t"
+    if tid == TID_INT16:
+        return "int16_t"
+    if tid == TID_INT32:
+        return "int32_t"
+    if tid == TID_INT64:
+        return "int64_t"
+    if tid == TID_UINT8:
+        return "uint8_t"
+    if tid == TID_UINT16:
+        return "uint16_t"
+    if tid == TID_UINT32:
+        return "uint32_t"
+    if tid == TID_UINT64:
+        return "uint64_t"
+    if tid == TID_ERR:
+        return "/* error */"
+    return ""
+
+# master type resolution: TypeId -> C type string
+fn g_c_type_string(tid: Int) -> String:
+    # builtins have a direct mapping
+    builtin := g_map_type_id(tid)
+    if builtin.len() > 0:
+        return builtin
+    # check mangled names cache (generics, result types)
+    if g_mangled_names.contains_key(tid):
+        return g_mangled_names[tid]
+    # user-defined — look up in the type table
+    if tid >= 0:
+        if tid < tt_count():
+            info := tt_get(tid)
+            if info.kind == "struct":
+                return info.name
+            if info.kind == "enum":
+                return info.name
+            if info.kind == "list":
+                return "forge_list_t"
+            if info.kind == "map":
+                return "forge_map_t"
+            if info.kind == "set":
+                return "forge_set_t"
+    return "/* unknown */"
+
+# emit a C type for a TypeId — writes to output buffer
+fn g_emit_c_type(tid: Int):
+    g_write(g_c_type_string(tid))
+
+# ---------------------------------------------------------------
+# name mangling
+# ---------------------------------------------------------------
+
+# mangle a generic type name: "Pair[Int,String]" -> "Pair_Int_String"
+fn g_mangle_name(name: String) -> String:
+    mut result := ""
+    mut i := 0
+    while i < name.len():
+        ch := name[i]
+        if ch == "[":
+            result = result + "_"
+        elif ch == ",":
+            result = result + "_"
+        elif ch == "]":
+            # skip
+            result = result
+        elif ch == " ":
+            # skip
+            result = result
+        else:
+            result = result + ch
+        i = i + 1
+    return result
+
+# ---------------------------------------------------------------
+# string helpers
+# ---------------------------------------------------------------
+
+# strip surrounding double quotes from a string literal
+fn g_strip_quotes(s: String) -> String:
+    if s.len() >= 2:
+        if s[0] == "\"":
+            if s[s.len() - 1] == "\"":
+                return s.substring(1, s.len() - 1)
+    return s
+
+# write a string with C escape handling
+# forge lexer preserves escape sequences as raw chars (\n = \ + n)
+# since C uses the same escapes, pass them through
+fn g_write_escaped_string(s: String):
+    mut i := 0
+    while i < s.len():
+        ch := s[i]
+        if ch == "\\":
+            if i + 1 < s.len():
+                next := s[i + 1]
+                if next == "n":
+                    g_write("\\n")
+                    i = i + 2
+                    continue
+                if next == "t":
+                    g_write("\\t")
+                    i = i + 2
+                    continue
+                if next == "r":
+                    g_write("\\r")
+                    i = i + 2
+                    continue
+                if next == "\\":
+                    g_write("\\\\")
+                    i = i + 2
+                    continue
+                if next == "\"":
+                    g_write("\\\"")
+                    i = i + 2
+                    continue
+                if next == "0":
+                    g_write("\\0")
+                    i = i + 2
+                    continue
+                if next == "'":
+                    g_write("\\'")
+                    i = i + 2
+                    continue
+                # unrecognized escape — escape the backslash
+                g_write("\\\\")
+                i = i + 1
+                continue
+            else:
+                g_write("\\\\")
+                i = i + 1
+                continue
+        if ch == "\"":
+            g_write("\\\"")
+            i = i + 1
+            continue
+        if ch == "\n":
+            g_write("\\n")
+            i = i + 1
+            continue
+        if ch == "\r":
+            g_write("\\r")
+            i = i + 1
+            continue
+        if ch == "\t":
+            g_write("\\t")
+            i = i + 1
+            continue
+        g_write(ch)
+        i = i + 1
+
+# emit a string literal as FORGE_STRING_LIT("content")
+fn g_emit_string_lit(lit: String):
+    content := g_strip_quotes(lit)
+    g_write("FORGE_STRING_LIT(\"")
+    g_write_escaped_string(content)
+    g_write("\")")
+
+# ---------------------------------------------------------------
+# preamble
+# ---------------------------------------------------------------
+
+fn g_emit_preamble():
+    g_write("// generated by forge compiler — do not edit\n")
+    g_write("#include \"forge_runtime.h\"\n\n")
+
+# ---------------------------------------------------------------
+# type queries — thin wrappers over checker data
+# ---------------------------------------------------------------
+
+# check if a TypeId is a result type
+fn g_is_result_type(tid: Int) -> Bool:
+    if tid < 0:
+        return false
+    if tid == TID_ERR:
+        return false
+    if tid >= tt_count():
+        return false
+    info := tt_get(tid)
+    return info.kind == "result"
+
+# check if a TypeId is an optional type
+fn g_is_optional_type(tid: Int) -> Bool:
+    if tid < 0:
+        return false
+    if tid == TID_ERR:
+        return false
+    if tid >= tt_count():
+        return false
+    info := tt_get(tid)
+    return info.kind == "optional"
+
+# check if an expression has string type
+fn g_is_string_expr(node_idx: Int) -> Bool:
+    tid := c_get_expr_type(node_idx)
+    return tid == TID_STRING
+
+# look up method return type from checker's method_types map
+fn g_lookup_method_type(type_name: String, method_name: String) -> Int:
+    key := type_name + "." + method_name
+    if c_method_types.contains_key(key):
+        return c_method_types[key]
+    return -1
+
+# ---------------------------------------------------------------
+# AST helpers
+# ---------------------------------------------------------------
+
+# extract base name from "Pair[A, B]" -> "Pair"
+fn g_extract_base_name(name: String) -> String:
+    mut i := 0
+    while i < name.len():
+        if name[i] == "[":
+            return name.substring(0, i)
+        i = i + 1
+    return name
+
+# extract field name from "name pub mut" -> "name"
+fn g_extract_field_name(value: String) -> String:
+    mut i := 0
+    while i < value.len():
+        if value[i] == " ":
+            return value.substring(0, i)
+        i = i + 1
+    return value
+
+# check if a name has generic params (contains "[")
+fn g_is_generic(name: String) -> Bool:
+    mut i := 0
+    while i < name.len():
+        if name[i] == "[":
+            return true
+        i = i + 1
+    return false
+
+# build generic instantiation name from base + type args
+# e.g. "Pair" + [TID_INT, TID_STRING] -> "Pair[Int,String]"
+fn g_build_inst_name(base: String, arg_tids: List[Int]) -> String:
+    mut result := base + "["
+    mut first := true
+    for tid in arg_tids:
+        if first == false:
+            result = result + ","
+        first = false
+        result = result + tt_type_name(tid)
+    result = result + "]"
+    return result
+
+# resolve the type of a struct field from the type table
+fn g_resolve_field_type(struct_name: String, field_name: String) -> Int:
+    tid := tt_lookup(struct_name)
+    if tid < 0:
+        return TID_ERR
+    info := tt_get(tid)
+    if info.kind != "struct":
+        return TID_ERR
+    mut i := 0
+    for f in info.fields:
+        if f == field_name:
+            return info.field_types[i]
+        i = i + 1
+    return TID_ERR
+
+# resolve an enum variant field type
+fn g_resolve_enum_field_type(enum_name: String, variant_name: String, field_idx: Int) -> Int:
+    tid := tt_lookup(enum_name)
+    if tid < 0:
+        return TID_ERR
+    info := tt_get(tid)
+    if info.kind != "enum":
+        return TID_ERR
+    mut i := 0
+    for v in info.variants:
+        if v == variant_name:
+            if field_idx < info.variant_types[i].len():
+                return info.variant_types[i][field_idx]
+            return TID_ERR
+        i = i + 1
+    return TID_ERR
+
+# resolve a type expression AST node to a C type string
+fn g_resolve_type_expr_to_c(node_idx: Int) -> String:
+    tid := c_resolve_type(node_idx)
+    return g_c_type_string(tid)
+
+# emit a type expression from an AST type node
+fn g_emit_type_expr(node_idx: Int):
+    node := get_node(node_idx)
+    if node.kind == "type":
+        g_write(g_map_type(node.value))
+        return
+    if node.kind == "generic_type":
+        base := node.value
+        if base == "List":
+            g_write("forge_list_t")
+            return
+        if base == "Map":
+            g_write("forge_map_t")
+            return
+        if base == "Set":
+            g_write("forge_set_t")
+            return
+        # user-defined generic — resolve and emit mangled name
+        tid := c_resolve_type(node_idx)
+        g_write(g_c_type_string(tid))
+        return
+    if node.kind == "optional_type":
+        tid := c_resolve_type(node_idx)
+        g_write(g_c_type_string(tid))
+        return
+    if node.kind == "result_type":
+        tid := c_resolve_type(node_idx)
+        g_write(g_c_type_string(tid))
+        return
+    if node.kind == "tuple_type":
+        tid := c_resolve_type(node_idx)
+        g_write(g_c_type_string(tid))
+        return
+    if node.kind == "fn_type":
+        # C function pointer syntax: ret (*)(params)
+        # find return type and params from children
+        mut ret_idx := -1
+        mut param_indices: List[Int] := []
+        for child in node.children:
+            cn := get_node(child)
+            if cn.kind == "param":
+                if cn.children.len() > 0:
+                    param_indices.push(cn.children[0])
+            elif cn.kind == "returns":
+                if cn.children.len() > 0:
+                    ret_idx = cn.children[0]
+        if ret_idx >= 0:
+            g_emit_type_expr(ret_idx)
+        else:
+            g_write("void")
+        g_write(" (*)(")
+        if param_indices.len() == 0:
+            g_write("void")
+        else:
+            mut first := true
+            for pi in param_indices:
+                if first == false:
+                    g_write(", ")
+                first = false
+                g_emit_type_expr(pi)
+        g_write(")")
+        return
+    # fallback
+    g_write("/* unknown type */")
+
+# emit return type — resolves type node or writes "void"
+fn g_emit_return_type(node_idx: Int):
+    node := get_node(node_idx)
+    # look for "returns" child
+    for child in node.children:
+        cn := get_node(child)
+        if cn.kind == "returns":
+            if cn.children.len() > 0:
+                g_emit_type_expr(cn.children[0])
+                return
+    g_write("void")
+
+# emit function pointer parameter: ret (*name)(params)
+fn g_emit_fn_ptr_param(type_node_idx: Int, name: String):
+    node := get_node(type_node_idx)
+    # find return type and params
+    mut ret_idx := -1
+    mut param_indices: List[Int] := []
+    for child in node.children:
+        cn := get_node(child)
+        if cn.kind == "param":
+            if cn.children.len() > 0:
+                param_indices.push(cn.children[0])
+        elif cn.kind == "returns":
+            if cn.children.len() > 0:
+                ret_idx = cn.children[0]
+    if ret_idx >= 0:
+        g_emit_type_expr(ret_idx)
+    else:
+        g_write("void")
+    g_write(" (*")
+    g_write(name)
+    g_write(")(")
+    if param_indices.len() == 0:
+        g_write("void")
+    else:
+        mut first := true
+        for pi in param_indices:
+            if first == false:
+                g_write(", ")
+            first = false
+            g_emit_type_expr(pi)
+    g_write(")")
+
+# emit function pointer binding from a TypeId: ret (*name)(params)
+fn g_emit_fn_ptr_binding(fn_tid: Int, name: String):
+    if fn_tid < 0:
+        return
+    if fn_tid >= tt_count():
+        return
+    info := tt_get(fn_tid)
+    if info.kind != "function":
+        return
+    g_write(g_c_type_string(info.return_type))
+    g_write(" (*")
+    g_write(name)
+    g_write(")(")
+    if info.param_types.len() == 0:
+        g_write("void")
+    else:
+        mut first := true
+        for pt in info.param_types:
+            if first == false:
+                g_write(", ")
+            first = false
+            g_write(g_c_type_string(pt))
+    g_write(")")
