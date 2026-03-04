@@ -39,9 +39,7 @@ mut g_has_globals := false
 mut g_root_idx := -1
 
 # mangled names for generic instantiations (TypeId -> "Pair_Int_String")
-# using parallel lists because Map[K, String] codegen is broken in bootstrap
-mut g_mangled_keys: List[Int] := []
-mut g_mangled_vals: List[String] := []
+mut g_mangled: Map[Int, String] := {}
 
 # dedup tracking for result/optional/tuple typedefs
 mut g_emitted_results: Map[String, Bool] := {}
@@ -83,8 +81,7 @@ pub fn g_init():
     g_test_mode = false
     g_has_globals = false
     g_root_idx = -1
-    g_mangled_keys = []
-    g_mangled_vals = []
+    g_mangled = {}
     g_emitted_results = {}
     g_emitted_optionals = {}
     g_emitted_tuples = {}
@@ -106,32 +103,6 @@ pub fn g_get_output() -> String:
             return result.substring(0, result.len() - 1)
     return result
 
-# mangled name helpers (parallel lists instead of Map[K, String])
-fn g_mangled_lookup(tid: Int) -> String:
-    mut i := 0
-    while i < g_mangled_keys.len():
-        if g_mangled_keys[i] == tid:
-            return g_mangled_vals[i]
-        i = i + 1
-    return ""
-
-fn g_mangled_has(tid: Int) -> Bool:
-    mut i := 0
-    while i < g_mangled_keys.len():
-        if g_mangled_keys[i] == tid:
-            return true
-        i = i + 1
-    return false
-
-fn g_mangled_set(tid: Int, name: String):
-    mut i := 0
-    while i < g_mangled_keys.len():
-        if g_mangled_keys[i] == tid:
-            # already exists — can't update list element, just return
-            return
-        i = i + 1
-    g_mangled_keys.push(tid)
-    g_mangled_vals.push(name)
 
 # ---------------------------------------------------------------
 # output helpers
@@ -228,8 +199,8 @@ fn g_c_type_string(tid: Int) -> String:
     if builtin.len() > 0:
         return builtin
     # check mangled names cache (generics, result types)
-    if g_mangled_has(tid):
-        return g_mangled_lookup(tid)
+    if g_mangled.contains_key(tid):
+        return g_mangled[tid]
     # user-defined — look up in the type table
     if tid >= 0:
         if tid < tt_count():
@@ -267,24 +238,17 @@ fn g_emit_c_type(tid: Int):
 
 # mangle a generic type name: "Pair[Int,String]" -> "Pair_Int_String"
 fn g_mangle_name(name: String) -> String:
-    mut result := ""
+    mut parts: List[String] := []
     mut i := 0
     while i < name.len():
         ch := name[i]
-        if ch == "[":
-            result = result + "_"
-        elif ch == ",":
-            result = result + "_"
-        elif ch == "]":
-            # skip
-            result = result
-        elif ch == " ":
-            # skip
-            result = result
-        else:
-            result = result + ch
+        if ch == "[" or ch == ",":
+            parts.push("_")
+        elif ch != "]" and ch != " ":
+            parts.push(ch)
         i = i + 1
-    return result
+    return parts.join("")
+
 
 # ---------------------------------------------------------------
 # string helpers
@@ -803,7 +767,7 @@ fn g_emit_struct_instantiations(base: String):
             if info.name.starts_with(prefix):
                 # this is an instantiation — emit typedef
                 mangled := g_mangle_name(info.name)
-                g_mangled_set(tid, mangled)
+                g_mangled.insert(tid, mangled)
                 g_write("typedef struct " + LB + "\n")
                 g_indent = g_indent + 1
                 mut fi := 0
@@ -910,10 +874,10 @@ fn g_emit_result_typedefs():
             name := "forge_result_" + ok_c
             if g_emitted_results.contains_key(name):
                 # still cache mangled name for this TypeId
-                if g_mangled_has(tid) == false:
-                    g_mangled_set(tid, name)
+                if g_mangled.contains_key(tid) == false:
+                    g_mangled.insert(tid, name)
             else:
-                g_mangled_set(tid, name)
+                g_mangled.insert(tid, name)
                 g_emitted_results.insert(name, true)
                 g_write("typedef struct " + LB + " bool is_ok; ")
                 g_write(ok_c)
@@ -931,10 +895,10 @@ fn g_emit_optional_typedefs():
             inner_c := g_c_type_string(info.inner)
             name := "forge_optional_" + inner_c
             if g_emitted_optionals.contains_key(name):
-                if g_mangled_has(tid) == false:
-                    g_mangled_set(tid, name)
+                if g_mangled.contains_key(tid) == false:
+                    g_mangled.insert(tid, name)
             else:
-                g_mangled_set(tid, name)
+                g_mangled.insert(tid, name)
                 g_emitted_optionals.insert(name, true)
                 g_write("typedef struct " + LB + " bool has_value; ")
                 g_write(inner_c)
@@ -954,10 +918,10 @@ fn g_emit_tuple_typedefs():
             for elem in info.elements:
                 name = name + "_" + g_c_type_string(elem)
             if g_emitted_tuples.contains_key(name):
-                if g_mangled_has(tid) == false:
-                    g_mangled_set(tid, name)
+                if g_mangled.contains_key(tid) == false:
+                    g_mangled.insert(tid, name)
             else:
-                g_mangled_set(tid, name)
+                g_mangled.insert(tid, name)
                 g_emitted_tuples.insert(name, true)
                 g_write("typedef struct " + LB + " ")
                 mut ei := 0
@@ -3692,7 +3656,12 @@ pub fn g_emit_module(root_idx: Int):
     g_emit_preamble()
     root := get_node(root_idx)
 
-    # pass 1: struct definitions
+    # pre-bucket children by kind in a single pass (avoids 6 repeated scans)
+    mut struct_decls: List[Int] := []
+    mut enum_decls: List[Int] := []
+    mut fn_decls: List[Int] := []
+    mut impl_decls: List[Int] := []
+    mut test_decls: List[Int] := []
     for child in root.children:
         mut node := get_node(child)
         mut decl_idx := child
@@ -3700,20 +3669,26 @@ pub fn g_emit_module(root_idx: Int):
             decl_idx = node.children[0]
             node = get_node(decl_idx)
         if node.kind == "struct_decl":
-            g_emit_struct_def(decl_idx)
+            struct_decls.push(decl_idx)
+        elif node.kind == "enum_decl":
+            enum_decls.push(decl_idx)
+        elif node.kind == "fn_decl":
+            fn_decls.push(decl_idx)
+        elif node.kind == "impl_decl":
+            impl_decls.push(decl_idx)
+        elif node.kind == "test_decl":
+            test_decls.push(child)
+
+    # pass 1: struct definitions
+    for decl_idx in struct_decls:
+        g_emit_struct_def(decl_idx)
 
     # pass 1b: instantiated generic structs
     g_emit_instantiated_structs(root_idx)
 
     # pass 2: enum definitions
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "enum_decl":
-            g_emit_enum_def(decl_idx)
+    for decl_idx in enum_decls:
+        g_emit_enum_def(decl_idx)
 
     # pass 2b: result/optional/tuple typedefs
     g_emit_result_typedefs()
@@ -3724,24 +3699,12 @@ pub fn g_emit_module(root_idx: Int):
     g_emit_builtin_helpers()
 
     # pass 3: function forward declarations
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "fn_decl":
-            g_emit_fn_forward_decl(decl_idx, false)
+    for decl_idx in fn_decls:
+        g_emit_fn_forward_decl(decl_idx, false)
 
     # pass 3b: method forward declarations
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "impl_decl":
-            g_emit_impl_forward_decls(decl_idx)
+    for decl_idx in impl_decls:
+        g_emit_impl_forward_decls(decl_idx)
 
     # pass 3c: instantiated generic function forward declarations
     g_emit_instantiated_fn_forward_decls()
@@ -3754,24 +3717,12 @@ pub fn g_emit_module(root_idx: Int):
     g_lambda_fwd_pos = g_buf.len()
 
     # pass 4: function definitions
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "fn_decl":
-            g_emit_fn_def(decl_idx, false)
+    for decl_idx in fn_decls:
+        g_emit_fn_def(decl_idx, false)
 
     # pass 5: method definitions
-    for child in root.children:
-        mut node := get_node(child)
-        mut decl_idx := child
-        if node.kind == "pub":
-            decl_idx = node.children[0]
-            node = get_node(decl_idx)
-        if node.kind == "impl_decl":
-            g_emit_impl_method_defs(decl_idx)
+    for decl_idx in impl_decls:
+        g_emit_impl_method_defs(decl_idx)
 
     # pass 6: instantiated generic function definitions
     g_emit_instantiated_fns_from_root(root_idx)
@@ -3779,10 +3730,8 @@ pub fn g_emit_module(root_idx: Int):
     # pass 6b: test definitions
     if g_test_mode:
         g_write("int __current_test_failed = 0;\n\n")
-        for child in root.children:
-            mut node := get_node(child)
-            if node.kind == "test_decl":
-                g_emit_test_def(child)
+        for decl_idx in test_decls:
+            g_emit_test_def(decl_idx)
 
     # pass 7: hoisted lambda functions
     if g_lambda_indices.len() > 0:

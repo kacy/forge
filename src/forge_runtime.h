@@ -262,16 +262,122 @@ typedef struct {
     int64_t len;
 } forge_list_t;
 
-// Map[K,V] — key-value collection backed by parallel arrays.
-// linear scan for lookups — fine for small maps, which is all we need now.
+// Map[K,V] — hash-indexed key-value collection.
+// dense keys/values arrays preserve insertion order and codegen compatibility.
+// a hash bucket index on top gives O(1) lookups via open addressing.
 typedef struct {
-    void *keys;
-    void *values;
-    int64_t len;
+    void *keys;           // dense array of keys (codegen reads this directly)
+    void *values;         // dense array of values (codegen reads this directly)
+    int64_t len;          // entry count (codegen reads this directly)
+    int32_t *buckets;     // hash index: bucket -> dense array index, -1 = empty
+    int32_t cap;          // bucket count (power of 2)
+    int32_t _pad;         // alignment padding
 } forge_map_t;
 
 // Set[T] — unique element collection. same layout as list for now.
 typedef forge_list_t forge_set_t;
+
+// ---------------------------------------------------------------
+// hash functions (for map hash index)
+// ---------------------------------------------------------------
+
+// splitmix64 finalizer — good integer hash with full avalanche
+static inline uint64_t forge_hash_int(int64_t key) {
+    uint64_t x = (uint64_t)key;
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return x;
+}
+
+// FNV-1a hash over raw bytes
+static inline uint64_t forge_hash_bytes(const char *data, int64_t len) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (int64_t i = 0; i < len; i++) {
+        h ^= (uint8_t)data[i];
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+// hash a forge string
+static inline uint64_t forge_hash_string(forge_string_t s) {
+    return forge_hash_bytes(s.data, s.len);
+}
+
+// ---------------------------------------------------------------
+// map hash index helpers
+// ---------------------------------------------------------------
+
+// allocate bucket array filled with -1 (empty)
+static inline int32_t *forge_map_alloc_buckets(int32_t cap) {
+    int32_t *b = (int32_t *)malloc((size_t)cap * sizeof(int32_t));
+    if (!b) { fprintf(stderr, "forge: out of memory\n"); exit(1); }
+    for (int32_t i = 0; i < cap; i++) b[i] = -1;
+    return b;
+}
+
+// rebuild the bucket index from the dense arrays (string keys)
+static inline void forge_map_rebuild_string(forge_map_t *map) {
+    int32_t mask = map->cap - 1;
+    for (int32_t i = 0; i < map->cap; i++) map->buckets[i] = -1;
+    forge_string_t *keys = (forge_string_t *)map->keys;
+    for (int32_t i = 0; i < (int32_t)map->len; i++) {
+        uint64_t h = forge_hash_string(keys[i]);
+        int32_t slot = (int32_t)(h & (uint64_t)mask);
+        while (map->buckets[slot] != -1) slot = (slot + 1) & mask;
+        map->buckets[slot] = i;
+    }
+}
+
+// rebuild the bucket index from the dense arrays (integer keys)
+static inline void forge_map_rebuild_int(forge_map_t *map) {
+    int32_t mask = map->cap - 1;
+    for (int32_t i = 0; i < map->cap; i++) map->buckets[i] = -1;
+    int64_t *keys = (int64_t *)map->keys;
+    for (int32_t i = 0; i < (int32_t)map->len; i++) {
+        uint64_t h = forge_hash_int(keys[i]);
+        int32_t slot = (int32_t)(h & (uint64_t)mask);
+        while (map->buckets[slot] != -1) slot = (slot + 1) & mask;
+        map->buckets[slot] = i;
+    }
+}
+
+// ensure the map has a hash index with room for at least one more entry.
+// string key variant — grows at 75% load.
+static inline void forge_map_ensure_index_string(forge_map_t *map) {
+    if (map->cap == 0) {
+        map->cap = 8;
+        map->buckets = forge_map_alloc_buckets(8);
+        forge_map_rebuild_string(map);
+        return;
+    }
+    // grow at 75% load: len * 4 >= cap * 3
+    if ((int32_t)map->len * 4 >= map->cap * 3) {
+        free(map->buckets);
+        map->cap *= 2;
+        map->buckets = forge_map_alloc_buckets(map->cap);
+        forge_map_rebuild_string(map);
+    }
+}
+
+// integer key variant
+static inline void forge_map_ensure_index_int(forge_map_t *map) {
+    if (map->cap == 0) {
+        map->cap = 8;
+        map->buckets = forge_map_alloc_buckets(8);
+        forge_map_rebuild_int(map);
+        return;
+    }
+    if ((int32_t)map->len * 4 >= map->cap * 3) {
+        free(map->buckets);
+        map->cap *= 2;
+        map->buckets = forge_map_alloc_buckets(map->cap);
+        forge_map_rebuild_int(map);
+    }
+}
 
 // ---------------------------------------------------------------
 // collection creation
@@ -298,11 +404,15 @@ static inline forge_list_t forge_list_create(int64_t len, int64_t elem_size, con
     return list;
 }
 
-// create a map from parallel key/value arrays. copies both.
+// create a map from parallel key/value arrays. copies both and builds hash index.
+// key_size is used to distinguish string keys (sizeof(forge_string_t)) from int keys.
 static inline forge_map_t forge_map_create(int64_t len, int64_t key_size, int64_t val_size,
                                            const void *init_keys, const void *init_vals) {
     forge_map_t map;
     map.len = len;
+    map.buckets = NULL;
+    map.cap = 0;
+    map._pad = 0;
     if (len == 0) {
         map.keys = NULL;
         map.values = NULL;
@@ -324,6 +434,17 @@ static inline forge_map_t forge_map_create(int64_t len, int64_t key_size, int64_
     }
     memcpy(map.keys, init_keys, (size_t)(len * key_size));
     memcpy(map.values, init_vals, (size_t)(len * val_size));
+    // pick initial capacity: next power of 2 that keeps load < 75%
+    int32_t needed = (int32_t)((len * 4 + 2) / 3); // ceil(len / 0.75)
+    int32_t cap = 8;
+    while (cap < needed) cap *= 2;
+    map.cap = cap;
+    map.buckets = forge_map_alloc_buckets(cap);
+    if (key_size == (int64_t)sizeof(forge_string_t)) {
+        forge_map_rebuild_string(&map);
+    } else {
+        forge_map_rebuild_int(&map);
+    }
     return map;
 }
 
@@ -349,27 +470,35 @@ static inline void forge_bounds_check(int64_t idx, int64_t len) {
     (forge_bounds_check((idx), (list).len), ((type *)(list).data)[(idx)])
 
 // look up a value in a map by integer key. returns pointer to the value slot,
-// or NULL if not found. caller casts to the value type.
+// or NULL if not found. O(1) average via hash probing.
 static inline void *forge_map_get_by_int(forge_map_t map, int64_t key, int64_t val_size) {
+    if (map.cap == 0) return NULL;
+    int32_t mask = map.cap - 1;
+    uint64_t h = forge_hash_int(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
     int64_t *keys = (int64_t *)map.keys;
-    for (int64_t i = 0; i < map.len; i++) {
-        if (keys[i] == key) {
-            return (char *)map.values + i * val_size;
-        }
+    while (1) {
+        int32_t idx = map.buckets[slot];
+        if (idx == -1) return NULL;
+        if (keys[idx] == key) return (char *)map.values + idx * val_size;
+        slot = (slot + 1) & mask;
     }
-    return NULL;
 }
 
 // look up a value in a map by string key. returns pointer to the value slot,
-// or NULL if not found.
+// or NULL if not found. O(1) average via hash probing.
 static inline void *forge_map_get_by_string(forge_map_t map, forge_string_t key, int64_t val_size) {
+    if (map.cap == 0) return NULL;
+    int32_t mask = map.cap - 1;
+    uint64_t h = forge_hash_string(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
     forge_string_t *keys = (forge_string_t *)map.keys;
-    for (int64_t i = 0; i < map.len; i++) {
-        if (forge_string_eq(keys[i], key)) {
-            return (char *)map.values + i * val_size;
-        }
+    while (1) {
+        int32_t idx = map.buckets[slot];
+        if (idx == -1) return NULL;
+        if (forge_string_eq(keys[idx], key)) return (char *)map.values + idx * val_size;
+        slot = (slot + 1) & mask;
     }
-    return NULL;
 }
 
 // checked dereference for map lookups — exits if key was not found
@@ -404,18 +533,28 @@ static inline void forge_list_push(forge_list_t *list, const void *elem, int64_t
 
 // insert or update a key-value pair in a map (string keys).
 // if the key already exists, updates the value in place.
+// O(1) average via hash probing.
 static inline void forge_map_set_by_string(forge_map_t *map, forge_string_t key,
                                             const void *val, int64_t key_size, int64_t val_size) {
-    // check for existing key
-    forge_string_t *keys = (forge_string_t *)map->keys;
-    for (int64_t i = 0; i < map->len; i++) {
-        if (forge_string_eq(keys[i], key)) {
-            memcpy((char *)map->values + i * val_size, val, (size_t)val_size);
-            return;
+    // check for existing key via hash probe
+    if (map->cap > 0) {
+        int32_t mask = map->cap - 1;
+        uint64_t h = forge_hash_string(key);
+        int32_t slot = (int32_t)(h & (uint64_t)mask);
+        forge_string_t *keys = (forge_string_t *)map->keys;
+        while (1) {
+            int32_t idx = map->buckets[slot];
+            if (idx == -1) break;
+            if (forge_string_eq(keys[idx], key)) {
+                memcpy((char *)map->values + idx * val_size, val, (size_t)val_size);
+                return;
+            }
+            slot = (slot + 1) & mask;
         }
     }
-    // new key — grow both arrays. realloc into temporaries so we don't
-    // lose the original pointers if one allocation fails.
+    // ensure hash index has room
+    forge_map_ensure_index_string(map);
+    // grow dense arrays
     int64_t new_len = map->len + 1;
     void *new_keys = realloc(map->keys, (size_t)(new_len * key_size));
     if (!new_keys) { fprintf(stderr, "forge: out of memory\n"); exit(1); }
@@ -425,19 +564,38 @@ static inline void forge_map_set_by_string(forge_map_t *map, forge_string_t key,
     map->values = new_vals;
     memcpy((char *)map->keys + map->len * key_size, &key, (size_t)key_size);
     memcpy((char *)map->values + map->len * val_size, val, (size_t)val_size);
+    // insert into hash index
+    int32_t mask = map->cap - 1;
+    uint64_t h = forge_hash_string(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    while (map->buckets[slot] != -1) slot = (slot + 1) & mask;
+    map->buckets[slot] = (int32_t)map->len;
     map->len = new_len;
 }
 
 // insert or update a key-value pair in a map (integer keys).
+// O(1) average via hash probing.
 static inline void forge_map_set_by_int(forge_map_t *map, int64_t key,
                                          const void *val, int64_t key_size, int64_t val_size) {
-    int64_t *keys = (int64_t *)map->keys;
-    for (int64_t i = 0; i < map->len; i++) {
-        if (keys[i] == key) {
-            memcpy((char *)map->values + i * val_size, val, (size_t)val_size);
-            return;
+    // check for existing key via hash probe
+    if (map->cap > 0) {
+        int32_t mask = map->cap - 1;
+        uint64_t h = forge_hash_int(key);
+        int32_t slot = (int32_t)(h & (uint64_t)mask);
+        int64_t *keys = (int64_t *)map->keys;
+        while (1) {
+            int32_t idx = map->buckets[slot];
+            if (idx == -1) break;
+            if (keys[idx] == key) {
+                memcpy((char *)map->values + idx * val_size, val, (size_t)val_size);
+                return;
+            }
+            slot = (slot + 1) & mask;
         }
     }
+    // ensure hash index has room
+    forge_map_ensure_index_int(map);
+    // grow dense arrays
     int64_t new_len = map->len + 1;
     void *new_keys = realloc(map->keys, (size_t)(new_len * key_size));
     if (!new_keys) { fprintf(stderr, "forge: out of memory\n"); exit(1); }
@@ -447,6 +605,12 @@ static inline void forge_map_set_by_int(forge_map_t *map, int64_t key,
     map->values = new_vals;
     memcpy((char *)map->keys + map->len * key_size, &key, (size_t)key_size);
     memcpy((char *)map->values + map->len * val_size, val, (size_t)val_size);
+    // insert into hash index
+    int32_t mask = map->cap - 1;
+    uint64_t h = forge_hash_int(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    while (map->buckets[slot] != -1) slot = (slot + 1) & mask;
+    map->buckets[slot] = (int32_t)map->len;
     map->len = new_len;
 }
 
@@ -521,64 +685,94 @@ static inline void forge_list_clear(forge_list_t *list) {
     list->len = 0;
 }
 
-// map — remove by string key
+// map — remove by string key. shifts dense arrays and rebuilds hash index.
 static inline void forge_map_remove_by_string(forge_map_t *map, forge_string_t key,
                                                 int64_t key_size, int64_t val_size) {
+    if (map->cap == 0) return;
+    // find via hash probe
+    int32_t mask = map->cap - 1;
+    uint64_t h = forge_hash_string(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
     forge_string_t *keys = (forge_string_t *)map->keys;
-    for (int64_t i = 0; i < map->len; i++) {
-        if (forge_string_eq(keys[i], key)) {
-            int64_t remaining = map->len - i - 1;
+    while (1) {
+        int32_t idx = map->buckets[slot];
+        if (idx == -1) return; // not found
+        if (forge_string_eq(keys[idx], key)) {
+            // shift dense arrays to preserve insertion order
+            int64_t remaining = map->len - idx - 1;
             if (remaining > 0) {
-                memmove((char *)map->keys + i * key_size,
-                        (char *)map->keys + (i + 1) * key_size,
+                memmove((char *)map->keys + idx * key_size,
+                        (char *)map->keys + (idx + 1) * key_size,
                         (size_t)(remaining * key_size));
-                memmove((char *)map->values + i * val_size,
-                        (char *)map->values + (i + 1) * val_size,
+                memmove((char *)map->values + idx * val_size,
+                        (char *)map->values + (idx + 1) * val_size,
                         (size_t)(remaining * val_size));
             }
             map->len--;
+            forge_map_rebuild_string(map);
             return;
         }
+        slot = (slot + 1) & mask;
     }
 }
 
-// map — remove by integer key
+// map — remove by integer key. shifts dense arrays and rebuilds hash index.
 static inline void forge_map_remove_by_int(forge_map_t *map, int64_t key,
                                             int64_t key_size, int64_t val_size) {
+    if (map->cap == 0) return;
+    int32_t mask = map->cap - 1;
+    uint64_t h = forge_hash_int(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
     int64_t *keys = (int64_t *)map->keys;
-    for (int64_t i = 0; i < map->len; i++) {
-        if (keys[i] == key) {
-            int64_t remaining = map->len - i - 1;
+    while (1) {
+        int32_t idx = map->buckets[slot];
+        if (idx == -1) return; // not found
+        if (keys[idx] == key) {
+            int64_t remaining = map->len - idx - 1;
             if (remaining > 0) {
-                memmove((char *)map->keys + i * key_size,
-                        (char *)map->keys + (i + 1) * key_size,
+                memmove((char *)map->keys + idx * key_size,
+                        (char *)map->keys + (idx + 1) * key_size,
                         (size_t)(remaining * key_size));
-                memmove((char *)map->values + i * val_size,
-                        (char *)map->values + (i + 1) * val_size,
+                memmove((char *)map->values + idx * val_size,
+                        (char *)map->values + (idx + 1) * val_size,
                         (size_t)(remaining * val_size));
             }
             map->len--;
+            forge_map_rebuild_int(map);
             return;
         }
+        slot = (slot + 1) & mask;
     }
 }
 
-// map — check key existence (string keys)
+// map — check key existence (string keys). O(1) average.
 static inline bool forge_map_contains_key_string(forge_map_t map, forge_string_t key) {
+    if (map.cap == 0) return false;
+    int32_t mask = map.cap - 1;
+    uint64_t h = forge_hash_string(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
     forge_string_t *keys = (forge_string_t *)map.keys;
-    for (int64_t i = 0; i < map.len; i++) {
-        if (forge_string_eq(keys[i], key)) return true;
+    while (1) {
+        int32_t idx = map.buckets[slot];
+        if (idx == -1) return false;
+        if (forge_string_eq(keys[idx], key)) return true;
+        slot = (slot + 1) & mask;
     }
-    return false;
 }
 
-// map — check key existence (integer keys)
+// map — check key existence (integer keys). O(1) average.
 static inline bool forge_map_contains_key_int(forge_map_t map, int64_t key) {
+    if (map.cap == 0) return false;
+    int32_t mask = map.cap - 1;
+    uint64_t h = forge_hash_int(key);
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
     int64_t *keys = (int64_t *)map.keys;
-    for (int64_t i = 0; i < map.len; i++) {
-        if (keys[i] == key) return true;
+    while (1) {
+        int32_t idx = map.buckets[slot];
+        if (idx == -1) return false;
+        if (keys[idx] == key) return true;
+        slot = (slot + 1) & mask;
     }
-    return false;
 }
 
 // map — get all keys as a list
@@ -609,13 +803,16 @@ static inline forge_list_t forge_map_values(forge_map_t map, int64_t val_size) {
     return result;
 }
 
-// map — clear (free data and reset)
+// map — clear (free data, hash index, and reset)
 static inline void forge_map_clear(forge_map_t *map) {
     free(map->keys);
     free(map->values);
+    free(map->buckets);
     map->keys = NULL;
     map->values = NULL;
+    map->buckets = NULL;
     map->len = 0;
+    map->cap = 0;
 }
 
 // set — remove by generic element
