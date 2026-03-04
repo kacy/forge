@@ -1284,7 +1284,7 @@ fn c_check_unary(node: Node, scope_id: Int) -> Int:
     if tt_is_err(operand):
         return TID_ERR
     op := node.value
-    if op == "neg":
+    if op == "negate":
         if tt_is_numeric(operand) == false:
             c_error("E217", "unary - requires numeric type, got " + tt_type_name(operand))
             return TID_ERR
