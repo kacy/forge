@@ -42,6 +42,19 @@ const HoistedLambda = struct {
     fn_type_id: TypeId,
 };
 
+/// key for looking up function types by signature (for lambda type inference).
+const FnSigKey = struct {
+    params: [16]TypeId = .{.err} ** 16,
+    param_count: u8,
+    return_type: TypeId,
+};
+
+/// key for looking up tuple types by element signature.
+const TupleSigKey = struct {
+    elements: [16]TypeId = .{.err} ** 16,
+    elem_count: u8,
+};
+
 pub const CEmitter = struct {
     output: std.ArrayList(u8),
     indent_level: u32,
@@ -85,6 +98,10 @@ pub const CEmitter = struct {
     has_globals: bool,
     /// counter for unique push temp variable names.
     push_counter: u32,
+    /// cache: function signature → TypeId (avoids linear type table scan for lambdas)
+    fn_type_cache: std.AutoHashMap(FnSigKey, TypeId),
+    /// cache: tuple element signature → TypeId (avoids linear type table scan for tuples)
+    tuple_type_cache: std.AutoHashMap(TupleSigKey, TypeId),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -93,7 +110,7 @@ pub const CEmitter = struct {
         method_types: *const std.StringHashMap(Checker.MethodEntry),
         generic_decls: *const std.StringHashMap(Checker.GenericDecl),
     ) CEmitter {
-        return .{
+        var emitter = CEmitter{
             .output = .empty,
             .indent_level = 0,
             .type_table = type_table,
@@ -114,7 +131,39 @@ pub const CEmitter = struct {
             .imported_modules = &.{},
             .has_globals = false,
             .push_counter = 0,
+            .fn_type_cache = std.AutoHashMap(FnSigKey, TypeId).init(allocator),
+            .tuple_type_cache = std.AutoHashMap(TupleSigKey, TypeId).init(allocator),
         };
+
+        // eagerly populate function and tuple type caches from the type table
+        const items = type_table.types.items;
+        for (items, 0..) |ty, idx| {
+            const tid = TypeId.fromIndex(@intCast(idx));
+            switch (ty) {
+                .function => |func| {
+                    if (func.param_types.len <= 16) {
+                        var key = FnSigKey{
+                            .param_count = @intCast(func.param_types.len),
+                            .return_type = func.return_type,
+                        };
+                        for (func.param_types, 0..) |p, i| key.params[i] = p;
+                        emitter.fn_type_cache.put(key, tid) catch {};
+                    }
+                },
+                .tuple => |tup| {
+                    if (tup.elements.len <= 16) {
+                        var key = TupleSigKey{
+                            .elem_count = @intCast(tup.elements.len),
+                        };
+                        for (tup.elements, 0..) |e, i| key.elements[i] = e;
+                        emitter.tuple_type_cache.put(key, tid) catch {};
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return emitter;
     }
 
     pub fn deinit(self: *CEmitter) void {
@@ -128,6 +177,8 @@ pub const CEmitter = struct {
         self.local_types.deinit();
         self.hoisted_lambdas.deinit(self.allocator);
         self.test_names.deinit(self.allocator);
+        self.fn_type_cache.deinit();
+        self.tuple_type_cache.deinit();
         self.output.deinit(self.allocator);
     }
 
@@ -3436,70 +3487,34 @@ pub const CEmitter = struct {
                 return .err;
             },
             .lambda => |lam| {
-                // infer param types and return type, find matching function type
-                var param_ids: [16]TypeId = undefined;
-                if (lam.params.len > param_ids.len) return .err;
+                // infer param types and return type, look up in cache
+                if (lam.params.len > 16) return .err;
+                var key = FnSigKey{
+                    .param_count = @intCast(lam.params.len),
+                    .return_type = switch (lam.body) {
+                        .expr => |body_expr| self.inferExprType(body_expr),
+                        .block => .void,
+                    },
+                };
                 for (lam.params, 0..) |param, i| {
                     if (param.type_expr) |te| {
-                        param_ids[i] = self.resolveTypeExprToId(te);
+                        key.params[i] = self.resolveTypeExprToId(te);
                     } else {
                         return .err;
                     }
                 }
-                const ret_type: TypeId = switch (lam.body) {
-                    .expr => |body_expr| self.inferExprType(body_expr),
-                    .block => .void,
-                };
-                const resolved_params = param_ids[0..lam.params.len];
-
-                // scan type table for matching function type
-                const items = self.type_table.types.items;
-                for (items, 0..) |ty, idx| {
-                    switch (ty) {
-                        .function => |func| {
-                            if (func.return_type == ret_type and func.param_types.len == resolved_params.len) {
-                                var match = true;
-                                for (func.param_types, resolved_params) |a, b| {
-                                    if (a != b) {
-                                        match = false;
-                                        break;
-                                    }
-                                }
-                                if (match) return TypeId.fromIndex(@intCast(idx));
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                return .err;
+                return self.fn_type_cache.get(key) orelse .err;
             },
             .tuple => |elems| {
-                // infer element types and scan type table for matching tuple
-                var elem_ids: [16]TypeId = undefined;
-                if (elems.len > elem_ids.len) return .err;
+                // infer element types and look up in cache
+                if (elems.len > 16) return .err;
+                var key = TupleSigKey{
+                    .elem_count = @intCast(elems.len),
+                };
                 for (elems, 0..) |elem, i| {
-                    elem_ids[i] = self.inferExprType(elem);
+                    key.elements[i] = self.inferExprType(elem);
                 }
-                const resolved = elem_ids[0..elems.len];
-                const items = self.type_table.types.items;
-                for (items, 0..) |ty, idx| {
-                    switch (ty) {
-                        .tuple => |tup| {
-                            if (tup.elements.len == resolved.len) {
-                                var match = true;
-                                for (tup.elements, resolved) |a, b| {
-                                    if (a != b) {
-                                        match = false;
-                                        break;
-                                    }
-                                }
-                                if (match) return TypeId.fromIndex(@intCast(idx));
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                return .err;
+                return self.tuple_type_cache.get(key) orelse .err;
             },
             else => .err,
         };
