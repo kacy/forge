@@ -166,6 +166,10 @@ pub fn tt_lookup(name: String) -> Int:
         return tt_names[name]
     return -1
 
+# get the number of types in the table
+pub fn tt_count() -> Int:
+    return tt_types.len()
+
 # get type info by id
 pub fn tt_get(tid: Int) -> TypeInfo:
     return tt_types[tid]

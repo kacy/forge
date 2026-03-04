@@ -43,15 +43,17 @@ fn c_warning(code: String, message: String):
 # checker state
 # ---------------------------------------------------------------
 
-mut c_scope := -1
-mut c_method_types: Map[String, Int] := {}
-mut c_method_pub: Map[String, Bool] := {}
+pub mut c_scope := -1
+pub mut c_method_types: Map[String, Int] := {}
+pub mut c_method_pub: Map[String, Bool] := {}
 # generic declarations: name -> node index in AST
-mut c_generic_decls: Map[String, Int] := {}
+pub mut c_generic_decls: Map[String, Int] := {}
 # interface declarations: name -> 1 (just existence tracking)
 mut c_interface_decls: Map[String, Int] := {}
 # impl set: "Type\tInterface" -> 1
 mut c_impl_set: Map[String, Int] := {}
+# expression type cache — populated by c_check_expr, queried by codegen
+pub mut c_expr_cache: Map[Int, Int] := {}
 
 # ---------------------------------------------------------------
 # initialization
@@ -66,6 +68,7 @@ pub fn c_init():
     c_generic_decls = {}
     c_interface_decls = {}
     c_impl_set = {}
+    c_expr_cache = {}
     c_scope = sc_new(-1)
     c_register_builtins()
 
@@ -1016,6 +1019,17 @@ fn c_check_for_stmt(node: Node, scope_id: Int):
 # ---------------------------------------------------------------
 
 pub fn c_check_expr(node_idx: Int, scope_id: Int) -> Int:
+    result := c_check_expr_impl(node_idx, scope_id)
+    c_expr_cache.insert(node_idx, result)
+    return result
+
+# look up cached expression type (returns TID_ERR if not found)
+pub fn c_get_expr_type(node_idx: Int) -> Int:
+    if c_expr_cache.contains_key(node_idx):
+        return c_expr_cache[node_idx]
+    return TID_ERR
+
+fn c_check_expr_impl(node_idx: Int, scope_id: Int) -> Int:
     node := get_node(node_idx)
     if node.kind == "int_lit":
         return TID_INT
