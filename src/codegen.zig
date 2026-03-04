@@ -885,13 +885,8 @@ pub const CEmitter = struct {
 
         // look up in type table — the checker must have registered this name
         // for it to be valid. return the type table key for stable lifetime.
-        if (self.type_table.lookup(lookup)) |_| {
-            var it = self.type_table.name_map.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*, lookup)) {
-                    return entry.key_ptr.*;
-                }
-            }
+        if (self.type_table.name_map.getKeyPtr(lookup)) |key_ptr| {
+            return key_ptr.*;
         }
         return null;
     }
