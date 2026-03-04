@@ -3749,6 +3749,134 @@ pub fn g_emit_module(root_idx: Int):
     if g_test_mode:
         g_emit_test_runner_main()
 
+# emit C for multiple module roots (multi-module compilation).
+# roots should be in dependency order — imported modules first, main last.
+pub fn g_emit_modules(roots: List[Int]):
+    main_root := roots[roots.len() - 1]
+    g_root_idx = main_root
+
+    # pre-scan all modules for generic function instantiations
+    for root in roots:
+        g_collect_generic_fn_instances(root)
+
+    g_emit_preamble()
+
+    # pass 1: struct definitions from all modules
+    for root in roots:
+        r := get_node(root)
+        for child in r.children:
+            mut node := get_node(child)
+            if node.kind == "pub":
+                node = get_node(node.children[0])
+            if node.kind == "struct_decl":
+                g_emit_struct_def(child)
+
+    # pass 1b: instantiated generic structs from all modules
+    for root in roots:
+        g_emit_instantiated_structs(root)
+
+    # pass 2: enum definitions from all modules
+    for root in roots:
+        r := get_node(root)
+        for child in r.children:
+            mut node := get_node(child)
+            if node.kind == "pub":
+                node = get_node(node.children[0])
+            if node.kind == "enum_decl":
+                g_emit_enum_def(child)
+
+    # pass 2b: result/optional/tuple typedefs (once, covers all modules)
+    g_emit_result_typedefs()
+    g_emit_optional_typedefs()
+    g_emit_tuple_typedefs()
+
+    # pass 2c: builtin helpers (once)
+    g_emit_builtin_helpers()
+
+    # pass 3: function forward declarations from all modules
+    for root in roots:
+        is_import := root != main_root
+        r := get_node(root)
+        for child in r.children:
+            mut node := get_node(child)
+            mut decl_idx := child
+            if node.kind == "pub":
+                decl_idx = node.children[0]
+                node = get_node(decl_idx)
+            if node.kind == "fn_decl":
+                g_emit_fn_forward_decl(decl_idx, is_import)
+
+    # pass 3b: method forward declarations from all modules
+    for root in roots:
+        r := get_node(root)
+        for child in r.children:
+            mut node := get_node(child)
+            mut decl_idx := child
+            if node.kind == "pub":
+                decl_idx = node.children[0]
+                node = get_node(decl_idx)
+            if node.kind == "impl_decl":
+                g_emit_impl_forward_decls(decl_idx)
+
+    # pass 3c: instantiated generic function forward declarations
+    g_emit_instantiated_fn_forward_decls()
+    g_write("\n")
+
+    # pass 3d: global bindings from all modules
+    for root in roots:
+        g_emit_global_bindings(root)
+
+    # mark position for lambda forward declarations
+    g_lambda_fwd_pos = g_buf.len()
+
+    # pass 4: function definitions from all modules
+    for root in roots:
+        is_import := root != main_root
+        r := get_node(root)
+        for child in r.children:
+            mut node := get_node(child)
+            mut decl_idx := child
+            if node.kind == "pub":
+                decl_idx = node.children[0]
+                node = get_node(decl_idx)
+            if node.kind == "fn_decl":
+                g_emit_fn_def(decl_idx, is_import)
+
+    # pass 5: method definitions from all modules
+    for root in roots:
+        r := get_node(root)
+        for child in r.children:
+            mut node := get_node(child)
+            mut decl_idx := child
+            if node.kind == "pub":
+                decl_idx = node.children[0]
+                node = get_node(decl_idx)
+            if node.kind == "impl_decl":
+                g_emit_impl_method_defs(decl_idx)
+
+    # pass 6: instantiated generic function definitions
+    for root in roots:
+        g_emit_instantiated_fns_from_root(root)
+
+    # pass 6b: test definitions (main module only)
+    if g_test_mode:
+        g_write("int __current_test_failed = 0;\n\n")
+        r := get_node(main_root)
+        for child in r.children:
+            mut node := get_node(child)
+            if node.kind == "test_decl":
+                g_emit_test_def(child)
+
+    # pass 7: hoisted lambda functions
+    if g_lambda_indices.len() > 0:
+        g_build_lambda_fwd_decls()
+        g_emit_hoisted_lambdas()
+        g_insert_lambda_fwd_decls()
+
+    # pass 8: test runner main
+    if g_test_mode:
+        g_emit_test_runner_main()
+
 fn g_insert_lambda_fwd_decls():
     if g_lambda_fwd_buf.len() == 0:
         return
