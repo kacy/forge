@@ -54,9 +54,13 @@ fn find_imports(root_idx: Int) -> List[String]:
             imports.push(mod_path)
     return imports
 
+# global visited list for diamond import dedup.
+# must be global because lists are passed by copy in forge.
+mut cm_visited: List[String] := []
+
 # resolve imports recursively via DFS.
 # returns module roots in dependency order (leaves first).
-fn resolve_imports(root_idx: Int, source_path: String, mut visited: List[String]) -> List[Int]!:
+fn resolve_imports(root_idx: Int, source_path: String) -> List[Int]!:
     mut roots: List[Int] := []
     dir := get_directory(source_path)
     imports := find_imports(root_idx)
@@ -69,19 +73,19 @@ fn resolve_imports(root_idx: Int, source_path: String, mut visited: List[String]
             file_path = dir + "/" + mod_path + ".fg"
         # dedup — skip if already visited
         mut already := false
-        for v in visited:
+        for v in cm_visited:
             if v == file_path:
                 already = true
                 break
         if already:
             continue
-        visited.push(file_path)
+        cm_visited.push(file_path)
         # read, lex, parse the imported module
         content := read_file(file_path)!
         tokens := lex_all(content)
         mod_root := parse(tokens)
         # recurse into this module's imports
-        sub_roots := resolve_imports(mod_root, file_path, visited)!
+        sub_roots := resolve_imports(mod_root, file_path)!
         for sr in sub_roots:
             roots.push(sr)
         roots.push(mod_root)
@@ -99,8 +103,8 @@ fn codegen_and_print() -> String!:
     root := parse(tokens)
 
     # resolve imports recursively
-    mut visited: List[String] := [path]
-    import_roots := resolve_imports(root, path, visited)!
+    cm_visited.push(path)
+    import_roots := resolve_imports(root, path)!
 
     # check all modules: imports first, then main
     c_init()

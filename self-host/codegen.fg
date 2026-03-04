@@ -3653,10 +3653,12 @@ pub fn g_emit_module(root_idx: Int):
     # pass 1: struct definitions
     for child in root.children:
         mut node := get_node(child)
+        mut decl_idx := child
         if node.kind == "pub":
-            node = get_node(node.children[0])
+            decl_idx = node.children[0]
+            node = get_node(decl_idx)
         if node.kind == "struct_decl":
-            g_emit_struct_def(child)
+            g_emit_struct_def(decl_idx)
 
     # pass 1b: instantiated generic structs
     g_emit_instantiated_structs(root_idx)
@@ -3664,10 +3666,12 @@ pub fn g_emit_module(root_idx: Int):
     # pass 2: enum definitions
     for child in root.children:
         mut node := get_node(child)
+        mut decl_idx := child
         if node.kind == "pub":
-            node = get_node(node.children[0])
+            decl_idx = node.children[0]
+            node = get_node(decl_idx)
         if node.kind == "enum_decl":
-            g_emit_enum_def(child)
+            g_emit_enum_def(decl_idx)
 
     # pass 2b: result/optional/tuple typedefs
     g_emit_result_typedefs()
@@ -3766,10 +3770,12 @@ pub fn g_emit_modules(roots: List[Int]):
         r := get_node(root)
         for child in r.children:
             mut node := get_node(child)
+            mut decl_idx := child
             if node.kind == "pub":
-                node = get_node(node.children[0])
+                decl_idx = node.children[0]
+                node = get_node(decl_idx)
             if node.kind == "struct_decl":
-                g_emit_struct_def(child)
+                g_emit_struct_def(decl_idx)
 
     # pass 1b: instantiated generic structs from all modules
     for root in roots:
@@ -3780,10 +3786,12 @@ pub fn g_emit_modules(roots: List[Int]):
         r := get_node(root)
         for child in r.children:
             mut node := get_node(child)
+            mut decl_idx := child
             if node.kind == "pub":
-                node = get_node(node.children[0])
+                decl_idx = node.children[0]
+                node = get_node(decl_idx)
             if node.kind == "enum_decl":
-                g_emit_enum_def(child)
+                g_emit_enum_def(decl_idx)
 
     # pass 2b: result/optional/tuple typedefs (once, covers all modules)
     g_emit_result_typedefs()
