@@ -2381,6 +2381,9 @@ pub const Checker = struct {
                 .set => |s| {
                     if (self.checkSetMethod(mc, location, scope, s.element)) |tid| return tid;
                 },
+                .@"struct" => |st| {
+                    if (self.checkSyncMethod(mc, location, scope, st.name)) |tid| return tid;
+                },
                 else => {},
             }
         }
@@ -2681,6 +2684,23 @@ pub const Checker = struct {
         }
         if (std.mem.eql(u8, method, "remove")) {
             return self.checkOneTypedArg(mc, location, scope, "Set.remove", elem_type, .void);
+        }
+        return null;
+    }
+
+    /// check built-in methods on sync primitive types (Mutex, WaitGroup, Semaphore).
+    /// returns null if the receiver isn't a sync type or the method isn't recognized.
+    fn checkSyncMethod(self: *Checker, mc: ast.MethodCallExpr, location: Location, scope: *const Scope, type_name: []const u8) ?TypeId {
+        if (std.mem.eql(u8, type_name, "Mutex")) {
+            if (std.mem.eql(u8, mc.method, "lock")) return self.checkNoArgs(mc, location, "Mutex.lock", .void);
+            if (std.mem.eql(u8, mc.method, "unlock")) return self.checkNoArgs(mc, location, "Mutex.unlock", .void);
+        } else if (std.mem.eql(u8, type_name, "WaitGroup")) {
+            if (std.mem.eql(u8, mc.method, "add")) return self.checkOneTypedArg(mc, location, scope, "WaitGroup.add", .int, .void);
+            if (std.mem.eql(u8, mc.method, "done")) return self.checkNoArgs(mc, location, "WaitGroup.done", .void);
+            if (std.mem.eql(u8, mc.method, "wait")) return self.checkNoArgs(mc, location, "WaitGroup.wait", .void);
+        } else if (std.mem.eql(u8, type_name, "Semaphore")) {
+            if (std.mem.eql(u8, mc.method, "acquire")) return self.checkNoArgs(mc, location, "Semaphore.acquire", .void);
+            if (std.mem.eql(u8, mc.method, "release")) return self.checkNoArgs(mc, location, "Semaphore.release", .void);
         }
         return null;
     }

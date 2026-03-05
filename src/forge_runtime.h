@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <time.h>
+#include <pthread.h>
 
 // ---------------------------------------------------------------
 // closure type (function pointer + captured environment)
@@ -1151,6 +1152,104 @@ static inline forge_string_t forge_input(void) {
     memcpy(copy, buf, (size_t)len);
     copy[len] = '\0';
     return (forge_string_t){ .data = copy, .len = len };
+}
+
+// ---------------------------------------------------------------
+// concurrency — task header and sync primitives
+// ---------------------------------------------------------------
+
+// task header — shared by all Task[T] instantiations. each spawned task
+// gets a per-type struct containing this header plus the return value.
+typedef struct {
+    pthread_t thread;
+} forge_task_header_t;
+
+// Mutex — simple pthread mutex wrapper
+typedef struct {
+    pthread_mutex_t __inner;
+} forge_mutex_t;
+
+static inline forge_mutex_t forge_mutex_create(void) {
+    forge_mutex_t m;
+    pthread_mutex_init(&m.__inner, NULL);
+    return m;
+}
+
+static inline void forge_mutex_lock(forge_mutex_t *m) {
+    pthread_mutex_lock(&m->__inner);
+}
+
+static inline void forge_mutex_unlock(forge_mutex_t *m) {
+    pthread_mutex_unlock(&m->__inner);
+}
+
+// WaitGroup — counter with condition variable for waiting on completion
+typedef struct {
+    int64_t __count;
+    pthread_mutex_t __mutex;
+    pthread_cond_t __cond;
+} forge_waitgroup_t;
+
+static inline forge_waitgroup_t forge_waitgroup_create(void) {
+    forge_waitgroup_t wg;
+    wg.__count = 0;
+    pthread_mutex_init(&wg.__mutex, NULL);
+    pthread_cond_init(&wg.__cond, NULL);
+    return wg;
+}
+
+static inline void forge_waitgroup_add(forge_waitgroup_t *wg, int64_t n) {
+    pthread_mutex_lock(&wg->__mutex);
+    wg->__count += n;
+    pthread_mutex_unlock(&wg->__mutex);
+}
+
+static inline void forge_waitgroup_done(forge_waitgroup_t *wg) {
+    pthread_mutex_lock(&wg->__mutex);
+    wg->__count--;
+    if (wg->__count <= 0) {
+        pthread_cond_broadcast(&wg->__cond);
+    }
+    pthread_mutex_unlock(&wg->__mutex);
+}
+
+static inline void forge_waitgroup_wait(forge_waitgroup_t *wg) {
+    pthread_mutex_lock(&wg->__mutex);
+    while (wg->__count > 0) {
+        pthread_cond_wait(&wg->__cond, &wg->__mutex);
+    }
+    pthread_mutex_unlock(&wg->__mutex);
+}
+
+// Semaphore — counting semaphore with condition variable
+typedef struct {
+    int64_t __permits;
+    pthread_mutex_t __mutex;
+    pthread_cond_t __cond;
+} forge_semaphore_t;
+
+static inline forge_semaphore_t forge_semaphore_create(int64_t permits) {
+    forge_semaphore_t s;
+    s.__permits = permits;
+    pthread_mutex_init(&s.__mutex, NULL);
+    pthread_cond_init(&s.__cond, NULL);
+    return s;
+}
+
+static inline void forge_semaphore_acquire(forge_semaphore_t *s) {
+    pthread_mutex_lock(&s->__mutex);
+    while (s->__permits <= 0) {
+        pthread_cond_wait(&s->__cond, &s->__mutex);
+    }
+    s->__permits--;
+    pthread_mutex_unlock(&s->__mutex);
+}
+
+static inline void forge_semaphore_release(forge_semaphore_t *s) {
+    pthread_mutex_lock(&s->__mutex);
+    s->__permits++;
+    pthread_cond_signal(&s->__cond);
+    pthread_mutex_unlock(&s->__mutex);
 }
 
 #endif // FORGE_RUNTIME_H
