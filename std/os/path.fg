@@ -1,4 +1,4 @@
-# std.path — file path manipulation (pure string operations)
+# std.os.path — file path manipulation (pure string operations)
 
 pub fn join(a: String, b: String) -> String:
     if a.len() == 0:

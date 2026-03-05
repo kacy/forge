@@ -1,5 +1,5 @@
 # url parsing and percent-encoding
-from std.url import parse, scheme, host, port, path, query, fragment, to_string, encode, decode
+from std.net.url import parse, scheme, host, port, path, query, fragment, to_string, encode, decode
 
 fn main():
     # parse a full URL

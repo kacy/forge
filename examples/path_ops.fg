@@ -1,5 +1,5 @@
 # path manipulation examples
-from std.path import join, dir, base, ext, stem
+from std.os.path import join, dir, base, ext, stem
 
 fn main():
     # join

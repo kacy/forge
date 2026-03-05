@@ -58,6 +58,21 @@ runtime/
 bootstrap/           zig bootstrap compiler (archived, for reference)
   main.zig, lexer.zig, parser.zig, checker.zig, codegen.zig, etc.
 
+std/                 standard library (native forge modules)
+  encoding.fg        base64/hex encoding
+  fmt.fg             string formatting
+  fs.fg              file I/O
+  hash.fg            SHA-256, FNV-1a
+  json.fg            JSON parse/encode
+  log.fg             structured logging
+  math.fg            math builtins
+  toml.fg            TOML parse/encode
+  net/tcp.fg         TCP connect/listen/accept/read/write/close
+  net/dns.fg         DNS resolution
+  net/url.fg         URL parsing and percent-encoding
+  os/path.fg         file path manipulation
+  os/process.fg      child process management
+
 examples/            40+ .fg programs — all compile to native binaries
 docs/grammar.ebnf    complete EBNF for the language
 docs/errors.md       error code reference (E0xx–E3xx)

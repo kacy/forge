@@ -1,4 +1,4 @@
-# std.url — URL parsing and percent-encoding (native forge)
+# std.net.url — URL parsing and percent-encoding (native forge)
 #
 # uses opaque Int handles into a node pool.
 # parse returns a handle; accessor functions extract components.
