@@ -1,4 +1,4 @@
-# std.process — child process management
+# std.os.process — child process management
 #
 # uses opaque Int handles into a C-side process pool.
 # each process has stdin/stdout/stderr pipe access.

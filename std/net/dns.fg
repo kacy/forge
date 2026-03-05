@@ -1,0 +1,5 @@
+# std.net.dns — DNS resolution
+
+# resolve a hostname to an IP address string.
+pub fn resolve(hostname: String) -> String!:
+    return dns_resolve(hostname)

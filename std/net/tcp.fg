@@ -1,4 +1,4 @@
-# std.net — TCP networking and DNS resolution
+# std.net.tcp — TCP networking
 #
 # all I/O is blocking. use spawn for concurrency.
 # connections are represented as plain Int file descriptors.
@@ -26,7 +26,3 @@ pub fn write(fd: Int, data: String) -> Int!:
 # close a connection.
 pub fn close(fd: Int):
     tcp_close(fd)
-
-# resolve a hostname to an IP address string.
-pub fn resolve(hostname: String) -> String!:
-    return dns_resolve(hostname)
