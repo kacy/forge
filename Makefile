@@ -18,7 +18,7 @@ clean:
 	rm -rf .zig-cache zig-out
 
 fmt:
-	zig fmt src/
+	zig fmt bootstrap/
 
 check: build
 	@for f in examples/*.fg; do \
