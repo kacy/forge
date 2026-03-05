@@ -106,10 +106,7 @@ run-examples-self: self-host
 	@fail=0; \
 	for f in examples/expected/*.txt; do \
 		name=$$(basename "$$f" .txt); \
-		if [ "$$name" = "concurrency" ] || [ "$$name" = "methods" ]; then \
-			echo "skip $$name (known self-host limitation)"; \
-			continue; \
-		fi; \
+		\
 		actual=$$(timeout 15 ./self-host/forge_main run "examples/$$name.fg" 2>/dev/null); \
 		expected=$$(cat "$$f"); \
 		if [ "$$actual" = "$$expected" ]; then \
