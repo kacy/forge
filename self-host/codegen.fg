@@ -988,6 +988,15 @@ fn g_emit_builtin_helpers():
     g_write("    r.err = FORGE_STRING_LIT(\"failed to write file\"); return r;\n")
     g_write(RB + "\n")
 
+    # append_file — same pattern as write_file (no output value, just success/fail)
+    g_write("static forge_result_bool forge_append_file(forge_string_t path, forge_string_t data) " + LB + "\n")
+    g_write("    if (forge_append_file_impl(path.data, path.len, data.data, data.len)) " + LB + "\n")
+    g_write("        forge_result_bool r; r.is_ok = true; r.ok = true; return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_bool r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to append to file\"); return r;\n")
+    g_write(RB + "\n")
+
     # result wrappers — all follow the same template: call _impl, wrap in result
     g_emit_result_helper("read_file", "forge_string_t", "forge_read_file_impl(path.data, path.len, &__v)", "forge_string_t path", "failed to read file")
     g_emit_result_helper("exec_output", "forge_string_t", "forge_exec_output_impl(cmd, &__v)", "forge_string_t cmd", "failed to execute command")
@@ -1486,6 +1495,14 @@ fn g_emit_return_stmt(node_idx: Int):
     g_write_indent()
     if node.children.len() > 0:
         if g_is_result_type(g_current_fn_return):
+            # check if the expression already returns a result type —
+            # if so, return it directly without wrapping
+            val_type := c_get_expr_type(node.children[0])
+            if g_is_result_type(val_type):
+                g_write("return ")
+                g_emit_expr(node.children[0])
+                g_write(";\n")
+                return
             ret_c := g_c_type_string(g_current_fn_return)
             g_write("return (")
             g_write(ret_c)
