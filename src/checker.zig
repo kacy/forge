@@ -191,345 +191,139 @@ pub const Checker = struct {
     }
 
     fn registerBuiltinFunctions(self: *Checker) !void {
-        // print(String) -> Void
-        const print_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = .void,
-        } });
-        try self.module_scope.define("print", .{ .type_id = print_type, .is_mut = false });
-
         // pre-register List[String] — used by String.split() and args()
         _ = self.internCollectionType("List", &.{.string}, .{ .list = .{ .element = .string } });
-
-        // parse_int(String) -> Int!
-        const int_result = try self.type_table.addType(.{ .result = .{
-            .ok_type = .int,
-            .err_type = .err,
-        } });
-        const parse_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = int_result,
-        } });
-        try self.module_scope.define("parse_int", .{ .type_id = parse_int_type, .is_mut = false });
-
-        // parse_float(String) -> Float!
-        const float_result = try self.type_table.addType(.{ .result = .{
-            .ok_type = .float,
-            .err_type = .err,
-        } });
-        const parse_float_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = float_result,
-        } });
-        try self.module_scope.define("parse_float", .{ .type_id = parse_float_type, .is_mut = false });
-
-        // read_file(String) -> String!
-        const str_result = try self.type_table.addType(.{ .result = .{
-            .ok_type = .string,
-            .err_type = .err,
-        } });
-        const read_file_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = str_result,
-        } });
-        try self.module_scope.define("read_file", .{ .type_id = read_file_type, .is_mut = false });
-
-        // write_file(String, String) -> Bool!
-        const bool_result = try self.type_table.addType(.{ .result = .{
-            .ok_type = .bool,
-            .err_type = .err,
-        } });
-        const write_file_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .string, .string },
-            .return_type = bool_result,
-        } });
-        try self.module_scope.define("write_file", .{ .type_id = write_file_type, .is_mut = false });
-
-        // args() -> List[String]
         const list_string = self.type_table.lookup("List[String]") orelse return error.OutOfMemory;
-        const args_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{},
-            .return_type = list_string,
-        } });
-        try self.module_scope.define("args", .{ .type_id = args_type, .is_mut = false });
 
-        // env(String) -> String?
+        // result types used by multiple builtins
+        const int_result = try self.type_table.addType(.{ .result = .{ .ok_type = .int, .err_type = .err } });
+        const float_result = try self.type_table.addType(.{ .result = .{ .ok_type = .float, .err_type = .err } });
+        const str_result = try self.type_table.addType(.{ .result = .{ .ok_type = .string, .err_type = .err } });
+        const bool_result = try self.type_table.addType(.{ .result = .{ .ok_type = .bool, .err_type = .err } });
         const opt_string = try self.type_table.addType(.{ .optional = .{ .inner = .string } });
-        const env_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = opt_string,
-        } });
-        try self.module_scope.define("env", .{ .type_id = env_type, .is_mut = false });
 
-        // chr(Int) -> String
-        const chr_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .string,
-        } });
-        try self.module_scope.define("chr", .{ .type_id = chr_type, .is_mut = false });
+        // --- shared function signatures, one type per group ---
 
-        // exit(Int) -> Void
-        const exit_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .void,
-        } });
-        try self.module_scope.define("exit", .{ .type_id = exit_type, .is_mut = false });
+        // () -> Void (none currently, but kept for consistency)
+        // () -> Int
+        const void_to_int = try self.addFnType(&.{}, .int);
+        for ([_][]const u8{ "time", "json_new_null", "json_new_array", "json_new_object" }) |n|
+            try self.registerBuiltin(n, void_to_int);
+        // () -> Float
+        try self.registerBuiltin("random_float", try self.addFnType(&.{}, .float));
+        // () -> String
+        try self.registerBuiltin("input", try self.addFnType(&.{}, .string));
+        // () -> List[String]
+        try self.registerBuiltin("args", try self.addFnType(&.{}, list_string));
 
-        // assert(Bool) -> Void
-        const assert_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.bool},
-            .return_type = .void,
-        } });
-        try self.module_scope.define("assert", .{ .type_id = assert_type, .is_mut = false });
+        // (Bool) -> Void
+        try self.registerBuiltin("assert", try self.addFnType(&.{.bool}, .void));
+        // (Bool) -> Int
+        try self.registerBuiltin("json_new_bool", try self.addFnType(&.{.bool}, .int));
 
-        // assert_eq and assert_ne are special-cased in checkCall to accept
-        // any two args of the same type. registered here as (Int, Int) -> Void
+        // (Int) -> Void
+        const int_to_void = try self.addFnType(&.{.int}, .void);
+        for ([_][]const u8{ "exit", "sleep" }) |n|
+            try self.registerBuiltin(n, int_to_void);
+        // (Int) -> Int
+        const int_to_int = try self.addFnType(&.{.int}, .int);
+        for ([_][]const u8{ "json_get_int", "json_array_len", "json_new_int" }) |n|
+            try self.registerBuiltin(n, int_to_int);
+        // (Int) -> Float
+        try self.registerBuiltin("json_get_float", try self.addFnType(&.{.int}, .float));
+        // (Int) -> Bool
+        try self.registerBuiltin("json_get_bool", try self.addFnType(&.{.int}, .bool));
+        // (Int) -> String
+        const int_to_str = try self.addFnType(&.{.int}, .string);
+        for ([_][]const u8{ "chr", "fmt_hex", "fmt_oct", "fmt_bin", "json_type", "json_get_string", "json_encode" }) |n|
+            try self.registerBuiltin(n, int_to_str);
+        // (Int) -> List[String]
+        try self.registerBuiltin("json_object_keys", try self.addFnType(&.{.int}, list_string));
+
+        // (Int, Int) -> Void
+        const two_int_to_void = try self.addFnType(&.{ .int, .int }, .void);
+        try self.registerBuiltin("json_array_push", two_int_to_void);
+        // assert_eq/ne are special-cased in checkFnCall to accept any two
+        // args of the same type. registered here as (Int, Int) -> Void
         // as a placeholder — the actual type checking happens in checkFnCall.
-        const assert_eq_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .int },
-            .return_type = .void,
-        } });
-        try self.module_scope.define("assert_eq", .{ .type_id = assert_eq_type, .is_mut = false });
-        try self.module_scope.define("assert_ne", .{ .type_id = assert_eq_type, .is_mut = false });
+        for ([_][]const u8{ "assert_eq", "assert_ne" }) |n|
+            try self.registerBuiltin(n, two_int_to_void);
+        // (Int, Int) -> Int
+        const two_int_to_int = try self.addFnType(&.{ .int, .int }, .int);
+        for ([_][]const u8{ "random_int", "json_array_get" }) |n|
+            try self.registerBuiltin(n, two_int_to_int);
 
-        // exec(String) -> Int
-        const exec_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("exec", .{ .type_id = exec_type, .is_mut = false });
+        // (Int, String) -> Int
+        try self.registerBuiltin("json_object_get", try self.addFnType(&.{ .int, .string }, .int));
+        // (Int, String) -> Bool
+        try self.registerBuiltin("json_object_has", try self.addFnType(&.{ .int, .string }, .bool));
+        // (Int, String, Int) -> Void
+        try self.registerBuiltin("json_object_set", try self.addFnType(&.{ .int, .string, .int }, .void));
 
-        // time() -> Int
-        const time_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("time", .{ .type_id = time_type, .is_mut = false });
+        // (Float) -> Float
+        try self.registerBuiltin("math_sqrt", try self.addFnType(&.{.float}, .float));
+        // (Float) -> Int
+        const float_to_int = try self.addFnType(&.{.float}, .int);
+        for ([_][]const u8{ "math_floor", "math_ceil", "math_round", "json_new_float" }) |n|
+            try self.registerBuiltin(n, float_to_int);
+        // (Float, Float) -> Float
+        try self.registerBuiltin("math_pow", try self.addFnType(&.{ .float, .float }, .float));
+        // (Float, Int) -> String
+        try self.registerBuiltin("fmt_float", try self.addFnType(&.{ .float, .int }, .string));
 
-        // sleep(Int) -> Void
-        const sleep_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .void,
-        } });
-        try self.module_scope.define("sleep", .{ .type_id = sleep_type, .is_mut = false });
+        // (String) -> Void
+        const str_to_void = try self.addFnType(&.{.string}, .void);
+        for ([_][]const u8{ "print", "log_info", "log_warn", "log_error", "log_debug" }) |n|
+            try self.registerBuiltin(n, str_to_void);
+        // (String) -> Int
+        const str_to_int = try self.addFnType(&.{.string}, .int);
+        for ([_][]const u8{ "exec", "json_parse", "json_new_string" }) |n|
+            try self.registerBuiltin(n, str_to_int);
+        // (String) -> Bool
+        const str_to_bool = try self.addFnType(&.{.string}, .bool);
+        for ([_][]const u8{ "file_exists", "dir_exists", "mkdir", "remove_file" }) |n|
+            try self.registerBuiltin(n, str_to_bool);
+        // (String) -> String
+        const str_to_str = try self.addFnType(&.{.string}, .string);
+        for ([_][]const u8{ "path_dir", "path_base", "path_ext", "path_stem" }) |n|
+            try self.registerBuiltin(n, str_to_str);
+        // (String) -> String?
+        try self.registerBuiltin("env", try self.addFnType(&.{.string}, opt_string));
+        // (String) -> List[String]
+        try self.registerBuiltin("list_dir", try self.addFnType(&.{.string}, list_string));
 
-        // random_int(Int, Int) -> Int
-        const random_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .int },
-            .return_type = .int,
-        } });
-        try self.module_scope.define("random_int", .{ .type_id = random_int_type, .is_mut = false });
+        // (String) -> Int!
+        try self.registerBuiltin("parse_int", try self.addFnType(&.{.string}, int_result));
+        // (String) -> Float!
+        try self.registerBuiltin("parse_float", try self.addFnType(&.{.string}, float_result));
+        // (String) -> String!
+        const str_to_str_result = try self.addFnType(&.{.string}, str_result);
+        for ([_][]const u8{ "read_file", "exec_output" }) |n|
+            try self.registerBuiltin(n, str_to_str_result);
 
-        // random_float() -> Float
-        const random_float_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{},
-            .return_type = .float,
-        } });
-        try self.module_scope.define("random_float", .{ .type_id = random_float_type, .is_mut = false });
-
-        // exec_output(String) -> String!
-        const exec_output_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = str_result,
-        } });
-        try self.module_scope.define("exec_output", .{ .type_id = exec_output_type, .is_mut = false });
-
-        // input() -> String
-        const input_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{},
-            .return_type = .string,
-        } });
-        try self.module_scope.define("input", .{ .type_id = input_type, .is_mut = false });
-
-        // path_join(String, String) -> String
-        const path_join_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .string, .string },
-            .return_type = .string,
-        } });
-        try self.module_scope.define("path_join", .{ .type_id = path_join_type, .is_mut = false });
-
-        // path_dir, path_base, path_ext, path_stem: (String) -> String
-        const path_str_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = .string,
-        } });
-        try self.module_scope.define("path_dir", .{ .type_id = path_str_type, .is_mut = false });
-        try self.module_scope.define("path_base", .{ .type_id = path_str_type, .is_mut = false });
-        try self.module_scope.define("path_ext", .{ .type_id = path_str_type, .is_mut = false });
-        try self.module_scope.define("path_stem", .{ .type_id = path_str_type, .is_mut = false });
-
-        // log_info, log_warn, log_error, log_debug: (String) -> Void
-        const log_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = .void,
-        } });
-        try self.module_scope.define("log_info", .{ .type_id = log_type, .is_mut = false });
-        try self.module_scope.define("log_warn", .{ .type_id = log_type, .is_mut = false });
-        try self.module_scope.define("log_error", .{ .type_id = log_type, .is_mut = false });
-        try self.module_scope.define("log_debug", .{ .type_id = log_type, .is_mut = false });
-
-        // math_pow(Float, Float) -> Float
-        const math_pow_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .float, .float },
-            .return_type = .float,
-        } });
-        try self.module_scope.define("math_pow", .{ .type_id = math_pow_type, .is_mut = false });
-
-        // math_sqrt(Float) -> Float
-        const math_sqrt_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.float},
-            .return_type = .float,
-        } });
-        try self.module_scope.define("math_sqrt", .{ .type_id = math_sqrt_type, .is_mut = false });
-
-        // math_floor, math_ceil, math_round: (Float) -> Int
-        const float_to_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.float},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("math_floor", .{ .type_id = float_to_int_type, .is_mut = false });
-        try self.module_scope.define("math_ceil", .{ .type_id = float_to_int_type, .is_mut = false });
-        try self.module_scope.define("math_round", .{ .type_id = float_to_int_type, .is_mut = false });
-
-        // file_exists(String) -> Bool, dir_exists(String) -> Bool
-        // mkdir(String) -> Bool, remove_file(String) -> Bool
-        const str_to_bool_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = .bool,
-        } });
-        try self.module_scope.define("file_exists", .{ .type_id = str_to_bool_type, .is_mut = false });
-        try self.module_scope.define("dir_exists", .{ .type_id = str_to_bool_type, .is_mut = false });
-        try self.module_scope.define("mkdir", .{ .type_id = str_to_bool_type, .is_mut = false });
-        try self.module_scope.define("remove_file", .{ .type_id = str_to_bool_type, .is_mut = false });
-
-        // rename_file(String, String) -> Bool
-        const two_str_to_bool_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .string, .string },
-            .return_type = .bool,
-        } });
-        try self.module_scope.define("rename_file", .{ .type_id = two_str_to_bool_type, .is_mut = false });
-
-        // append_file(String, String) -> Bool!
-        try self.module_scope.define("append_file", .{ .type_id = write_file_type, .is_mut = false });
-
-        // list_dir(String) -> List[String]
-        const list_dir_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = list_string,
-        } });
-        try self.module_scope.define("list_dir", .{ .type_id = list_dir_type, .is_mut = false });
-
-        // fmt_hex(Int) -> String, fmt_oct(Int) -> String, fmt_bin(Int) -> String
-        const int_to_str_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .string,
-        } });
-        try self.module_scope.define("fmt_hex", .{ .type_id = int_to_str_type, .is_mut = false });
-        try self.module_scope.define("fmt_oct", .{ .type_id = int_to_str_type, .is_mut = false });
-        try self.module_scope.define("fmt_bin", .{ .type_id = int_to_str_type, .is_mut = false });
-
-        // fmt_float(Float, Int) -> String
-        const fmt_float_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .float, .int },
-            .return_type = .string,
-        } });
-        try self.module_scope.define("fmt_float", .{ .type_id = fmt_float_type, .is_mut = false });
-
-        // json builtins — opaque handle-based API
-        // json_parse(String) -> Int
-        const str_to_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.string},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("json_parse", .{ .type_id = str_to_int_type, .is_mut = false });
-        // json_type(Int) -> String
-        try self.module_scope.define("json_type", .{ .type_id = int_to_str_type, .is_mut = false });
-        // json_get_bool(Int) -> Bool
-        const int_to_bool_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .bool,
-        } });
-        try self.module_scope.define("json_get_bool", .{ .type_id = int_to_bool_type, .is_mut = false });
-        // json_get_int(Int) -> Int
-        const int_to_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("json_get_int", .{ .type_id = int_to_int_type, .is_mut = false });
-        // json_get_float(Int) -> Float
-        const int_to_float_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = .float,
-        } });
-        try self.module_scope.define("json_get_float", .{ .type_id = int_to_float_type, .is_mut = false });
-        // json_get_string(Int) -> String (already have int_to_str_type)
-        try self.module_scope.define("json_get_string", .{ .type_id = int_to_str_type, .is_mut = false });
-        // json_array_len(Int) -> Int
-        try self.module_scope.define("json_array_len", .{ .type_id = int_to_int_type, .is_mut = false });
-        // json_array_get(Int, Int) -> Int
-        const two_int_to_int = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .int },
-            .return_type = .int,
-        } });
-        try self.module_scope.define("json_array_get", .{ .type_id = two_int_to_int, .is_mut = false });
-        // json_object_get(Int, String) -> Int
-        const int_str_to_int = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .string },
-            .return_type = .int,
-        } });
-        try self.module_scope.define("json_object_get", .{ .type_id = int_str_to_int, .is_mut = false });
-        // json_object_has(Int, String) -> Bool
-        const int_str_to_bool = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .string },
-            .return_type = .bool,
-        } });
-        try self.module_scope.define("json_object_has", .{ .type_id = int_str_to_bool, .is_mut = false });
-        // json_object_keys(Int) -> List[String]
-        const int_to_list_str = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.int},
-            .return_type = list_string,
-        } });
-        try self.module_scope.define("json_object_keys", .{ .type_id = int_to_list_str, .is_mut = false });
-        // json_encode(Int) -> String
-        try self.module_scope.define("json_encode", .{ .type_id = int_to_str_type, .is_mut = false });
-        // json constructor builtins
-        // json_new_null() -> Int, json_new_array() -> Int, json_new_object() -> Int
-        const void_to_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("json_new_null", .{ .type_id = void_to_int_type, .is_mut = false });
-        try self.module_scope.define("json_new_array", .{ .type_id = void_to_int_type, .is_mut = false });
-        try self.module_scope.define("json_new_object", .{ .type_id = void_to_int_type, .is_mut = false });
-        // json_new_bool(Bool) -> Int
-        const bool_to_int_type = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{.bool},
-            .return_type = .int,
-        } });
-        try self.module_scope.define("json_new_bool", .{ .type_id = bool_to_int_type, .is_mut = false });
-        // json_new_int(Int) -> Int
-        try self.module_scope.define("json_new_int", .{ .type_id = int_to_int_type, .is_mut = false });
-        // json_new_float(Float) -> Int — reuse float_to_int_type from math builtins
-        try self.module_scope.define("json_new_float", .{ .type_id = float_to_int_type, .is_mut = false });
-        // json_new_string(String) -> Int
-        try self.module_scope.define("json_new_string", .{ .type_id = str_to_int_type, .is_mut = false });
-        // json_array_push(Int, Int) -> Void
-        const two_int_to_void = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .int },
-            .return_type = .void,
-        } });
-        try self.module_scope.define("json_array_push", .{ .type_id = two_int_to_void, .is_mut = false });
-        // json_object_set(Int, String, Int) -> Void
-        const int_str_int_to_void = try self.type_table.addType(.{ .function = .{
-            .param_types = &.{ .int, .string, .int },
-            .return_type = .void,
-        } });
-        try self.module_scope.define("json_object_set", .{ .type_id = int_str_int_to_void, .is_mut = false });
+        // (String, String) -> String
+        try self.registerBuiltin("path_join", try self.addFnType(&.{ .string, .string }, .string));
+        // (String, String) -> Bool
+        try self.registerBuiltin("rename_file", try self.addFnType(&.{ .string, .string }, .bool));
+        // (String, String) -> Bool!
+        const two_str_to_bool_result = try self.addFnType(&.{ .string, .string }, bool_result);
+        for ([_][]const u8{ "write_file", "append_file" }) |n|
+            try self.registerBuiltin(n, two_str_to_bool_result);
 
         // sync primitives — opaque struct types with constructors
         try self.registerSyncType("Mutex", &.{});
         try self.registerSyncType("WaitGroup", &.{});
         try self.registerSyncType("Semaphore", &.{.int});
+    }
+
+    /// shorthand for creating a function type in the type table.
+    fn addFnType(self: *Checker, params: []const TypeId, ret: TypeId) !TypeId {
+        return self.type_table.addType(.{ .function = .{ .param_types = params, .return_type = ret } });
+    }
+
+    /// register a builtin function name with the given function type.
+    fn registerBuiltin(self: *Checker, name: []const u8, fn_type: TypeId) !void {
+        try self.module_scope.define(name, .{ .type_id = fn_type, .is_mut = false });
     }
 
     /// register an opaque struct type and a constructor function for it.
