@@ -221,10 +221,6 @@ fn c_register_builtins():
     c_def_builtin("remove_file", str_to_bool)
     # (String) -> String
     str_to_str := c_make_fn_type([TID_STRING], TID_STRING)
-    c_def_builtin("path_dir", str_to_str)
-    c_def_builtin("path_base", str_to_str)
-    c_def_builtin("path_ext", str_to_str)
-    c_def_builtin("path_stem", str_to_str)
     c_def_builtin("base64_encode", str_to_str)
     c_def_builtin("hex_encode", str_to_str)
     c_def_builtin("hash_sha256", str_to_str)
@@ -247,8 +243,6 @@ fn c_register_builtins():
     c_def_builtin("hex_decode", str_to_str_result)
     c_def_builtin("dns_resolve", str_to_str_result)
 
-    # (String, String) -> String
-    c_def_builtin("path_join", c_make_fn_type([TID_STRING, TID_STRING], TID_STRING))
     # (String, String) -> Bool
     c_def_builtin("rename_file", c_make_fn_type([TID_STRING, TID_STRING], TID_BOOL))
     # (String, String) -> Bool!

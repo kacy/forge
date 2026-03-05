@@ -299,7 +299,7 @@ pub const Checker = struct {
             try self.registerBuiltin(n, str_to_bool);
         // (String) -> String
         const str_to_str = try self.addFnType(&.{.string}, .string);
-        for ([_][]const u8{ "path_dir", "path_base", "path_ext", "path_stem", "base64_encode", "hex_encode", "hash_sha256", "percent_encode", "percent_decode" }) |n|
+        for ([_][]const u8{ "base64_encode", "hex_encode", "hash_sha256", "percent_encode", "percent_decode" }) |n|
             try self.registerBuiltin(n, str_to_str);
         // (String) -> String?
         try self.registerBuiltin("env", try self.addFnType(&.{.string}, opt_string));
@@ -315,8 +315,6 @@ pub const Checker = struct {
         for ([_][]const u8{ "read_file", "exec_output", "base64_decode", "hex_decode" }) |n|
             try self.registerBuiltin(n, str_to_str_result);
 
-        // (String, String) -> String
-        try self.registerBuiltin("path_join", try self.addFnType(&.{ .string, .string }, .string));
         // (String, String) -> Bool
         try self.registerBuiltin("rename_file", try self.addFnType(&.{ .string, .string }, .bool));
         // (String, String) -> Bool!
