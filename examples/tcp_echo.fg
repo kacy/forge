@@ -1,0 +1,35 @@
+# tcp echo — start a server, connect a client, echo a message
+
+fn server(port: Int) -> String!:
+    server_fd := tcp_listen("127.0.0.1", port)!
+    client_fd := tcp_accept(server_fd)!
+    msg := tcp_read(client_fd, 1024)!
+    tcp_write(client_fd, msg)!
+    tcp_close(client_fd)
+    tcp_close(server_fd)
+    return ""
+
+fn run() -> String!:
+    # dns resolve
+    ip := dns_resolve("localhost")!
+    print("resolved localhost: " + ip)
+
+    # start server in background
+    port := 19876
+    s := spawn server(port)
+
+    # small delay to let server bind
+    sleep(100)
+
+    # connect and exchange data
+    fd := tcp_connect("127.0.0.1", port)!
+    tcp_write(fd, "hello from forge")!
+    response := tcp_read(fd, 1024)!
+    print("echo response: " + response)
+    tcp_close(fd)
+
+    await s
+    return ""
+
+fn main():
+    run()

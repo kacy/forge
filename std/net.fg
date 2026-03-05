@@ -1,0 +1,32 @@
+# std.net — TCP networking and DNS resolution
+#
+# all I/O is blocking. use spawn for concurrency.
+# connections are represented as plain Int file descriptors.
+
+# connect to a TCP server. returns a file descriptor.
+pub fn connect(host: String, port: Int) -> Int!:
+    return tcp_connect(host, port)
+
+# start a TCP server listening on host:port. returns a server fd.
+pub fn listen(host: String, port: Int) -> Int!:
+    return tcp_listen(host, port)
+
+# accept a connection on a server fd. returns a client fd.
+pub fn accept(server_fd: Int) -> Int!:
+    return tcp_accept(server_fd)
+
+# read up to max_bytes from a connection.
+pub fn read(fd: Int, max_bytes: Int) -> String!:
+    return tcp_read(fd, max_bytes)
+
+# write data to a connection. returns bytes written.
+pub fn write(fd: Int, data: String) -> Int!:
+    return tcp_write(fd, data)
+
+# close a connection.
+pub fn close(fd: Int):
+    tcp_close(fd)
+
+# resolve a hostname to an IP address string.
+pub fn resolve(hostname: String) -> String!:
+    return dns_resolve(hostname)
