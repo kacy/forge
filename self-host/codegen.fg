@@ -2048,7 +2048,7 @@ fn g_is_forge_builtin(name: String) -> Bool:
         return true
     if name == "file_exists" or name == "dir_exists" or name == "mkdir" or name == "remove_file" or name == "rename_file" or name == "list_dir":
         return true
-    if name == "fmt_hex" or name == "fmt_oct" or name == "fmt_bin" or name == "fmt_float":
+    if name == "fmt_float":
         return true
     if name == "json_parse" or name == "json_type" or name == "json_encode":
         return true

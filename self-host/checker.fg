@@ -127,9 +127,6 @@ fn c_register_builtins():
     # (Int) -> String
     int_to_str := c_make_fn_type([TID_INT], TID_STRING)
     c_def_builtin("chr", int_to_str)
-    c_def_builtin("fmt_hex", int_to_str)
-    c_def_builtin("fmt_oct", int_to_str)
-    c_def_builtin("fmt_bin", int_to_str)
     c_def_builtin("json_type", int_to_str)
     c_def_builtin("json_get_string", int_to_str)
     c_def_builtin("json_encode", int_to_str)

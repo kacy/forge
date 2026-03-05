@@ -235,7 +235,7 @@ pub const Checker = struct {
         try self.registerBuiltin("json_get_bool", try self.addFnType(&.{.int}, .bool));
         // (Int) -> String
         const int_to_str = try self.addFnType(&.{.int}, .string);
-        for ([_][]const u8{ "chr", "fmt_hex", "fmt_oct", "fmt_bin", "json_type", "json_get_string", "json_encode", "random_string", "url_scheme", "url_host", "url_path", "url_query", "url_fragment", "url_to_string", "toml_type" }) |n|
+        for ([_][]const u8{ "chr", "json_type", "json_get_string", "json_encode", "random_string", "url_scheme", "url_host", "url_path", "url_query", "url_fragment", "url_to_string", "toml_type" }) |n|
             try self.registerBuiltin(n, int_to_str);
         // (Int) -> Int (bitwise unary)
         try self.registerBuiltin("bit_not", int_to_int);
