@@ -263,16 +263,12 @@ pub const Checker = struct {
             try self.registerBuiltin(n, str_to_void);
         // (String) -> Int
         const str_to_int = try self.addFnType(&.{.string}, .int);
-        for ([_][]const u8{ "exec", "ord", "hash_fnv1a" }) |n|
+        for ([_][]const u8{ "exec", "ord" }) |n|
             try self.registerBuiltin(n, str_to_int);
         // (String) -> Bool
         const str_to_bool = try self.addFnType(&.{.string}, .bool);
         for ([_][]const u8{ "file_exists", "dir_exists", "mkdir", "remove_file" }) |n|
             try self.registerBuiltin(n, str_to_bool);
-        // (String) -> String
-        const str_to_str = try self.addFnType(&.{.string}, .string);
-        for ([_][]const u8{"hash_sha256"}) |n|
-            try self.registerBuiltin(n, str_to_str);
         // (String) -> String?
         try self.registerBuiltin("env", try self.addFnType(&.{.string}, opt_string));
         // (String) -> List[String]

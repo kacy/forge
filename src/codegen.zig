@@ -63,8 +63,6 @@ const forge_prefix_builtins = std.StaticStringMap(void).initComptime(.{
     .{ "math_ceil", {} },
     .{ "math_round", {} },
     .{ "fmt_float", {} },
-    .{ "hash_sha256", {} },
-    .{ "hash_fnv1a", {} },
     .{ "format_time", {} },
     .{ "random_seed", {} },
     .{ "random_string", {} },

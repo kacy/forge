@@ -151,16 +151,12 @@ fn c_register_builtins():
     str_to_int := c_make_fn_type([TID_STRING], TID_INT)
     c_def_builtin("exec", str_to_int)
     c_def_builtin("ord", str_to_int)
-    c_def_builtin("hash_fnv1a", str_to_int)
     # (String) -> Bool
     str_to_bool := c_make_fn_type([TID_STRING], TID_BOOL)
     c_def_builtin("file_exists", str_to_bool)
     c_def_builtin("dir_exists", str_to_bool)
     c_def_builtin("mkdir", str_to_bool)
     c_def_builtin("remove_file", str_to_bool)
-    # (String) -> String
-    str_to_str := c_make_fn_type([TID_STRING], TID_STRING)
-    c_def_builtin("hash_sha256", str_to_str)
     # (String) -> String?
     c_def_builtin("env", c_make_fn_type([TID_STRING], opt_string))
     # (String) -> List[String]

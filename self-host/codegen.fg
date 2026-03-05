@@ -2024,8 +2024,6 @@ fn g_is_forge_builtin(name: String) -> Bool:
         return true
     if name == "fmt_float":
         return true
-    if name == "hash_sha256" or name == "hash_fnv1a":
-        return true
     if name == "format_time" or name == "random_seed" or name == "random_string":
         return true
     if name == "tcp_connect" or name == "tcp_listen" or name == "tcp_accept":
