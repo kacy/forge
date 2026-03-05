@@ -50,6 +50,20 @@ const HoistedLambda = struct {
     captures: []const CapturedVar,
 };
 
+/// a spawn expression recorded for hoisting as a static wrapper function.
+/// each spawn creates a wrapper that pthread_create can call.
+const HoistedSpawn = struct {
+    index: u32,
+    /// the function being called (name extracted from the inner call expression)
+    fn_name: []const u8,
+    /// argument types for the spawned call
+    arg_types: []const TypeId,
+    /// the return type of the spawned function (inner type of Task[T])
+    return_type: TypeId,
+    /// the C type name for the task struct (e.g. "forge_task_int64_t")
+    task_type_name: []const u8,
+};
+
 /// key for looking up function types by signature (for lambda type inference).
 const FnSigKey = struct {
     params: [16]TypeId = .{.err} ** 16,
@@ -95,6 +109,10 @@ pub const CEmitter = struct {
     lambda_counter: u32,
     /// accumulated lambda bodies to hoist as top-level C functions.
     hoisted_lambdas: std.ArrayList(HoistedLambda),
+    /// counter for generating unique spawn wrapper function names
+    spawn_counter: u32,
+    /// accumulated spawn wrappers to hoist as static C functions.
+    hoisted_spawns: std.ArrayList(HoistedSpawn),
     /// when true, emit test functions and a test runner main() instead
     /// of the user's main(). set by `forge test`.
     test_mode: bool,
@@ -134,6 +152,8 @@ pub const CEmitter = struct {
             .mangled_names = std.AutoHashMap(TypeId, []const u8).init(allocator),
             .lambda_counter = 0,
             .hoisted_lambdas = .empty,
+            .spawn_counter = 0,
+            .hoisted_spawns = .empty,
             .test_mode = false,
             .test_names = .empty,
             .imported_modules = &.{},
@@ -184,6 +204,10 @@ pub const CEmitter = struct {
         self.emitted_result_types.deinit();
         self.local_types.deinit();
         self.hoisted_lambdas.deinit(self.allocator);
+        for (self.hoisted_spawns.items) |sp| {
+            self.allocator.free(sp.arg_types);
+        }
+        self.hoisted_spawns.deinit(self.allocator);
         self.test_names.deinit(self.allocator);
         self.fn_type_cache.deinit();
         self.tuple_type_cache.deinit();
@@ -241,6 +265,7 @@ pub const CEmitter = struct {
         try self.emitResultTypedefs();
         try self.emitOptionalTypedefs();
         try self.emitTupleTypedefs();
+        try self.emitTaskTypedefs();
 
         // pass 2c: emit C wrapper functions for built-in failable functions.
         // these must come after result/optional typedefs since they return those types.
@@ -379,6 +404,44 @@ pub const CEmitter = struct {
 
             // emit lambda function definitions
             try self.emitHoistedLambdas();
+        }
+
+        // pass 7b: hoisted spawn wrapper functions.
+        // each spawn site needs a per-spawn struct (with args + value + header)
+        // and a wrapper function. both are forward-declared and inserted.
+        if (self.hoisted_spawns.items.len > 0) {
+            var fwd_buf: std.ArrayList(u8) = .empty;
+            defer fwd_buf.deinit(self.allocator);
+
+            for (self.hoisted_spawns.items) |sp| {
+                // per-spawn struct typedef
+                const struct_begin = std.fmt.allocPrint(self.allocator,
+                    "typedef struct {{ forge_task_header_t __header; {s} __value; ",
+                    .{self.cTypeStringForId(sp.return_type)}) catch continue;
+                fwd_buf.appendSlice(self.allocator, struct_begin) catch continue;
+                self.allocator.free(struct_begin);
+                for (sp.arg_types, 0..) |arg_tid, i| {
+                    const field = std.fmt.allocPrint(self.allocator,
+                        "{s} __arg_{d}; ", .{ self.cTypeStringForId(arg_tid), i }) catch continue;
+                    fwd_buf.appendSlice(self.allocator, field) catch continue;
+                    self.allocator.free(field);
+                }
+                const struct_end = std.fmt.allocPrint(self.allocator,
+                    "}} __spawn_data_{d};\n", .{sp.index}) catch continue;
+                fwd_buf.appendSlice(self.allocator, struct_end) catch continue;
+                self.allocator.free(struct_end);
+
+                // wrapper forward declaration
+                const decl = std.fmt.allocPrint(self.allocator,
+                    "static void *__spawn_wrapper_{d}(void *__arg);\n", .{sp.index}) catch continue;
+                fwd_buf.appendSlice(self.allocator, decl) catch continue;
+                self.allocator.free(decl);
+            }
+
+            try self.output.insertSlice(self.allocator, lambda_fwd_insert_pos, fwd_buf.items);
+
+            // emit spawn wrapper definitions
+            try self.emitHoistedSpawns();
         }
 
         // pass 8: test runner main (only in test mode)
@@ -748,6 +811,147 @@ pub const CEmitter = struct {
             }
         }
         try self.writeByte('\n');
+    }
+
+    /// emit C typedefs for all Task[T] types found in the type table.
+    /// task types are represented as void pointers at the C level — the actual
+    /// per-spawn struct is emitted at each spawn site. this function just registers
+    /// the mangled name so cTypeStringForId returns a consistent type.
+    fn emitTaskTypedefs(self: *CEmitter) EmitError!void {
+        const items = self.type_table.types.items;
+        for (items, 0..) |ty, idx| {
+            switch (ty) {
+                .task => {
+                    const tid = TypeId.fromIndex(@intCast(idx));
+                    if (!self.mangled_names.contains(tid)) {
+                        // task pointers are void* — the actual struct varies per spawn site.
+                        // allocate the string so deinit can free it.
+                        const name = self.allocator.dupe(u8, "void*") catch continue;
+                        self.mangled_names.put(tid, name) catch {};
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// emit all hoisted spawn wrapper function bodies.
+    fn emitHoistedSpawns(self: *CEmitter) EmitError!void {
+        for (self.hoisted_spawns.items) |sp| {
+            // static void *__spawn_wrapper_N(void *__arg) {
+            //     __spawn_data_N *__data = (__spawn_data_N *)__arg;
+            //     __data->__value = fg_funcname(__data->__arg_0, ...);
+            //     return NULL;
+            // }
+            try self.writeFmt("static void *__spawn_wrapper_{d}(void *__arg) {{\n", .{sp.index});
+            try self.writeFmt("    __spawn_data_{d} *__data = (__spawn_data_{d} *)__arg;\n", .{ sp.index, sp.index });
+            try self.writeStr("    __data->__value = fg_");
+            try self.writeStr(sp.fn_name);
+            try self.writeByte('(');
+            for (sp.arg_types, 0..) |_, i| {
+                if (i > 0) try self.writeStr(", ");
+                try self.writeFmt("__data->__arg_{d}", .{i});
+            }
+            try self.writeStr(");\n    return NULL;\n}\n\n");
+        }
+    }
+
+    /// emit a spawn expression: allocates a per-spawn struct, copies args,
+    /// and creates a thread via pthread_create. the spawned expression must
+    /// be a function call (the checker validates this).
+    fn emitSpawn(self: *CEmitter, inner: *const ast.Expr) EmitError!void {
+        // inner must be a function call
+        const call = switch (inner.kind) {
+            .call => |c| c,
+            else => {
+                try self.writeStr("/* spawn: expected function call */");
+                return;
+            },
+        };
+
+        // extract function name
+        const fn_name = switch (call.callee.kind) {
+            .ident => |n| n,
+            else => {
+                try self.writeStr("/* spawn: expected named function */");
+                return;
+            },
+        };
+
+        // determine the return type of the spawned function
+        const return_type = self.inferExprType(inner);
+
+        // collect argument types
+        var arg_types_buf: [16]TypeId = .{.err} ** 16;
+        const arg_count = @min(call.args.len, 16);
+        for (call.args[0..arg_count], 0..) |arg, i| {
+            arg_types_buf[i] = self.inferExprType(arg.value);
+        }
+        const arg_types = self.allocator.dupe(TypeId, arg_types_buf[0..arg_count]) catch {
+            try self.writeStr("/* spawn: out of memory */");
+            return;
+        };
+
+        const idx = self.spawn_counter;
+        self.spawn_counter += 1;
+
+        // record for hoisting
+        self.hoisted_spawns.append(self.allocator, .{
+            .index = idx,
+            .fn_name = fn_name,
+            .arg_types = arg_types,
+            .return_type = return_type,
+            .task_type_name = "",
+        }) catch {
+            try self.writeStr("/* spawn: out of memory */");
+            return;
+        };
+
+        // emit a gcc statement expression that allocates the data struct,
+        // copies args, and spawns the thread:
+        // ({
+        //     __spawn_data_N *__sp = malloc(sizeof(__spawn_data_N));
+        //     __sp->__arg_0 = arg0; ...
+        //     pthread_create(&__sp->__header.thread, NULL, __spawn_wrapper_N, __sp);
+        //     (void*)__sp;
+        // })
+        try self.writeFmt("({{ __spawn_data_{d} *__sp = malloc(sizeof(__spawn_data_{d})); ", .{ idx, idx });
+        for (call.args[0..arg_count], 0..) |arg, i| {
+            try self.writeFmt("__sp->__arg_{d} = ", .{i});
+            try self.emitExpr(arg.value);
+            try self.writeStr("; ");
+        }
+        try self.writeFmt("pthread_create(&__sp->__header.thread, NULL, __spawn_wrapper_{d}, __sp); ", .{idx});
+        try self.writeStr("(void*)__sp; })");
+    }
+
+    /// emit an await expression: joins the thread and extracts the return value.
+    /// uses a gcc statement expression so await works in expression position.
+    fn emitAwait(self: *CEmitter, inner: *const ast.Expr) EmitError!void {
+        // determine the task type to figure out the spawn data struct
+        // the inner expression should be a variable holding a void* (task pointer)
+        // we need to figure out which spawn data type to cast to
+
+        // infer the type of the inner expression — should be Task[T]
+        const inner_tid = self.inferExprType(inner);
+        const return_type = if (self.type_table.get(inner_tid)) |ty| switch (ty) {
+            .task => |t| t.inner,
+            else => TypeId.err,
+        } else TypeId.err;
+
+        const ret_c = self.cTypeStringForId(return_type);
+
+        // ({
+        //     void *__aw = task_ptr;
+        //     pthread_join(((forge_task_header_t *)__aw)->thread, NULL);
+        //     // the value is stored right after the header in all spawn data structs
+        //     *(ret_type *)((char *)__aw + sizeof(forge_task_header_t));
+        // })
+        try self.writeStr("({ void *__aw = ");
+        try self.emitExpr(inner);
+        try self.writeStr("; pthread_join(((forge_task_header_t *)__aw)->thread, NULL); *(");
+        try self.writeStr(ret_c);
+        try self.writeStr(" *)((char *)__aw + sizeof(forge_task_header_t)); })");
     }
 
     /// emit C wrapper functions for built-in failable functions.
@@ -2111,8 +2315,8 @@ pub const CEmitter = struct {
                 try self.emitExpr(inner);
                 try self.writeStr(").ok");
             },
-            .spawn_expr => |_| try self.writeStr("/* spawn not yet supported */"),
-            .await_expr => |_| try self.writeStr("/* await not yet supported */"),
+            .spawn_expr => |inner| try self.emitSpawn(inner),
+            .await_expr => |inner| try self.emitAwait(inner),
             .err => {},
         }
     }
@@ -2290,6 +2494,24 @@ pub const CEmitter = struct {
             return;
         }
 
+        // sync primitive constructors
+        if (std.mem.eql(u8, name, "Mutex")) {
+            try self.writeStr("forge_mutex_create()");
+            return;
+        }
+        if (std.mem.eql(u8, name, "WaitGroup")) {
+            try self.writeStr("forge_waitgroup_create()");
+            return;
+        }
+        if (std.mem.eql(u8, name, "Semaphore")) {
+            try self.writeStr("forge_semaphore_create(");
+            if (call.args.len > 0) {
+                try self.emitExpr(call.args[0].value);
+            }
+            try self.writeByte(')');
+            return;
+        }
+
         // assert(Bool) — test assertion
         if (std.mem.eql(u8, name, "assert")) {
             try self.writeStr("do { if (!(");
@@ -2459,6 +2681,9 @@ pub const CEmitter = struct {
                     },
                     .set => |s| {
                         if (try self.emitSetMethod(mc, s.element)) return;
+                    },
+                    .@"struct" => |st| {
+                        if (try self.emitSyncMethod(mc, st.name)) return;
                     },
                     else => {},
                 }
@@ -2867,6 +3092,61 @@ pub const CEmitter = struct {
         return false;
     }
 
+    /// emit a built-in sync primitive method call. returns true if handled.
+    fn emitSyncMethod(self: *CEmitter, mc: *const ast.MethodCallExpr, type_name: []const u8) EmitError!bool {
+        const method = mc.method;
+
+        if (std.mem.eql(u8, type_name, "Mutex")) {
+            if (std.mem.eql(u8, method, "lock")) {
+                try self.writeStr("forge_mutex_lock(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeByte(')');
+                return true;
+            }
+            if (std.mem.eql(u8, method, "unlock")) {
+                try self.writeStr("forge_mutex_unlock(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeByte(')');
+                return true;
+            }
+        } else if (std.mem.eql(u8, type_name, "WaitGroup")) {
+            if (std.mem.eql(u8, method, "add") and mc.args.len == 1) {
+                try self.writeStr("forge_waitgroup_add(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeStr(", ");
+                try self.emitExpr(mc.args[0].value);
+                try self.writeByte(')');
+                return true;
+            }
+            if (std.mem.eql(u8, method, "done")) {
+                try self.writeStr("forge_waitgroup_done(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeByte(')');
+                return true;
+            }
+            if (std.mem.eql(u8, method, "wait")) {
+                try self.writeStr("forge_waitgroup_wait(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeByte(')');
+                return true;
+            }
+        } else if (std.mem.eql(u8, type_name, "Semaphore")) {
+            if (std.mem.eql(u8, method, "acquire")) {
+                try self.writeStr("forge_semaphore_acquire(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeByte(')');
+                return true;
+            }
+            if (std.mem.eql(u8, method, "release")) {
+                try self.writeStr("forge_semaphore_release(&");
+                try self.emitExpr(mc.receiver);
+                try self.writeByte(')');
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// return type inference for built-in String methods.
     fn inferStringMethodType(self: *const CEmitter, method: []const u8) TypeId {
         if (std.mem.eql(u8, method, "len")) return .int;
@@ -2941,6 +3221,18 @@ pub const CEmitter = struct {
         if (std.mem.eql(u8, method, "add") or
             std.mem.eql(u8, method, "remove") or
             std.mem.eql(u8, method, "clear")) return .void;
+        return null;
+    }
+
+    /// return type inference for sync primitive methods.
+    fn inferSyncMethodType(_: *const CEmitter, type_name: []const u8, method: []const u8) ?TypeId {
+        if (std.mem.eql(u8, type_name, "Mutex")) {
+            if (std.mem.eql(u8, method, "lock") or std.mem.eql(u8, method, "unlock")) return .void;
+        } else if (std.mem.eql(u8, type_name, "WaitGroup")) {
+            if (std.mem.eql(u8, method, "add") or std.mem.eql(u8, method, "done") or std.mem.eql(u8, method, "wait")) return .void;
+        } else if (std.mem.eql(u8, type_name, "Semaphore")) {
+            if (std.mem.eql(u8, method, "acquire") or std.mem.eql(u8, method, "release")) return .void;
+        }
         return null;
     }
 
@@ -3647,6 +3939,9 @@ pub const CEmitter = struct {
                             .set => {
                                 if (self.inferSetMethodType(mc.method)) |tid| return tid;
                             },
+                            .@"struct" => |st| {
+                                if (self.inferSyncMethodType(st.name, mc.method)) |tid| return tid;
+                            },
                             else => {},
                         }
                     }
@@ -3742,6 +4037,30 @@ pub const CEmitter = struct {
                 if (self.type_table.get(inner_tid)) |ty| {
                     switch (ty) {
                         .result => |r| return r.ok_type,
+                        else => {},
+                    }
+                }
+                return .err;
+            },
+            .spawn_expr => |inner| {
+                // spawn wraps the return type in Task[T] — search for matching task type
+                const inner_tid = self.inferExprType(inner);
+                for (self.type_table.types.items, 0..) |ty, i| {
+                    switch (ty) {
+                        .task => |t| {
+                            if (t.inner == inner_tid) return TypeId.fromIndex(@intCast(i));
+                        },
+                        else => {},
+                    }
+                }
+                return .err;
+            },
+            .await_expr => |inner| {
+                // await unwraps Task[T] → T
+                const inner_tid = self.inferExprType(inner);
+                if (self.type_table.get(inner_tid)) |ty| {
+                    switch (ty) {
+                        .task => |t| return t.inner,
                         else => {},
                     }
                 }
@@ -3856,7 +4175,16 @@ pub const CEmitter = struct {
             if (self.type_table.get(tid)) |ty| {
                 switch (ty) {
                     .@"struct" => |s| {
-                        try self.writeStr(s.name);
+                        // sync primitive types map to their C runtime types
+                        if (std.mem.eql(u8, s.name, "Mutex")) {
+                            try self.writeStr("forge_mutex_t");
+                        } else if (std.mem.eql(u8, s.name, "WaitGroup")) {
+                            try self.writeStr("forge_waitgroup_t");
+                        } else if (std.mem.eql(u8, s.name, "Semaphore")) {
+                            try self.writeStr("forge_semaphore_t");
+                        } else {
+                            try self.writeStr(s.name);
+                        }
                         return;
                     },
                     .@"enum" => |e| {
@@ -3877,6 +4205,10 @@ pub const CEmitter = struct {
                     },
                     .function => {
                         try self.writeStr("forge_closure_t");
+                        return;
+                    },
+                    .task => {
+                        try self.writeStr("void*");
                         return;
                     },
                     else => {},
@@ -3948,12 +4280,19 @@ pub const CEmitter = struct {
         // user-defined — look up in the type table
         if (self.type_table.get(tid)) |ty| {
             return switch (ty) {
-                .@"struct" => |s| s.name,
+                .@"struct" => |s| {
+                    // sync primitive types map to their C runtime types
+                    if (std.mem.eql(u8, s.name, "Mutex")) return "forge_mutex_t";
+                    if (std.mem.eql(u8, s.name, "WaitGroup")) return "forge_waitgroup_t";
+                    if (std.mem.eql(u8, s.name, "Semaphore")) return "forge_semaphore_t";
+                    return s.name;
+                },
                 .@"enum" => |e| e.name,
                 .list => "forge_list_t",
                 .map => "forge_map_t",
                 .set => "forge_set_t",
                 .function => "forge_closure_t",
+                .task => "void*",
                 // optional and result types should have been registered in mangled_names
                 // during emitOptionalTypedefs/emitResultTypedefs — fall through to unknown
                 else => "/* unknown */",

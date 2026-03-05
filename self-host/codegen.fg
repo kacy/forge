@@ -33,6 +33,7 @@ mut g_current_fn_return := -1
 mut g_for_counter := 0
 mut g_try_counter := 0
 mut g_lambda_counter := 0
+mut g_spawn_counter := 0
 mut g_push_counter := 0
 mut g_test_mode := false
 mut g_has_globals := false
@@ -62,6 +63,15 @@ mut g_lambda_cap_offsets: List[Int] := []    # starting offset into flat lists
 mut g_lambda_fwd_buf: List[String] := []
 mut g_lambda_fwd_pos := 0
 
+# spawn tracking — parallel lists for hoisted spawn wrappers
+mut g_spawn_indices: List[Int] := []
+mut g_spawn_fn_names: List[String] := []
+mut g_spawn_return_types: List[Int] := []
+# spawn arg types flattened (same pattern as lambda captures)
+mut g_spawn_arg_tids: List[Int] := []      # flat list of all arg type IDs
+mut g_spawn_arg_counts: List[Int] := []    # number of args per spawn
+mut g_spawn_arg_offsets: List[Int] := []   # starting offset into g_spawn_arg_tids
+
 # test names collected during emission
 mut g_test_names: List[String] := []
 
@@ -88,6 +98,7 @@ pub fn g_init():
     g_for_counter = 0
     g_try_counter = 0
     g_lambda_counter = 0
+    g_spawn_counter = 0
     g_push_counter = 0
     g_test_mode = false
     g_has_globals = false
@@ -105,6 +116,12 @@ pub fn g_init():
     g_lambda_cap_offsets = []
     g_lambda_fwd_buf = []
     g_lambda_fwd_pos = 0
+    g_spawn_indices = []
+    g_spawn_fn_names = []
+    g_spawn_return_types = []
+    g_spawn_arg_tids = []
+    g_spawn_arg_counts = []
+    g_spawn_arg_offsets = []
     g_test_names = []
     g_local_types = {}
     g_capture_idents = {}
@@ -225,9 +242,17 @@ fn g_c_type_string(tid: Int) -> String:
         if tid < tt_count():
             info := tt_get(tid)
             if info.kind == "struct":
+                if info.name == "Mutex":
+                    return "forge_mutex_t"
+                if info.name == "WaitGroup":
+                    return "forge_waitgroup_t"
+                if info.name == "Semaphore":
+                    return "forge_semaphore_t"
                 return info.name
             if info.kind == "enum":
                 return info.name
+            if info.kind == "task":
+                return "void*"
             if info.kind == "list":
                 return "forge_list_t"
             if info.kind == "map":
@@ -1637,11 +1662,96 @@ fn g_emit_expr(node_idx: Int):
         g_write(").ok")
         return
     if node.kind == "spawn":
-        g_write("/* spawn not yet supported */")
+        g_emit_spawn_expr(node_idx)
         return
     if node.kind == "await":
-        g_write("/* await not yet supported */")
+        g_emit_await_expr(node_idx)
         return
+
+fn g_emit_spawn_expr(node_idx: Int):
+    node := get_node(node_idx)
+    # spawn node has one child: the inner call expression
+    if node.children.len() < 1:
+        g_write("/* spawn: missing call */")
+        return
+    inner_idx := node.children[0]
+    inner := get_node(inner_idx)
+    if inner.kind != "call":
+        g_write("/* spawn: expected function call */")
+        return
+    # extract function name from the call's callee (children[0])
+    if inner.children.len() < 1:
+        g_write("/* spawn: empty call */")
+        return
+    callee := get_node(inner.children[0])
+    if callee.kind != "ident":
+        g_write("/* spawn: expected named function */")
+        return
+    fn_name := callee.value
+    # determine the return type of the spawned function
+    return_type := c_get_expr_type(inner_idx)
+    # collect argument types into flat lists
+    nargs := inner.children.len() - 1
+    arg_offset := g_spawn_arg_tids.len()
+    mut ai := 0
+    while ai < nargs:
+        arg_expr := g_call_arg(inner_idx, ai)
+        g_spawn_arg_tids.push(c_get_expr_type(arg_expr))
+        ai = ai + 1
+    idx := g_spawn_counter
+    g_spawn_counter = g_spawn_counter + 1
+    # record for hoisting
+    g_spawn_indices.push(idx)
+    g_spawn_fn_names.push(fn_name)
+    g_spawn_return_types.push(return_type)
+    g_spawn_arg_counts.push(nargs)
+    g_spawn_arg_offsets.push(arg_offset)
+    # emit gcc statement expression:
+    # ({ __spawn_data_N *__sp = malloc(sizeof(__spawn_data_N));
+    #    __sp->__arg_0 = arg0; ...
+    #    pthread_create(&__sp->__header.thread, NULL, __spawn_wrapper_N, __sp);
+    #    (void*)__sp; })
+    g_write("(" + LB + " __spawn_data_")
+    g_write(idx.to_string())
+    g_write(" *__sp = malloc(sizeof(__spawn_data_")
+    g_write(idx.to_string())
+    g_write(")); ")
+    ai = 0
+    while ai < nargs:
+        g_write("__sp->__arg_")
+        g_write(ai.to_string())
+        g_write(" = ")
+        g_emit_expr(g_call_arg(inner_idx, ai))
+        g_write("; ")
+        ai = ai + 1
+    g_write("pthread_create(&__sp->__header.thread, NULL, __spawn_wrapper_")
+    g_write(idx.to_string())
+    g_write(", __sp); (void*)__sp; " + RB + ")")
+
+fn g_emit_await_expr(node_idx: Int):
+    node := get_node(node_idx)
+    if node.children.len() < 1:
+        g_write("/* await: missing expression */")
+        return
+    inner_idx := node.children[0]
+    # infer the type of the inner expression — should be Task[T]
+    inner_tid := c_get_expr_type(inner_idx)
+    mut return_type := TID_ERR
+    if inner_tid >= 0:
+        if inner_tid < tt_count():
+            info := tt_get(inner_tid)
+            if info.kind == "task":
+                return_type = info.inner
+    ret_c := g_c_type_string(return_type)
+    # emit gcc statement expression:
+    # ({ void *__aw = expr;
+    #    pthread_join(((forge_task_header_t *)__aw)->thread, NULL);
+    #    *(ret_type *)((char *)__aw + sizeof(forge_task_header_t)); })
+    g_write("(" + LB + " void *__aw = ")
+    g_emit_expr(inner_idx)
+    g_write("; pthread_join(((forge_task_header_t *)__aw)->thread, NULL); *(")
+    g_write(ret_c)
+    g_write(" *)((char *)__aw + sizeof(forge_task_header_t)); " + RB + ")")
 
 fn g_emit_binary(node_idx: Int):
     node := get_node(node_idx)
@@ -1828,6 +1938,19 @@ fn g_emit_call(node_idx: Int):
         return
     if name == "input":
         g_write("forge_input()")
+        return
+    # sync primitive constructors
+    if name == "Mutex":
+        g_write("forge_mutex_create()")
+        return
+    if name == "WaitGroup":
+        g_write("forge_waitgroup_create()")
+        return
+    if name == "Semaphore":
+        g_write("forge_semaphore_create(")
+        if g_call_arg_count(node_idx) > 0:
+            g_emit_expr(g_call_arg(node_idx, 0))
+        g_write(")")
         return
     if name == "assert":
         g_emit_assert(node_idx)
@@ -2130,6 +2253,9 @@ fn g_emit_method_call(node_idx: Int):
             if info.kind == "set":
                 g_emit_set_method(node_idx, method, info.inner)
                 return
+            if info.kind == "struct":
+                if g_emit_sync_method(node_idx, method, info.name):
+                    return
     # user-defined method: TypeName_method(receiver, args...)
     type_name := g_type_name_for_method(receiver_tid)
     if type_name != "":
@@ -2160,6 +2286,55 @@ fn g_type_name_for_method(tid: Int) -> String:
     if info.kind == "enum":
         return info.name
     return ""
+
+# ---------------------------------------------------------------
+# sync primitive methods
+# ---------------------------------------------------------------
+
+fn g_emit_sync_method(node_idx: Int, method: String, type_name: String) -> Bool:
+    node := get_node(node_idx)
+    receiver_idx := node.children[0]
+    if type_name == "Mutex":
+        if method == "lock":
+            g_write("forge_mutex_lock(&")
+            g_emit_expr(receiver_idx)
+            g_write(")")
+            return true
+        if method == "unlock":
+            g_write("forge_mutex_unlock(&")
+            g_emit_expr(receiver_idx)
+            g_write(")")
+            return true
+    if type_name == "WaitGroup":
+        if method == "add":
+            g_write("forge_waitgroup_add(&")
+            g_emit_expr(receiver_idx)
+            g_write(", ")
+            g_emit_expr(g_call_arg(node_idx, 0))
+            g_write(")")
+            return true
+        if method == "done":
+            g_write("forge_waitgroup_done(&")
+            g_emit_expr(receiver_idx)
+            g_write(")")
+            return true
+        if method == "wait":
+            g_write("forge_waitgroup_wait(&")
+            g_emit_expr(receiver_idx)
+            g_write(")")
+            return true
+    if type_name == "Semaphore":
+        if method == "acquire":
+            g_write("forge_semaphore_acquire(&")
+            g_emit_expr(receiver_idx)
+            g_write(")")
+            return true
+        if method == "release":
+            g_write("forge_semaphore_release(&")
+            g_emit_expr(receiver_idx)
+            g_write(")")
+            return true
+    return false
 
 # ---------------------------------------------------------------
 # string methods
@@ -2443,7 +2618,7 @@ fn g_emit_map_insert(node_idx: Int, key_tid: Int, key_c: String, val_c: String):
     # use a temp variable so &val works for both scalars and structs
     node := get_node(node_idx)
     receiver_idx := node.children[0]
-    g_write("{ ")
+    g_write(LB + " ")
     g_write(val_c)
     g_write(" __mv = ")
     g_emit_expr(g_call_arg(node_idx, 1))
@@ -2459,7 +2634,7 @@ fn g_emit_map_insert(node_idx: Int, key_tid: Int, key_c: String, val_c: String):
     g_write(key_c)
     g_write("), sizeof(")
     g_write(val_c)
-    g_write(")); }")
+    g_write(")); " + RB)
 
 # ---------------------------------------------------------------
 # set methods
@@ -2471,7 +2646,7 @@ fn g_emit_set_method(node_idx: Int, method: String, elem_tid: Int):
     elem_c := g_c_type_string(elem_tid)
     if method == "add":
         # use a temp variable to avoid compound literal issues with struct types
-        g_write("{ ")
+        g_write(LB + " ")
         g_write(elem_c)
         g_write(" __sv = ")
         g_emit_expr(g_call_arg(node_idx, 0))
@@ -2479,7 +2654,7 @@ fn g_emit_set_method(node_idx: Int, method: String, elem_tid: Int):
         g_emit_expr(receiver_idx)
         g_write(", &__sv, sizeof(")
         g_write(elem_c)
-        g_write(")); }")
+        g_write(")); " + RB)
         return
     if method == "len":
         g_emit_expr(receiver_idx)
@@ -3893,6 +4068,12 @@ pub fn g_emit_module(root_idx: Int):
         # insert forward declarations at the marked position
         g_insert_lambda_fwd_decls()
 
+    # pass 7b: hoisted spawn wrappers
+    if g_spawn_indices.len() > 0:
+        g_build_spawn_fwd_decls()
+        g_emit_hoisted_spawns()
+        g_insert_lambda_fwd_decls()
+
     # pass 8: test runner main
     if g_test_mode:
         g_emit_test_runner_main()
@@ -4037,6 +4218,12 @@ pub fn g_emit_modules(roots: List[Int]):
         g_emit_hoisted_lambdas()
         g_insert_lambda_fwd_decls()
 
+    # pass 7b: hoisted spawn wrappers
+    if g_spawn_indices.len() > 0:
+        g_build_spawn_fwd_decls()
+        g_emit_hoisted_spawns()
+        g_insert_lambda_fwd_decls()
+
     # pass 8: test runner main
     if g_test_mode:
         g_emit_test_runner_main()
@@ -4056,3 +4243,63 @@ fn g_insert_lambda_fwd_decls():
         new_buf.push(g_buf[i])
         i = i + 1
     g_buf = new_buf
+
+# ---------------------------------------------------------------
+# spawn wrapper hoisting
+# ---------------------------------------------------------------
+
+fn g_build_spawn_fwd_decls():
+    # build per-spawn struct typedefs and wrapper forward declarations
+    # these get inserted at the same lambda fwd position
+    mut si := 0
+    while si < g_spawn_indices.len():
+        idx := g_spawn_indices[si]
+        ret_type := g_spawn_return_types[si]
+        arg_count := g_spawn_arg_counts[si]
+        arg_offset := g_spawn_arg_offsets[si]
+        ret_c := g_c_type_string(ret_type)
+        # struct typedef: typedef struct { forge_task_header_t __header; ret_type __value; arg_types... } __spawn_data_N;
+        mut s := "typedef struct " + LB + " forge_task_header_t __header; "
+        s = s + ret_c + " __value; "
+        mut ai := 0
+        while ai < arg_count:
+            s = s + g_c_type_string(g_spawn_arg_tids[arg_offset + ai]) + " __arg_" + ai.to_string() + "; "
+            ai = ai + 1
+        s = s + RB + " __spawn_data_" + idx.to_string() + ";\n"
+        g_lambda_fwd_buf.push(s)
+        # wrapper forward declaration
+        g_lambda_fwd_buf.push("static void *__spawn_wrapper_" + idx.to_string() + "(void *__arg);\n")
+        si = si + 1
+
+fn g_emit_hoisted_spawns():
+    # emit spawn wrapper function bodies
+    mut si := 0
+    while si < g_spawn_indices.len():
+        idx := g_spawn_indices[si]
+        fn_name := g_spawn_fn_names[si]
+        arg_count := g_spawn_arg_counts[si]
+        # static void *__spawn_wrapper_N(void *__arg) {
+        #     __spawn_data_N *__data = (__spawn_data_N *)__arg;
+        #     __data->__value = fg_funcname(__data->__arg_0, ...);
+        #     return NULL;
+        # }
+        g_write("static void *__spawn_wrapper_")
+        g_write(idx.to_string())
+        g_write("(void *__arg) " + LB + "\n")
+        g_write("    __spawn_data_")
+        g_write(idx.to_string())
+        g_write(" *__data = (__spawn_data_")
+        g_write(idx.to_string())
+        g_write(" *)__arg;\n")
+        g_write("    __data->__value = fg_")
+        g_write(fn_name)
+        g_write("(")
+        mut ai := 0
+        while ai < arg_count:
+            if ai > 0:
+                g_write(", ")
+            g_write("__data->__arg_")
+            g_write(ai.to_string())
+            ai = ai + 1
+        g_write(");\n    return NULL;\n" + RB + "\n\n")
+        si = si + 1

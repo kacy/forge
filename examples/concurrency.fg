@@ -1,7 +1,7 @@
 # spawn, await, and sync primitives
 
 fn fetch(url: String) -> String:
-    return "response from {url}"
+    return "response from " + url
 
 fn compute(x: Int) -> Int:
     return x * 2
@@ -12,11 +12,24 @@ fn main():
 
     # await unwraps Task[T] back to T
     result := await task
+    print(result)
 
     # spawn and await can be composed
     value := await spawn compute(21)
+    print(value.to_string())
 
     # sync primitives
     mu := Mutex()
+    mu.lock()
+    mu.unlock()
+
     wg := WaitGroup()
+    wg.add(1)
+    wg.done()
+    wg.wait()
+
     sem := Semaphore(10)
+    sem.acquire()
+    sem.release()
+
+    print("concurrency works")

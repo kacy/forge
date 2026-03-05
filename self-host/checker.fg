@@ -1652,6 +1652,12 @@ fn c_check_method_call(node: Node, scope_id: Int) -> Int:
         if result >= 0:
             return result
 
+    # sync primitive methods
+    if recv_info.kind == "struct":
+        sync_result := c_check_sync_method(recv_info.name, method_name, arg_indices, scope_id)
+        if sync_result >= 0:
+            return sync_result
+
     # user-defined methods
     type_name := tt_type_name(receiver_type)
     key := type_name + "." + method_name
@@ -1851,6 +1857,33 @@ fn c_check_set_method(method: String, info: TypeInfo, args: List[Int], scope_id:
 # ---------------------------------------------------------------
 # method arg validators
 # ---------------------------------------------------------------
+
+fn c_check_sync_method(type_name: String, method: String, args: List[Int], scope_id: Int) -> Int:
+    if type_name == "Mutex":
+        if method == "lock":
+            c_expect_no_args("Mutex.lock", args)
+            return TID_VOID
+        if method == "unlock":
+            c_expect_no_args("Mutex.unlock", args)
+            return TID_VOID
+    if type_name == "WaitGroup":
+        if method == "add":
+            c_expect_one_typed_arg("WaitGroup.add", args, TID_INT, scope_id)
+            return TID_VOID
+        if method == "done":
+            c_expect_no_args("WaitGroup.done", args)
+            return TID_VOID
+        if method == "wait":
+            c_expect_no_args("WaitGroup.wait", args)
+            return TID_VOID
+    if type_name == "Semaphore":
+        if method == "acquire":
+            c_expect_no_args("Semaphore.acquire", args)
+            return TID_VOID
+        if method == "release":
+            c_expect_no_args("Semaphore.release", args)
+            return TID_VOID
+    return TID_ERR
 
 fn c_expect_no_args(method: String, args: List[Int]):
     if args.len() != 0:
