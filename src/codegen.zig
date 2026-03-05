@@ -204,6 +204,9 @@ pub const CEmitter = struct {
         self.emitted_result_types.deinit();
         self.local_types.deinit();
         self.hoisted_lambdas.deinit(self.allocator);
+        for (self.hoisted_spawns.items) |sp| {
+            self.allocator.free(sp.arg_types);
+        }
         self.hoisted_spawns.deinit(self.allocator);
         self.test_names.deinit(self.allocator);
         self.fn_type_cache.deinit();
@@ -416,19 +419,23 @@ pub const CEmitter = struct {
                     "typedef struct {{ forge_task_header_t __header; {s} __value; ",
                     .{self.cTypeStringForId(sp.return_type)}) catch continue;
                 fwd_buf.appendSlice(self.allocator, struct_begin) catch continue;
+                self.allocator.free(struct_begin);
                 for (sp.arg_types, 0..) |arg_tid, i| {
                     const field = std.fmt.allocPrint(self.allocator,
                         "{s} __arg_{d}; ", .{ self.cTypeStringForId(arg_tid), i }) catch continue;
                     fwd_buf.appendSlice(self.allocator, field) catch continue;
+                    self.allocator.free(field);
                 }
                 const struct_end = std.fmt.allocPrint(self.allocator,
                     "}} __spawn_data_{d};\n", .{sp.index}) catch continue;
                 fwd_buf.appendSlice(self.allocator, struct_end) catch continue;
+                self.allocator.free(struct_end);
 
                 // wrapper forward declaration
                 const decl = std.fmt.allocPrint(self.allocator,
                     "static void *__spawn_wrapper_{d}(void *__arg);\n", .{sp.index}) catch continue;
                 fwd_buf.appendSlice(self.allocator, decl) catch continue;
+                self.allocator.free(decl);
             }
 
             try self.output.insertSlice(self.allocator, lambda_fwd_insert_pos, fwd_buf.items);
