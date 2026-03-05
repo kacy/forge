@@ -1239,6 +1239,106 @@ fn g_emit_stmt(node_idx: Int):
     g_emit_expr(node_idx)
     g_write(";\n")
 
+# fallback type inference for bindings when the checker cache misses.
+# mirrors the bootstrap compiler's inferExprType — resolves types from
+# the AST structure without relying on c_expr_cache.
+fn g_infer_expr_type(node_idx: Int) -> Int:
+    node := get_node(node_idx)
+    if node.kind == "int_lit":
+        return TID_INT
+    if node.kind == "float_lit":
+        return TID_FLOAT
+    if node.kind == "string_lit":
+        return TID_STRING
+    if node.kind == "string_interp":
+        return TID_STRING
+    if node.kind == "bool_lit":
+        return TID_BOOL
+    if node.kind == "ident":
+        # check local variables first, then module scope
+        if g_local_types.contains_key(node.value):
+            return g_local_types[node.value]
+        return sc_lookup(c_scope, node.value)
+    if node.kind == "call":
+        # look up function return type from callee
+        if node.children.len() > 0:
+            callee := get_node(node.children[0])
+            if callee.kind == "ident":
+                fn_tid := sc_lookup(c_scope, callee.value)
+                if fn_tid >= 0:
+                    if fn_tid < tt_count():
+                        info := tt_get(fn_tid)
+                        if info.kind == "function":
+                            return info.return_type
+                        if info.kind == "struct":
+                            return fn_tid
+                # struct constructor from type table
+                struct_tid := tt_lookup(callee.value)
+                if struct_tid >= 0:
+                    return struct_tid
+        return TID_ERR
+    if node.kind == "method_call":
+        # infer receiver type, then look up method return type
+        if node.children.len() == 0:
+            return TID_ERR
+        receiver_idx := node.children[0]
+        mut receiver_tid := c_get_expr_type(receiver_idx)
+        if receiver_tid == TID_ERR:
+            receiver_tid = g_infer_expr_type(receiver_idx)
+        if receiver_tid == TID_ERR:
+            return TID_ERR
+        # string methods
+        if receiver_tid == TID_STRING:
+            return g_infer_string_method_type(node.value)
+        if receiver_tid == TID_INT:
+            return TID_STRING
+        if receiver_tid == TID_FLOAT:
+            return TID_STRING
+        if receiver_tid == TID_BOOL:
+            return TID_STRING
+        # user-defined and collection methods
+        type_name := tt_type_name(receiver_tid)
+        key := type_name + "." + node.value
+        if c_method_types.contains_key(key):
+            fn_tid := c_method_types[key]
+            info := tt_get(fn_tid)
+            if info.kind == "function":
+                return info.return_type
+        return TID_ERR
+    if node.kind == "field_access":
+        if node.children.len() == 0:
+            return TID_ERR
+        mut obj_tid := c_get_expr_type(node.children[0])
+        if obj_tid == TID_ERR:
+            obj_tid = g_infer_expr_type(node.children[0])
+        if obj_tid >= 0:
+            if obj_tid < tt_count():
+                info := tt_get(obj_tid)
+                if info.kind == "struct":
+                    mut fi := 0
+                    while fi < info.fields.len():
+                        if info.fields[fi] == node.value:
+                            return info.field_types[fi]
+                        fi = fi + 1
+        return TID_ERR
+    return TID_ERR
+
+fn g_infer_string_method_type(method: String) -> Int:
+    if method == "len":
+        return TID_INT
+    if method == "to_int":
+        return TID_INT
+    if method == "to_float":
+        return TID_FLOAT
+    if method == "contains":
+        return TID_BOOL
+    if method == "starts_with":
+        return TID_BOOL
+    if method == "ends_with":
+        return TID_BOOL
+    # most string methods return String
+    return TID_STRING
+
 fn g_emit_binding(node_idx: Int):
     node := get_node(node_idx)
     name := g_extract_binding_name(node.value)
@@ -1291,6 +1391,9 @@ fn g_emit_binding(node_idx: Int):
         val_node := get_node(value_idx)
         if val_node.kind == "lambda":
             tid = g_find_lambda_type(value_idx)
+    # general fallback: infer type from AST structure (method calls, etc.)
+    if tid == TID_ERR:
+        tid = g_infer_expr_type(value_idx)
     g_local_types.insert(name, tid)
 
     # try propagation: x := foo()! → hoist result to temp
