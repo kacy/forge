@@ -109,6 +109,7 @@ fn c_register_builtins():
     c_def_builtin("exit", int_to_void)
     c_def_builtin("sleep", int_to_void)
     c_def_builtin("random_seed", int_to_void)
+    c_def_builtin("tcp_close", int_to_void)
     # (Int) -> Int
     int_to_int := c_make_fn_type([TID_INT], TID_INT)
     c_def_builtin("json_get_int", int_to_int)
@@ -217,6 +218,7 @@ fn c_register_builtins():
     c_def_builtin("exec_output", str_to_str_result)
     c_def_builtin("base64_decode", str_to_str_result)
     c_def_builtin("hex_decode", str_to_str_result)
+    c_def_builtin("dns_resolve", str_to_str_result)
 
     # (String, String) -> String
     c_def_builtin("path_join", c_make_fn_type([TID_STRING, TID_STRING], TID_STRING))
@@ -226,6 +228,18 @@ fn c_register_builtins():
     two_str_to_bool_result := c_make_fn_type([TID_STRING, TID_STRING], bool_result)
     c_def_builtin("write_file", two_str_to_bool_result)
     c_def_builtin("append_file", two_str_to_bool_result)
+
+    # networking builtins
+    # (String, Int) -> Int!
+    str_int_to_int_result := c_make_fn_type([TID_STRING, TID_INT], int_result)
+    c_def_builtin("tcp_connect", str_int_to_int_result)
+    c_def_builtin("tcp_listen", str_int_to_int_result)
+    # (Int) -> Int!
+    c_def_builtin("tcp_accept", c_make_fn_type([TID_INT], int_result))
+    # (Int, Int) -> String!
+    c_def_builtin("tcp_read", c_make_fn_type([TID_INT, TID_INT], str_result))
+    # (Int, String) -> Int!
+    c_def_builtin("tcp_write", c_make_fn_type([TID_INT, TID_STRING], int_result))
 
     # concurrency primitives (stub types)
     c_register_sync_type("Mutex", [])

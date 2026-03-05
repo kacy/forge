@@ -107,6 +107,13 @@ const forge_prefix_builtins = std.StaticStringMap(void).initComptime(.{
     .{ "url_to_string", {} },
     .{ "percent_encode", {} },
     .{ "percent_decode", {} },
+    .{ "tcp_connect", {} },
+    .{ "tcp_listen", {} },
+    .{ "tcp_accept", {} },
+    .{ "tcp_read", {} },
+    .{ "tcp_write", {} },
+    .{ "tcp_close", {} },
+    .{ "dns_resolve", {} },
 });
 
 // ---------------------------------------------------------------
@@ -1240,6 +1247,96 @@ pub const CEmitter = struct {
             \\    }
             \\    forge_result_bool r; r.is_ok = false;
             \\    r.err = FORGE_STRING_LIT("failed to append to file");
+            \\    return r;
+            \\}
+            \\
+        );
+
+        // tcp_connect(String, Int) -> Int!
+        try self.writeStr(
+            \\static forge_result_int64_t forge_tcp_connect(forge_string_t host, int64_t port) {
+            \\    int64_t fd;
+            \\    if (forge_tcp_connect_impl(host, port, &fd)) {
+            \\        forge_result_int64_t r; r.is_ok = true; r.ok = fd;
+            \\        return r;
+            \\    }
+            \\    forge_result_int64_t r; r.is_ok = false;
+            \\    r.err = FORGE_STRING_LIT("failed to connect");
+            \\    return r;
+            \\}
+            \\
+        );
+
+        // tcp_listen(String, Int) -> Int!
+        try self.writeStr(
+            \\static forge_result_int64_t forge_tcp_listen(forge_string_t host, int64_t port) {
+            \\    int64_t fd;
+            \\    if (forge_tcp_listen_impl(host, port, &fd)) {
+            \\        forge_result_int64_t r; r.is_ok = true; r.ok = fd;
+            \\        return r;
+            \\    }
+            \\    forge_result_int64_t r; r.is_ok = false;
+            \\    r.err = FORGE_STRING_LIT("failed to listen");
+            \\    return r;
+            \\}
+            \\
+        );
+
+        // tcp_accept(Int) -> Int!
+        try self.writeStr(
+            \\static forge_result_int64_t forge_tcp_accept(int64_t server_fd) {
+            \\    int64_t client_fd;
+            \\    if (forge_tcp_accept_impl(server_fd, &client_fd)) {
+            \\        forge_result_int64_t r; r.is_ok = true; r.ok = client_fd;
+            \\        return r;
+            \\    }
+            \\    forge_result_int64_t r; r.is_ok = false;
+            \\    r.err = FORGE_STRING_LIT("failed to accept");
+            \\    return r;
+            \\}
+            \\
+        );
+
+        // tcp_read(Int, Int) -> String!
+        try self.writeStr(
+            \\static forge_result_forge_string_t forge_tcp_read(int64_t fd, int64_t max_bytes) {
+            \\    forge_string_t data;
+            \\    if (forge_tcp_read_impl(fd, max_bytes, &data)) {
+            \\        forge_result_forge_string_t r; r.is_ok = true; r.ok = data;
+            \\        return r;
+            \\    }
+            \\    forge_result_forge_string_t r; r.is_ok = false;
+            \\    r.err = FORGE_STRING_LIT("failed to read");
+            \\    return r;
+            \\}
+            \\
+        );
+
+        // tcp_write(Int, String) -> Int!
+        try self.writeStr(
+            \\static forge_result_int64_t forge_tcp_write(int64_t fd, forge_string_t data) {
+            \\    int64_t written;
+            \\    if (forge_tcp_write_impl(fd, data, &written)) {
+            \\        forge_result_int64_t r; r.is_ok = true; r.ok = written;
+            \\        return r;
+            \\    }
+            \\    forge_result_int64_t r; r.is_ok = false;
+            \\    r.err = FORGE_STRING_LIT("failed to write");
+            \\    return r;
+            \\}
+            \\
+        );
+
+        // dns_resolve(String) -> String!
+        try self.writeStr(
+            \\static forge_result_forge_string_t forge_dns_resolve(forge_string_t hostname) {
+            \\    forge_string_t ip;
+            \\    if (forge_dns_resolve_impl(hostname, &ip)) {
+            \\        forge_result_forge_string_t r; r.is_ok = true; r.ok = ip;
+            \\        return r;
+            \\    }
+            \\    forge_result_forge_string_t r; r.is_ok = false;
+            \\    r.err = FORGE_STRING_LIT("failed to resolve hostname");
             \\    return r;
             \\}
             \\

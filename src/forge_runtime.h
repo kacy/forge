@@ -15,6 +15,12 @@
 #include <inttypes.h>
 #include <time.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
 
 // ---------------------------------------------------------------
 // closure type (function pointer + captured environment)
@@ -2597,6 +2603,134 @@ static inline forge_string_t forge_percent_decode(forge_string_t input) {
     }
     buf[j] = '\0';
     return (forge_string_t){ .data = buf, .len = j };
+}
+
+// ---------------------------------------------------------------
+// networking — TCP and DNS (POSIX sockets, blocking I/O)
+// ---------------------------------------------------------------
+
+// tcp_connect(host, port) -> Int! (fd)
+static inline bool forge_tcp_connect_impl(forge_string_t host, int64_t port, int64_t *fd_out) {
+    char *host_cstr = forge_cstr(host);
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%" PRId64, port);
+
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int rc = getaddrinfo(host_cstr, port_str, &hints, &res);
+    free(host_cstr);
+    if (rc != 0) return false;
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return false; }
+
+    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        close(fd);
+        freeaddrinfo(res);
+        return false;
+    }
+    freeaddrinfo(res);
+    *fd_out = (int64_t)fd;
+    return true;
+}
+
+// tcp_listen(host, port) -> Int! (server fd)
+static inline bool forge_tcp_listen_impl(forge_string_t host, int64_t port, int64_t *fd_out) {
+    char *host_cstr = forge_cstr(host);
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%" PRId64, port);
+
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    int rc = getaddrinfo(host_cstr[0] ? host_cstr : NULL, port_str, &hints, &res);
+    free(host_cstr);
+    if (rc != 0) return false;
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return false; }
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    if (bind(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        close(fd);
+        freeaddrinfo(res);
+        return false;
+    }
+    freeaddrinfo(res);
+
+    if (listen(fd, 128) < 0) { close(fd); return false; }
+    *fd_out = (int64_t)fd;
+    return true;
+}
+
+// tcp_accept(server_fd) -> Int! (client fd)
+static inline bool forge_tcp_accept_impl(int64_t server_fd, int64_t *client_fd) {
+    int fd = accept((int)server_fd, NULL, NULL);
+    if (fd < 0) return false;
+    *client_fd = (int64_t)fd;
+    return true;
+}
+
+// tcp_read(fd, max_bytes) -> String!
+static inline bool forge_tcp_read_impl(int64_t fd, int64_t max_bytes, forge_string_t *out) {
+    if (max_bytes <= 0) max_bytes = 4096;
+    char *buf = forge_str_alloc(max_bytes);
+    ssize_t n = read((int)fd, buf, (size_t)max_bytes);
+    if (n < 0) { free(buf); return false; }
+    buf[n] = '\0';
+    *out = (forge_string_t){ .data = buf, .len = (int64_t)n };
+    return true;
+}
+
+// tcp_write(fd, data) -> Int! (bytes written)
+static inline bool forge_tcp_write_impl(int64_t fd, forge_string_t data, int64_t *written) {
+    ssize_t n = write((int)fd, data.data, (size_t)data.len);
+    if (n < 0) return false;
+    *written = (int64_t)n;
+    return true;
+}
+
+// tcp_close(fd) -> Void
+static inline void forge_tcp_close(int64_t fd) {
+    close((int)fd);
+}
+
+// dns_resolve(hostname) -> String! (first IP address)
+static inline bool forge_dns_resolve_impl(forge_string_t hostname, forge_string_t *out) {
+    char *host_cstr = forge_cstr(hostname);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int rc = getaddrinfo(host_cstr, NULL, &hints, &res);
+    free(host_cstr);
+    if (rc != 0) return false;
+
+    char ip_buf[INET6_ADDRSTRLEN];
+    if (res->ai_family == AF_INET) {
+        struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
+        inet_ntop(AF_INET, &addr->sin_addr, ip_buf, sizeof(ip_buf));
+    } else {
+        struct sockaddr_in6 *addr = (struct sockaddr_in6 *)res->ai_addr;
+        inet_ntop(AF_INET6, &addr->sin6_addr, ip_buf, sizeof(ip_buf));
+    }
+    freeaddrinfo(res);
+
+    int64_t len = (int64_t)strlen(ip_buf);
+    char *buf = forge_str_alloc(len);
+    memcpy(buf, ip_buf, (size_t)len);
+    buf[len] = '\0';
+    *out = (forge_string_t){ .data = buf, .len = len };
+    return true;
 }
 
 // ---------------------------------------------------------------
