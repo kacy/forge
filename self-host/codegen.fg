@@ -1036,6 +1036,78 @@ fn g_emit_builtin_helpers():
     g_write("    return r;\n")
     g_write(RB + "\n\n")
 
+    # tcp_connect(String, Int) -> Int!
+    g_write("static forge_result_int64_t forge_tcp_connect(forge_string_t host, int64_t port) " + LB + "\n")
+    g_write("    int64_t fd;\n")
+    g_write("    if (forge_tcp_connect_impl(host, port, &fd)) " + LB + "\n")
+    g_write("        forge_result_int64_t r; r.is_ok = true; r.ok = fd;\n")
+    g_write("        return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_int64_t r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to connect\");\n")
+    g_write("    return r;\n")
+    g_write(RB + "\n\n")
+
+    # tcp_listen(String, Int) -> Int!
+    g_write("static forge_result_int64_t forge_tcp_listen(forge_string_t host, int64_t port) " + LB + "\n")
+    g_write("    int64_t fd;\n")
+    g_write("    if (forge_tcp_listen_impl(host, port, &fd)) " + LB + "\n")
+    g_write("        forge_result_int64_t r; r.is_ok = true; r.ok = fd;\n")
+    g_write("        return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_int64_t r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to listen\");\n")
+    g_write("    return r;\n")
+    g_write(RB + "\n\n")
+
+    # tcp_accept(Int) -> Int!
+    g_write("static forge_result_int64_t forge_tcp_accept(int64_t server_fd) " + LB + "\n")
+    g_write("    int64_t client_fd;\n")
+    g_write("    if (forge_tcp_accept_impl(server_fd, &client_fd)) " + LB + "\n")
+    g_write("        forge_result_int64_t r; r.is_ok = true; r.ok = client_fd;\n")
+    g_write("        return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_int64_t r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to accept\");\n")
+    g_write("    return r;\n")
+    g_write(RB + "\n\n")
+
+    # tcp_read(Int, Int) -> String!
+    g_write("static forge_result_forge_string_t forge_tcp_read(int64_t fd, int64_t max_bytes) " + LB + "\n")
+    g_write("    forge_string_t data;\n")
+    g_write("    if (forge_tcp_read_impl(fd, max_bytes, &data)) " + LB + "\n")
+    g_write("        forge_result_forge_string_t r; r.is_ok = true; r.ok = data;\n")
+    g_write("        return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_forge_string_t r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to read\");\n")
+    g_write("    return r;\n")
+    g_write(RB + "\n\n")
+
+    # tcp_write(Int, String) -> Int!
+    g_write("static forge_result_int64_t forge_tcp_write(int64_t fd, forge_string_t data) " + LB + "\n")
+    g_write("    int64_t written;\n")
+    g_write("    if (forge_tcp_write_impl(fd, data, &written)) " + LB + "\n")
+    g_write("        forge_result_int64_t r; r.is_ok = true; r.ok = written;\n")
+    g_write("        return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_int64_t r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to write\");\n")
+    g_write("    return r;\n")
+    g_write(RB + "\n\n")
+
+    # dns_resolve(String) -> String!
+    g_write("static forge_result_forge_string_t forge_dns_resolve(forge_string_t hostname) " + LB + "\n")
+    g_write("    forge_string_t ip;\n")
+    g_write("    if (forge_dns_resolve_impl(hostname, &ip)) " + LB + "\n")
+    g_write("        forge_result_forge_string_t r; r.is_ok = true; r.ok = ip;\n")
+    g_write("        return r;\n")
+    g_write("    " + RB + "\n")
+    g_write("    forge_result_forge_string_t r; r.is_ok = false;\n")
+    g_write("    r.err = FORGE_STRING_LIT(\"failed to resolve hostname\");\n")
+    g_write("    return r;\n")
+    g_write(RB + "\n\n")
+
 # ---------------------------------------------------------------
 # function forward declarations
 # ---------------------------------------------------------------
@@ -1943,6 +2015,12 @@ fn g_is_forge_builtin(name: String) -> Bool:
     if name == "url_path" or name == "url_query" or name == "url_fragment" or name == "url_to_string":
         return true
     if name == "percent_encode" or name == "percent_decode":
+        return true
+    if name == "tcp_connect" or name == "tcp_listen" or name == "tcp_accept":
+        return true
+    if name == "tcp_read" or name == "tcp_write" or name == "tcp_close":
+        return true
+    if name == "dns_resolve":
         return true
     return false
 

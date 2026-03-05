@@ -223,7 +223,7 @@ pub const Checker = struct {
 
         // (Int) -> Void
         const int_to_void = try self.addFnType(&.{.int}, .void);
-        for ([_][]const u8{ "exit", "sleep", "random_seed" }) |n|
+        for ([_][]const u8{ "exit", "sleep", "random_seed", "tcp_close" }) |n|
             try self.registerBuiltin(n, int_to_void);
         // (Int) -> Int
         const int_to_int = try self.addFnType(&.{.int}, .int);
@@ -311,6 +311,20 @@ pub const Checker = struct {
         const two_str_to_bool_result = try self.addFnType(&.{ .string, .string }, bool_result);
         for ([_][]const u8{ "write_file", "append_file" }) |n|
             try self.registerBuiltin(n, two_str_to_bool_result);
+
+        // networking builtins
+        // (String, Int) -> Int!
+        const str_int_to_int_result = try self.addFnType(&.{ .string, .int }, int_result);
+        for ([_][]const u8{ "tcp_connect", "tcp_listen" }) |n|
+            try self.registerBuiltin(n, str_int_to_int_result);
+        // (Int) -> Int!
+        try self.registerBuiltin("tcp_accept", try self.addFnType(&.{.int}, int_result));
+        // (Int, Int) -> String!
+        try self.registerBuiltin("tcp_read", try self.addFnType(&.{ .int, .int }, str_result));
+        // (Int, String) -> Int!
+        try self.registerBuiltin("tcp_write", try self.addFnType(&.{ .int, .string }, int_result));
+        // (String) -> String! (dns_resolve already covered by str_to_str_result group)
+        try self.registerBuiltin("dns_resolve", str_to_str_result);
 
         // sync primitives — opaque struct types with constructors
         try self.registerSyncType("Mutex", &.{});
