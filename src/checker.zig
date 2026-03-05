@@ -141,6 +141,9 @@ pub const Checker = struct {
     resolve_depth: u32,
     /// path to the source file being checked (used for resolving relative imports)
     source_path: ?[]const u8,
+    /// root directory for stdlib modules (std/). when an import path starts
+    /// with "std", resolve relative to this directory instead of the source file.
+    stdlib_root: ?[]const u8,
     /// tracks files currently being checked to detect import cycles
     checking_files: ?*std.StringHashMap(void),
     /// declarations from imported modules (for codegen)
@@ -164,6 +167,7 @@ pub const Checker = struct {
             .method_types = std.StringHashMap(MethodEntry).init(allocator),
             .resolve_depth = 0,
             .source_path = null,
+            .stdlib_root = null,
             .checking_files = null,
             .imported_modules = .empty,
         };
@@ -522,11 +526,25 @@ pub const Checker = struct {
 
     /// build a file path from import path parts relative to a directory.
     /// returns null if the file doesn't exist.
+    ///
+    /// when the first path part is "std" and a stdlib_root is set, resolves
+    /// relative to the stdlib root directory. for example, `from std.math import abs`
+    /// with stdlib_root="/project" resolves to "/project/std/math.fg".
     fn resolveImportPath(self: *Checker, path_parts: []const []const u8, dir: []const u8) ?[]const u8 {
-        // build "dir/part1/part2/.../partN.fg"
+        // determine the base directory for resolution.
+        // if the import starts with "std" and we have a stdlib root, use that
+        // instead of the source file's directory.
+        var base_dir = dir;
+        if (path_parts.len > 0 and std.mem.eql(u8, path_parts[0], "std")) {
+            if (self.stdlib_root) |root| {
+                base_dir = root;
+            }
+        }
+
+        // build "base_dir/part1/part2/.../partN.fg"
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.allocator);
-        parts.append(self.allocator, dir) catch return null;
+        parts.append(self.allocator, base_dir) catch return null;
         for (path_parts) |p| {
             parts.append(self.allocator, p) catch return null;
         }

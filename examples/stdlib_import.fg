@@ -1,0 +1,17 @@
+# stdlib_import.fg — test importing from std modules
+
+from std.math import abs, min, max, clamp
+
+fn main():
+    # abs
+    print("abs(-5) = " + abs(-5).to_string())
+    print("abs(3) = " + abs(3).to_string())
+
+    # min / max
+    print("min(3, 7) = " + min(3, 7).to_string())
+    print("max(3, 7) = " + max(3, 7).to_string())
+
+    # clamp
+    print("clamp(15, 0, 10) = " + clamp(15, 0, 10).to_string())
+    print("clamp(-3, 0, 10) = " + clamp(-3, 0, 10).to_string())
+    print("clamp(5, 0, 10) = " + clamp(5, 0, 10).to_string())
