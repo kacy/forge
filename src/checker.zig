@@ -227,7 +227,7 @@ pub const Checker = struct {
             try self.registerBuiltin(n, int_to_void);
         // (Int) -> Int
         const int_to_int = try self.addFnType(&.{.int}, .int);
-        for ([_][]const u8{ "json_get_int", "json_array_len", "json_new_int", "url_port", "toml_array_len" }) |n|
+        for ([_][]const u8{ "json_get_int", "json_array_len", "json_new_int", "url_port" }) |n|
             try self.registerBuiltin(n, int_to_int);
         // (Int) -> Float
         try self.registerBuiltin("json_get_float", try self.addFnType(&.{.int}, .float));
@@ -235,13 +235,13 @@ pub const Checker = struct {
         try self.registerBuiltin("json_get_bool", try self.addFnType(&.{.int}, .bool));
         // (Int) -> String
         const int_to_str = try self.addFnType(&.{.int}, .string);
-        for ([_][]const u8{ "chr", "json_type", "json_get_string", "json_encode", "random_string", "url_scheme", "url_host", "url_path", "url_query", "url_fragment", "url_to_string", "toml_type" }) |n|
+        for ([_][]const u8{ "chr", "json_type", "json_get_string", "json_encode", "random_string", "url_scheme", "url_host", "url_path", "url_query", "url_fragment", "url_to_string" }) |n|
             try self.registerBuiltin(n, int_to_str);
         // (Int) -> Int (bitwise unary)
         try self.registerBuiltin("bit_not", int_to_int);
         // (Int) -> List[String]
         const int_to_list_str = try self.addFnType(&.{.int}, list_string);
-        for ([_][]const u8{ "json_object_keys", "toml_keys" }) |n|
+        for ([_][]const u8{"json_object_keys"}) |n|
             try self.registerBuiltin(n, int_to_list_str);
 
         // (Int, Int) -> Void
@@ -254,22 +254,20 @@ pub const Checker = struct {
             try self.registerBuiltin(n, two_int_to_void);
         // (Int, Int) -> Int
         const two_int_to_int = try self.addFnType(&.{ .int, .int }, .int);
-        for ([_][]const u8{ "random_int", "json_array_get", "toml_array_get", "bit_and", "bit_or", "bit_xor", "bit_shl", "bit_shr" }) |n|
+        for ([_][]const u8{ "random_int", "json_array_get", "bit_and", "bit_or", "bit_xor", "bit_shl", "bit_shr" }) |n|
             try self.registerBuiltin(n, two_int_to_int);
 
         // (Int, String) -> String
         const int_str_to_str = try self.addFnType(&.{ .int, .string }, .string);
-        for ([_][]const u8{ "format_time", "toml_get_string" }) |n|
+        for ([_][]const u8{"format_time"}) |n|
             try self.registerBuiltin(n, int_str_to_str);
         // (Int, String) -> Int
         const int_str_to_int = try self.addFnType(&.{ .int, .string }, .int);
-        for ([_][]const u8{ "json_object_get", "toml_get_int", "toml_get_table", "toml_get_array" }) |n|
+        for ([_][]const u8{"json_object_get"}) |n|
             try self.registerBuiltin(n, int_str_to_int);
-        // (Int, String) -> Float
-        try self.registerBuiltin("toml_get_float", try self.addFnType(&.{ .int, .string }, .float));
         // (Int, String) -> Bool
         const int_str_to_bool = try self.addFnType(&.{ .int, .string }, .bool);
-        for ([_][]const u8{ "json_object_has", "toml_has", "toml_get_bool" }) |n|
+        for ([_][]const u8{"json_object_has"}) |n|
             try self.registerBuiltin(n, int_str_to_bool);
         // (Int, String, Int) -> Void
         try self.registerBuiltin("json_object_set", try self.addFnType(&.{ .int, .string, .int }, .void));
@@ -291,7 +289,7 @@ pub const Checker = struct {
             try self.registerBuiltin(n, str_to_void);
         // (String) -> Int
         const str_to_int = try self.addFnType(&.{.string}, .int);
-        for ([_][]const u8{ "exec", "ord", "json_parse", "json_new_string", "hash_fnv1a", "url_parse", "toml_parse" }) |n|
+        for ([_][]const u8{ "exec", "ord", "json_parse", "json_new_string", "hash_fnv1a", "url_parse" }) |n|
             try self.registerBuiltin(n, str_to_int);
         // (String) -> Bool
         const str_to_bool = try self.addFnType(&.{.string}, .bool);
