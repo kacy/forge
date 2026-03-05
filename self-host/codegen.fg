@@ -863,46 +863,28 @@ fn g_emit_enum_def(node_idx: Int):
 # result/optional/tuple typedefs
 # ---------------------------------------------------------------
 
-fn g_emit_result_typedefs():
+fn g_emit_wrapper_typedefs(kind: String, prefix: String, dedup: Map[String, Bool]):
+    # shared emitter for result and optional typedefs — both iterate all
+    # type IDs, build a name from the inner type, dedup, and emit a typedef.
+    # the only difference is the struct body.
     mut tid := 0
     while tid < tt_count():
         info := tt_get(tid)
-        if info.kind == "result":
-            ok_c := g_c_type_string(info.inner)
-            name := "forge_result_" + ok_c
-            if g_emitted_results.contains_key(name):
-                # still cache mangled name for this TypeId
-                if g_mangled.contains_key(tid) == false:
-                    g_mangled.insert(tid, name)
-            else:
-                g_mangled.insert(tid, name)
-                g_emitted_results.insert(name, true)
-                g_write("typedef struct " + LB + " bool is_ok; ")
-                g_write(ok_c)
-                g_write(" ok; forge_string_t err; " + RB + " ")
-                g_write(name)
-                g_write(";\n")
-        tid = tid + 1
-    g_write("\n")
-
-fn g_emit_optional_typedefs():
-    mut tid := 0
-    while tid < tt_count():
-        info := tt_get(tid)
-        if info.kind == "optional":
+        if info.kind == kind:
             inner_c := g_c_type_string(info.inner)
-            name := "forge_optional_" + inner_c
-            if g_emitted_optionals.contains_key(name):
+            name := prefix + inner_c
+            if dedup.contains_key(name):
                 if g_mangled.contains_key(tid) == false:
                     g_mangled.insert(tid, name)
             else:
                 g_mangled.insert(tid, name)
-                g_emitted_optionals.insert(name, true)
-                g_write("typedef struct " + LB + " bool has_value; ")
-                g_write(inner_c)
-                g_write(" value; " + RB + " ")
-                g_write(name)
-                g_write(";\n")
+                dedup.insert(name, true)
+                g_write("typedef struct " + LB + " ")
+                if kind == "result":
+                    g_write("bool is_ok; " + inner_c + " ok; forge_string_t err; ")
+                else:
+                    g_write("bool has_value; " + inner_c + " value; ")
+                g_write(RB + " " + name + ";\n")
         tid = tid + 1
     g_write("\n")
 
@@ -4250,8 +4232,8 @@ pub fn g_emit_module(root_idx: Int):
         g_emit_enum_def(decl_idx)
 
     # pass 2b: result/optional/tuple typedefs
-    g_emit_result_typedefs()
-    g_emit_optional_typedefs()
+    g_emit_wrapper_typedefs("result", "forge_result_", g_emitted_results)
+    g_emit_wrapper_typedefs("optional", "forge_optional_", g_emitted_optionals)
     g_emit_tuple_typedefs()
 
     # pass 2c: builtin helpers
@@ -4354,8 +4336,8 @@ pub fn g_emit_modules(roots: List[Int]):
                 g_emit_enum_def(decl_idx)
 
     # pass 2b: result/optional/tuple typedefs (once, covers all modules)
-    g_emit_result_typedefs()
-    g_emit_optional_typedefs()
+    g_emit_wrapper_typedefs("result", "forge_result_", g_emitted_results)
+    g_emit_wrapper_typedefs("optional", "forge_optional_", g_emitted_optionals)
     g_emit_tuple_typedefs()
 
     # pass 2c: builtin helpers (once)
