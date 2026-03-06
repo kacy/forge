@@ -10,6 +10,10 @@
 #   forge fmt --check <file>   check if already formatted
 #   forge lint <file.fg>       lint for convention violations
 #   forge lint --json <file>   lint with JSON output
+#   forge doc <file.fg>        generate documentation
+#   forge doc --json <file>    documentation as JSON
+#   forge doc --check <file>   check all pub items documented
+#   forge doc search <query>   search stdlib docs
 #   forge lex <file.fg>        print token stream
 #   forge parse <file.fg>      print AST
 #   forge version              print version
@@ -24,6 +28,7 @@ from printer import print_ast
 from formatter import fmt_source
 from linter import lint_module
 from errors import render_diagnostics, render_diagnostics_json, count_errors, has_errors
+from docgen import doc_extract, doc_format, doc_format_json, doc_check, doc_search
 
 # ---------------------------------------------------------------
 # compile pipeline (build/run/test)
@@ -137,6 +142,33 @@ fn cmd_lint(path: String, json_mode: Bool) -> String!:
     return ""
 
 # ---------------------------------------------------------------
+# doc command
+# ---------------------------------------------------------------
+
+fn cmd_doc(path: String, check_mode: Bool, json_mode: Bool) -> String!:
+    source := read_file(path)!
+    doc_extract(source)
+
+    if check_mode:
+        missing := doc_check()
+        if missing > 0:
+            print(missing.to_string() + " undocumented pub item(s)")
+            exit(1)
+        print("ok")
+        return ""
+
+    if json_mode:
+        print(doc_format_json())
+    else:
+        print(doc_format())
+    return ""
+
+fn cmd_doc_search(query: String) -> String!:
+    result := doc_search(query, ".")!
+    print(result)
+    return ""
+
+# ---------------------------------------------------------------
 # lex command
 # ---------------------------------------------------------------
 
@@ -180,6 +212,10 @@ fn print_help():
     print("  fmt --check <file>     check formatting")
     print("  lint <file.fg>         lint for conventions")
     print("  lint --json <file>     lint (JSON output)")
+    print("  doc <file.fg>          generate documentation")
+    print("  doc --json <file>      documentation (JSON output)")
+    print("  doc --check <file>     check all pub items documented")
+    print("  doc search <query>     search stdlib documentation")
     print("  lex <file.fg>          print token stream")
     print("  parse <file.fg>        print AST")
     print("  version                print version")
@@ -243,6 +279,31 @@ fn run_cli() -> String!:
             cmd_lint(a[3], true)!
         else:
             cmd_lint(a[2], false)!
+        return ""
+
+    if command == "doc":
+        if a.len() < 3:
+            print("usage: forge doc [--json|--check] <file.fg>")
+            print("       forge doc search <query>")
+            exit(1)
+        if a[2] == "search":
+            if a.len() < 4:
+                print("usage: forge doc search <query>")
+                exit(1)
+            cmd_doc_search(a[3])!
+            return ""
+        if a[2] == "--json":
+            if a.len() < 4:
+                print("usage: forge doc --json <file.fg>")
+                exit(1)
+            cmd_doc(a[3], false, true)!
+        elif a[2] == "--check":
+            if a.len() < 4:
+                print("usage: forge doc --check <file.fg>")
+                exit(1)
+            cmd_doc(a[3], true, false)!
+        else:
+            cmd_doc(a[2], false, false)!
         return ""
 
     # commands that need exactly one file argument
