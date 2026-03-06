@@ -12,7 +12,7 @@ jobs:
           version: 0.15.2
 
       - name: check formatting
-        run: zig fmt --check src/
+        run: zig fmt --check bootstrap/
 
       - name: build
         run: zig build
@@ -48,4 +48,34 @@ jobs:
               exit 1
             fi
             echo "ok   $f"
+          done
+
+      - name: build self-hosted compiler
+        run: make self-host
+
+      - name: run examples (self-hosted)
+        run: make run-examples-self
+
+      - name: verify bootstrap fixed point
+        run: make bootstrap-verify
+
+      - name: check forge formatting
+        run: |
+          for f in self-host/*.fg; do
+            ./self-host/forge_main fmt --check "$f"
+            if [ $? -ne 0 ]; then
+              echo "FAIL $f not formatted"
+              exit 1
+            fi
+          done
+
+      - name: check doc coverage
+        run: |
+          for f in std/*.fg std/**/*.fg; do
+            [ -f "$f" ] || continue
+            ./self-host/forge_main doc --check "$f"
+            if [ $? -ne 0 ]; then
+              echo "FAIL $f missing doc comments"
+              exit 1
+            fi
           done
