@@ -82,7 +82,12 @@ fn j_parse_int_manual(s: String) -> Int:
     while i < s.len():
         c := s[i]
         if c >= "0" and c <= "9":
-            val = val * 10 + (ord(c) - 48)
+            digit := ord(c) - 48
+            # Overflow detection: check before multiplication
+            # INT64_MAX is approximately 9.2e18
+            if val > 922337203685477580 / 10:
+                return 0  # Overflow - return 0 as sentinel
+            val = val * 10 + digit
         i = i + 1
     if neg:
         return 0 - val
