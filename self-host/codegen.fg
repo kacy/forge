@@ -1742,9 +1742,20 @@ fn g_emit_expr(node_idx: Int):
         g_write(").value")
         return
     if node.kind == "try":
-        g_write("(")
-        g_emit_expr(node.children[0])
-        g_write(").ok")
+        # try in expression position — must check .is_ok before accessing .ok
+        inner_idx := node.children[0]
+        result_tid := c_get_expr_type(inner_idx)
+        result_c := g_c_type_string(result_tid)
+        try_name := "__try_" + g_try_counter.to_string()
+        g_try_counter = g_try_counter + 1
+        g_write("(" + LB + " ")
+        g_write(result_c)
+        g_write(" " + try_name + " = ")
+        g_emit_expr(inner_idx)
+        g_write("; if (!" + try_name + ".is_ok) return (")
+        g_write(g_c_type_string(g_current_fn_return))
+        g_write(")" + LB + " .is_ok = false, .err = " + try_name + ".err " + RB + "; ")
+        g_write(try_name + ".ok; " + RB + ")")
         return
     if node.kind == "spawn":
         g_emit_spawn_expr(node_idx)
