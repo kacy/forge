@@ -239,9 +239,9 @@ fn g_type_needs_rc(tid: Int) -> Bool:
             if info.kind == "list":
                 return g_type_needs_rc(info.inner)
             if info.kind == "map":
-                return g_type_needs_rc(info.key_type) or g_type_needs_rc(info.value_type);
+                return g_type_needs_rc(info.key_type) or g_type_needs_rc(info.value_type)
             if info.kind == "set":
-                return g_type_needs_rc(info.inner);
+                return g_type_needs_rc(info.inner)
     return false
 
 # emit retain call for a variable
