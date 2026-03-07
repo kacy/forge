@@ -403,7 +403,9 @@ fn c_resolve_type_with_map(node_idx: Int, subst_params: List[String], subst_args
         mut i := 0
         for p in subst_params:
             if p == node.value:
-                return subst_args[i]
+                if i < subst_args.len():
+                    return subst_args[i]
+                return TID_ERR
             i = i + 1
         return c_resolve_named_type(node.value)
     if node.kind == "generic_type":
