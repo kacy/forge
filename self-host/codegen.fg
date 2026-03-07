@@ -1982,19 +1982,28 @@ fn emit_await_expr(node_idx: Int):
             if info.kind == "task":
                 return_type = info.inner
     ret_c := get_c_type_string(return_type)
+    # Check if return type is void
+    is_void_return := return_type == TID_VOID
     # emit gcc statement expression:
-    # ({ void *__aw = expr;
+    # For non-void: ({ void *__aw = expr;
     #    pthread_join(((forge_task_header_t *)__aw)->thread, NULL);
     #    ret_type result = *(ret_type *)((char *)__aw + sizeof(forge_task_header_t));
     #    free(__aw);
     #    result; })
+    # For void: ({ void *__aw = expr;
+    #    pthread_join(((forge_task_header_t *)__aw)->thread, NULL);
+    #    free(__aw); })
     emit_code("(" + LB + " void *__aw = ")
     emit_expr(inner_idx)
     emit_code("; pthread_join(((forge_task_header_t *)__aw)->thread, NULL); ")
-    emit_code(ret_c)
-    emit_code(" __result = *(")
-    emit_code(ret_c)
-    emit_code(" *)((char *)__aw + sizeof(forge_task_header_t)); free(__aw); __result; " + RB + ")")
+    if is_void_return:
+        # No result to read for void tasks
+        emit_code("free(__aw); " + RB + ")")
+    else:
+        emit_code(ret_c)
+        emit_code(" __result = *(")
+        emit_code(ret_c)
+        emit_code(" *)((char *)__aw + sizeof(forge_task_header_t)); free(__aw); __result; " + RB + ")")
 
 fn emit_binary(node_idx: Int):
     node := get_node(node_idx)
