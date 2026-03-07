@@ -1542,6 +1542,17 @@ fn g_extract_binding_name(value: String) -> String:
         i = i + 1
     return value
 
+fn g_is_move_eligible(value_idx: Int) -> Bool:
+    # Check if value is a variable in the same scope (eligible for move optimization)
+    value_node := get_node(value_idx)
+    if value_node.kind != "ident":
+        return false
+    var_name := value_node.value
+    if not g_local_scopes.contains_key(var_name):
+        return false
+    # Eligible if in same scope (source will be released when scope exits)
+    return g_local_scopes[var_name] == g_scope_level
+
 fn g_emit_assignment(node_idx: Int):
     node := get_node(node_idx)
     # children: [target, value]
@@ -1558,6 +1569,9 @@ fn g_emit_assignment(node_idx: Int):
         if g_local_types.contains_key(target_name):
             target_tid = g_local_types[target_name]
             needs_rc = g_type_needs_rc(target_tid)
+    # Check if this is a move (source variable in same scope)
+    value_idx := node.children[1]
+    is_move := node.value == "=" and needs_rc and g_is_move_eligible(value_idx)
     # ARC: release old value before simple assignment (=) for RC types
     if is_simple_var and node.value == "=" and needs_rc:
         g_emit_release(target_name, target_tid)
@@ -1575,10 +1589,11 @@ fn g_emit_assignment(node_idx: Int):
         g_write(" /= ")
     else:
         g_write(" = ")
-    g_emit_expr(node.children[1])
+    g_emit_expr(value_idx)
     g_write(";\n")
     # ARC: retain new value after simple assignment (=) for RC types
-    if is_simple_var and node.value == "=" and needs_rc:
+    # Skip retain if this is a move (ownership transferred from source)
+    if is_simple_var and node.value == "=" and needs_rc and not is_move:
         g_emit_retain(target_name, target_tid)
 
 fn g_emit_if_stmt(node_idx: Int):

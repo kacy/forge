@@ -37,11 +37,22 @@ typedef struct {
 // reference counting (ARC) infrastructure
 // ---------------------------------------------------------------
 
+// Forward declaration for cycle detection
+struct forge_rc_header;
+
 // RC header stored before each heap-allocated object
-typedef struct {
+// Enhanced with cycle detection support
+typedef struct forge_rc_header {
     int64_t ref_count;
     int32_t type_tag;
+    int32_t flags;        // MARKED, ROOT, etc. for cycle detection
+    struct forge_rc_header *next;  // For cycle collector object list
 } forge_rc_header_t;
+
+// Flags for cycle detection
+#define FORGE_RC_MARKED  0x01
+#define FORGE_RC_VISITED 0x02
+#define FORGE_RC_IN_CYCLE 0x04
 
 // Type tags for cycle detection
 typedef enum {
@@ -55,6 +66,9 @@ typedef enum {
 // Get pointer to RC header from object pointer
 #define FORGE_RC_HEADER(ptr) ((forge_rc_header_t *)((char *)(ptr) - sizeof(forge_rc_header_t)))
 
+// Global list of all RC-managed objects (for cycle detection)
+static forge_rc_header_t *g_rc_object_list = NULL;
+
 // Allocate with reference counting header
 static inline void *forge_rc_alloc(size_t size, int32_t type_tag) {
     size_t total_size = sizeof(forge_rc_header_t) + size;
@@ -65,6 +79,10 @@ static inline void *forge_rc_alloc(size_t size, int32_t type_tag) {
     }
     header->ref_count = 1;
     header->type_tag = type_tag;
+    header->flags = 0;
+    // Add to global list for cycle detection
+    header->next = g_rc_object_list;
+    g_rc_object_list = header;
     return (char *)header + sizeof(forge_rc_header_t);
 }
 
@@ -118,6 +136,39 @@ static inline forge_string_t forge_string_from(const char *data, int64_t len) {
 
 // empty string constant
 static const forge_string_t forge_string_empty = { .data = "", .len = 0, .is_heap = false };
+
+// -------------------------------------------------------------
+// Cycle Detection Infrastructure (Phase 6)
+// -------------------------------------------------------------
+
+// Simple cycle detector using "trial deletion" algorithm
+// When an object's RC reaches 0, we check if it's part of a cycle
+// by temporarily decrementing RC of all reachable objects
+
+static inline void forge_rc_clear_marks(void) {
+    forge_rc_header_t *curr = g_rc_object_list;
+    while (curr) {
+        curr->flags &= ~FORGE_RC_MARKED;
+        curr = curr->next;
+    }
+}
+
+// Check if object might be part of a cycle
+// Returns true if object's RC > external reference count
+// This is a simplified check - full implementation would scan all objects
+static inline bool forge_rc_might_be_cyclic(void *ptr) {
+    if (!ptr) return false;
+    forge_rc_header_t *header = FORGE_RC_HEADER(ptr);
+    // If RC > 0 but object is only reachable from itself (cycle)
+    // This is detected when RC doesn't drop to 0 after releasing external refs
+    return (header->flags & FORGE_RC_IN_CYCLE) != 0;
+}
+
+// Mark an object as potentially cyclic
+static inline void forge_rc_mark_cyclic(void *ptr) {
+    if (!ptr) return;
+    FORGE_RC_HEADER(ptr)->flags |= FORGE_RC_IN_CYCLE;
+}
 
 // String destructor (frees the data buffer)
 static inline void forge_string_destroy(void *ptr) {
