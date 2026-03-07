@@ -13,6 +13,8 @@
 pub struct Token:
     pub kind: String
     pub value: String
+    pub line: Int
+    pub col: Int
 
 # ---------------------------------------------------------------
 # helpers
@@ -210,6 +212,8 @@ mut RBRACE := ""
 # global mutable state — the lexer modifies these as it scans
 mut source := ""
 mut pos := 0
+mut line := 1
+mut col := 0
 mut at_line_start := true
 mut done := false
 
@@ -220,6 +224,8 @@ mut pending_dedents := 0
 # pending tokens from string interpolation
 mut pending_kinds: List[String] := []
 mut pending_values: List[String] := []
+mut pending_lines: List[Int] := []
+mut pending_cols: List[Int] := []
 
 # ---------------------------------------------------------------
 # lexer core
@@ -279,13 +285,17 @@ fn skip_spaces():
             return
 
 # the main lexer function. returns (kind, value) by setting globals.
-# callers should read tok_kind and tok_value after calling.
+# callers should read tok_kind, tok_value, tok_line, tok_col after calling.
 mut tok_kind := ""
 mut tok_value := ""
+mut tok_line := 0
+mut tok_col := 0
 
 fn emit(kind: String, value: String):
     tok_kind = kind
     tok_value = value
+    tok_line = line
+    tok_col = col
 
 fn next_token():
     # step 1: drain pending dedents
@@ -783,11 +793,15 @@ pub fn init_lexer(src: String):
     RBRACE = chr(125)
     source = src
     pos = 0
+    line = 1
+    col = 0
     at_line_start = true
     done = false
     indent_stack = [0]
     pending_kinds = []
     pending_values = []
+    pending_lines = []
+    pending_cols = []
     pending_dedents = 0
 
 pub fn lex_all(src: String) -> List[Token]:
@@ -795,7 +809,7 @@ pub fn lex_all(src: String) -> List[Token]:
     mut tokens: List[Token] := []
     while true:
         next_token()
-        tokens.push(Token(tok_kind, tok_value))
+        tokens.push(Token(tok_kind, tok_value, tok_line, tok_col))
         if tok_kind == "eof":
             break
     return tokens

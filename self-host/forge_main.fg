@@ -93,7 +93,7 @@ fn cmd_check(path: String, json_mode: Bool) -> String!:
     init_driver(path)
     import_roots := resolve_imports(root, path)!
 
-    c_init()
+    c_init(path)
     for imp_root in import_roots:
         c_run_module(imp_root)
     diags := c_run_module(root)
@@ -139,7 +139,7 @@ fn cmd_lint(path: String, json_mode: Bool) -> String!:
     # resolve imports for type info (linter needs checker to run first)
     init_driver(path)
     import_roots := resolve_imports(root, path)!
-    c_init()
+    c_init(path)
     for imp_root in import_roots:
         c_run_module(imp_root)
     c_run_module(root)

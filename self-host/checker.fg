@@ -24,20 +24,22 @@ pub struct Diagnostic:
     pub severity: String
     pub code: String
     pub message: String
+    pub file: String
     pub line: Int
     pub col: Int
     pub fix: String
 
 mut c_diagnostics: List[Diagnostic] := []
+mut c_current_file: String := ""
 
 fn c_error(code: String, message: String):
-    c_diagnostics.push(Diagnostic("error", code, message, 0, 0, ""))
+    c_diagnostics.push(Diagnostic("error", code, message, c_current_file, 0, 0, ""))
 
 fn c_error_fix(code: String, message: String, fix: String):
-    c_diagnostics.push(Diagnostic("error", code, message, 0, 0, fix))
+    c_diagnostics.push(Diagnostic("error", code, message, c_current_file, 0, 0, fix))
 
 fn c_warning(code: String, message: String):
-    c_diagnostics.push(Diagnostic("warning", code, message, 0, 0, ""))
+    c_diagnostics.push(Diagnostic("warning", code, message, c_current_file, 0, 0, ""))
 
 # ---------------------------------------------------------------
 # checker state
@@ -59,10 +61,11 @@ pub mut c_expr_cache: Map[Int, Int] := {}
 # initialization
 # ---------------------------------------------------------------
 
-pub fn c_init():
+pub fn c_init(file_path: String):
     tt_init()
     sc_reset()
     c_diagnostics = []
+    c_current_file = file_path
     c_method_types = {}
     c_method_pub = {}
     c_generic_decls = {}
@@ -2914,8 +2917,8 @@ fn c_types_structurally_equal(a: Int, b: Int) -> Bool:
 # public API — run checker and return diagnostics as JSON
 # ---------------------------------------------------------------
 
-pub fn c_run(root_idx: Int) -> List[Diagnostic]:
-    c_init()
+pub fn c_run(root_idx: Int, file_path: String) -> List[Diagnostic]:
+    c_init(file_path)
     c_register_all(root_idx)
     c_check_all(root_idx)
     return c_diagnostics
@@ -2941,12 +2944,15 @@ pub fn c_diagnostics_to_json(diags: List[Diagnostic]) -> String:
         mut fix_part := ""
         if d.fix.len() > 0:
             fix_part = ",\"fix\":\"" + c_json_escape(d.fix) + "\""
+        mut file_part := ""
+        if d.file.len() > 0:
+            file_part = ",\"file\":\"" + c_json_escape(d.file) + "\""
         mut entry := lb + "\"severity\":\"" + d.severity + "\""
         entry = entry + ",\"code\":\"" + d.code + "\""
         entry = entry + ",\"message\":\"" + c_json_escape(d.message) + "\""
         entry = entry + ",\"line\":" + d.line.to_string()
         entry = entry + ",\"col\":" + d.col.to_string()
-        entry = entry + fix_part + rb
+        entry = entry + file_part + fix_part + rb
         result = result + entry
     result = result + "]"
     return result

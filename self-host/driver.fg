@@ -175,7 +175,7 @@ pub fn compile_to_c(path: String, test_mode: Bool) -> String!:
     import_roots := resolve_imports(root, path)!
 
     # type check
-    c_init()
+    c_init(path)
     for imp_root in import_roots:
         c_run_module(imp_root)
     c_run_module(root)
