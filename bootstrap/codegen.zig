@@ -2566,12 +2566,30 @@ pub const CEmitter = struct {
                 try self.writeStr(").value");
             },
             .try_expr => |inner| {
-                // expr! — extract ok value from result. the error propagation
-                // is handled at the statement level via emitBinding/emitExprStmt.
-                // in expression position, just access .ok
-                try self.writeStr("(");
+                // expr! in expression position — emit a statement-expression
+                // that checks .is_ok before accessing .ok, propagating the
+                // error to the enclosing function if the result is an error.
+                const inner_tid = self.inferExprType(inner);
+                const result_c = self.cTypeStringForId(inner_tid);
+                const ret_c = self.cTypeStringForId(self.current_fn_return);
+                var buf: [32]u8 = undefined;
+                const try_name = std.fmt.bufPrint(&buf, "__try_{d}", .{self.try_counter}) catch "__try_x";
+                self.try_counter += 1;
+                try self.writeStr("({ ");
+                try self.writeStr(result_c);
+                try self.writeStr(" ");
+                try self.writeStr(try_name);
+                try self.writeStr(" = ");
                 try self.emitExpr(inner);
-                try self.writeStr(").ok");
+                try self.writeStr("; if (!");
+                try self.writeStr(try_name);
+                try self.writeStr(".is_ok) return (");
+                try self.writeStr(ret_c);
+                try self.writeStr("){ .is_ok = false, .err = ");
+                try self.writeStr(try_name);
+                try self.writeStr(".err }; ");
+                try self.writeStr(try_name);
+                try self.writeStr(".ok; })");
             },
             .spawn_expr => |inner| try self.emitSpawn(inner),
             .await_expr => |inner| try self.emitAwait(inner),
