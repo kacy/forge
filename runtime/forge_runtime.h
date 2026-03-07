@@ -1673,6 +1673,16 @@ static inline void forge_channel_close(forge_channel_t *ch) {
     pthread_mutex_unlock(&ch->mu);
 }
 
+// Destroy a channel and free all associated memory
+static inline void forge_channel_destroy(forge_channel_t *ch) {
+    pthread_mutex_lock(&ch->mu);
+    free(ch->buffer);
+    pthread_mutex_unlock(&ch->mu);
+    pthread_mutex_destroy(&ch->mu);
+    pthread_cond_destroy(&ch->not_empty);
+    free(ch);
+}
+
 static inline int64_t forge_channel_len(forge_channel_t *ch) {
     pthread_mutex_lock(&ch->mu);
     int64_t n = ch->len;
@@ -1758,7 +1768,12 @@ static inline bool forge_tcp_accept_impl(int64_t server_fd, int64_t *client_fd) 
 
 // tcp_read(fd, max_bytes) -> String!
 static inline bool forge_tcp_read_impl(int64_t fd, int64_t max_bytes, forge_string_t *out) {
-    if (max_bytes <= 0) max_bytes = 4096;
+    // Security fix: validate buffer size to prevent overflow
+    // Reject negative values and limit to 1MB max
+    if (max_bytes <= 0 || max_bytes > 1048576) {
+        *out = forge_string_empty;
+        return false;
+    }
     char *buf = forge_str_alloc(max_bytes);
     ssize_t n = read((int)fd, buf, (size_t)max_bytes);
     if (n < 0) { free(buf); return false; }
@@ -2003,8 +2018,14 @@ static inline bool forge_process_spawn_impl(forge_string_t cmd, int64_t *out_han
 
 // write string to child's stdin. returns bytes written or -1 on error.
 static inline bool forge_process_write_impl(int64_t handle, forge_string_t data, int64_t *out) {
-    if (handle < 0 || handle >= forge_process_count) { *out = -1; return false; }
+    pthread_mutex_lock(&forge_process_mutex);
+    if (handle < 0 || handle >= forge_process_count) { 
+        pthread_mutex_unlock(&forge_process_mutex);
+        *out = -1; 
+        return false; 
+    }
     forge_process_t *p = &forge_process_pool[handle];
+    pthread_mutex_unlock(&forge_process_mutex);
     ssize_t n = write(p->stdin_fd, data.data, (size_t)data.len);
     if (n < 0) { *out = -1; return false; }
     *out = (int64_t)n;
@@ -2013,9 +2034,15 @@ static inline bool forge_process_write_impl(int64_t handle, forge_string_t data,
 
 // read from child's stdout. reads up to max_bytes.
 static inline bool forge_process_read_impl(int64_t handle, int64_t max_bytes, forge_string_t *out) {
-    if (handle < 0 || handle >= forge_process_count) { *out = forge_string_empty; return false; }
+    pthread_mutex_lock(&forge_process_mutex);
+    if (handle < 0 || handle >= forge_process_count) { 
+        pthread_mutex_unlock(&forge_process_mutex);
+        *out = forge_string_empty; 
+        return false; 
+    }
     if (max_bytes <= 0) max_bytes = 4096;
     forge_process_t *p = &forge_process_pool[handle];
+    pthread_mutex_unlock(&forge_process_mutex);
     char *buf = (char *)malloc((size_t)max_bytes + 1);
     if (!buf) { *out = forge_string_empty; return false; }
     ssize_t n = read(p->stdout_fd, buf, (size_t)max_bytes);
@@ -2027,9 +2054,15 @@ static inline bool forge_process_read_impl(int64_t handle, int64_t max_bytes, fo
 
 // read from child's stderr. reads up to max_bytes.
 static inline bool forge_process_read_err_impl(int64_t handle, int64_t max_bytes, forge_string_t *out) {
-    if (handle < 0 || handle >= forge_process_count) { *out = forge_string_empty; return false; }
+    pthread_mutex_lock(&forge_process_mutex);
+    if (handle < 0 || handle >= forge_process_count) { 
+        pthread_mutex_unlock(&forge_process_mutex);
+        *out = forge_string_empty; 
+        return false; 
+    }
     if (max_bytes <= 0) max_bytes = 4096;
     forge_process_t *p = &forge_process_pool[handle];
+    pthread_mutex_unlock(&forge_process_mutex);
     char *buf = (char *)malloc((size_t)max_bytes + 1);
     if (!buf) { *out = forge_string_empty; return false; }
     ssize_t n = read(p->stderr_fd, buf, (size_t)max_bytes);
@@ -2041,8 +2074,13 @@ static inline bool forge_process_read_err_impl(int64_t handle, int64_t max_bytes
 
 // wait for child to exit. returns exit code.
 static inline int64_t forge_process_wait(int64_t handle) {
-    if (handle < 0 || handle >= forge_process_count) return -1;
+    pthread_mutex_lock(&forge_process_mutex);
+    if (handle < 0 || handle >= forge_process_count) {
+        pthread_mutex_unlock(&forge_process_mutex);
+        return -1;
+    }
     forge_process_t *p = &forge_process_pool[handle];
+    pthread_mutex_unlock(&forge_process_mutex);
     int status = 0;
     waitpid(p->pid, &status, 0);
     p->alive = false;
@@ -2052,19 +2090,33 @@ static inline int64_t forge_process_wait(int64_t handle) {
 
 // kill the child process. returns true if signal sent successfully.
 static inline bool forge_process_kill(int64_t handle) {
-    if (handle < 0 || handle >= forge_process_count) return false;
+    pthread_mutex_lock(&forge_process_mutex);
+    if (handle < 0 || handle >= forge_process_count) {
+        pthread_mutex_unlock(&forge_process_mutex);
+        return false;
+    }
     forge_process_t *p = &forge_process_pool[handle];
-    if (!p->alive) return false;
-    return kill(p->pid, SIGTERM) == 0;
+    if (!p->alive) {
+        pthread_mutex_unlock(&forge_process_mutex);
+        return false;
+    }
+    pid_t pid = p->pid;
+    pthread_mutex_unlock(&forge_process_mutex);
+    return kill(pid, SIGTERM) == 0;
 }
 
 // close all pipe file descriptors for this process.
 static inline void forge_process_close(int64_t handle) {
-    if (handle < 0 || handle >= forge_process_count) return;
+    pthread_mutex_lock(&forge_process_mutex);
+    if (handle < 0 || handle >= forge_process_count) {
+        pthread_mutex_unlock(&forge_process_mutex);
+        return;
+    }
     forge_process_t *p = &forge_process_pool[handle];
     if (p->stdin_fd >= 0) { close(p->stdin_fd); p->stdin_fd = -1; }
     if (p->stdout_fd >= 0) { close(p->stdout_fd); p->stdout_fd = -1; }
     if (p->stderr_fd >= 0) { close(p->stderr_fd); p->stderr_fd = -1; }
+    pthread_mutex_unlock(&forge_process_mutex);
 }
 
 #endif // FORGE_RUNTIME_H
