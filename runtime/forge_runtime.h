@@ -1485,7 +1485,7 @@ static inline bool forge_read_file_impl(const char *path_data, int64_t path_len,
 
     if (file_len < 0) { fclose(f); return false; }
 
-    char *buf = (char *)malloc((size_t)file_len + 1);
+    char *buf = forge_str_alloc_rc((int64_t)file_len);
     if (!buf) { fclose(f); return false; }
 
     size_t read = fread(buf, 1, (size_t)file_len, f);
@@ -1494,6 +1494,7 @@ static inline bool forge_read_file_impl(const char *path_data, int64_t path_len,
     buf[read] = '\0';
     out->data = buf;
     out->len = (int64_t)read;
+    out->is_heap = true;
     return true;
 }
 
@@ -1527,6 +1528,7 @@ static inline bool forge_env_impl(const char *name_data, int64_t name_len,
 
     out->data = copy;
     out->len = (int64_t)val_len;
+    out->is_heap = true;
     return true;
 }
 
@@ -1659,9 +1661,16 @@ static inline bool forge_exec_output_impl(forge_string_t cmd, forge_string_t *ou
     // trim trailing newline (like shell $() does)
     if (len > 0 && buf[len - 1] == '\n') len--;
 
-    buf[len] = '\0';
-    out->data = buf;
+    // copy to RC-allocated memory
+    char *rcbuf = forge_str_alloc_rc(len);
+    if (!rcbuf) { free(buf); return false; }
+    memcpy(rcbuf, buf, len);
+    rcbuf[len] = '\0';
+    free(buf);
+
+    out->data = rcbuf;
     out->len = len;
+    out->is_heap = true;
     return true;
 }
 
