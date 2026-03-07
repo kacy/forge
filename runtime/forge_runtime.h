@@ -89,6 +89,15 @@ static inline void forge_rc_release(void *ptr, void (*destructor)(void *)) {
     }
 }
 
+// Wrapper for release without destructor (used by macros)
+static inline void forge_rc_release_no_dtor(void *ptr) {
+    forge_rc_release(ptr, NULL);
+}
+
+// Unified string RC helper - checks is_heap and data, then applies action
+#define FORGE_STRING_RC(s, action) \
+    do { if ((s).is_heap && (s).data) { action((void *)(s).data); } } while(0)
+
 // ---------------------------------------------------------------
 // string type (with RC support)
 // ---------------------------------------------------------------
@@ -119,19 +128,18 @@ static inline void forge_string_destroy(void *ptr) {
     }
 }
 
+// Unified string RC helper - checks is_heap and data, then applies action
+#define FORGE_STRING_RC(s, action) \
+    do { if ((s).is_heap && (s).data) { action((void *)(s).data); } } while(0)
+
 // Retain a string (increment RC)
 static inline void forge_string_retain(forge_string_t s) {
-    // Only retain if heap-allocated
-    if (s.is_heap && s.data) {
-        forge_rc_retain((void *)s.data);
-    }
+    FORGE_STRING_RC(s, forge_rc_retain);
 }
 
 // Release a string (decrement RC, free if zero)
 static inline void forge_string_release(forge_string_t s) {
-    if (s.is_heap && s.data) {
-        forge_rc_release((void *)s.data, NULL);
-    }
+    FORGE_STRING_RC(s, forge_rc_release_no_dtor);
 }
 
 // ---------------------------------------------------------------

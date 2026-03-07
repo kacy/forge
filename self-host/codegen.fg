@@ -1488,11 +1488,8 @@ fn g_emit_binding(node_idx: Int):
         if val_node.kind != "none":
             if g_type_needs_rc(tid):
                 g_emit_retain(name, tid)
-    # ARC: for list literals with string elements, retain all elements
-    if value_idx >= 0:
-        val_node := get_node(value_idx)
-        if val_node.kind == "list":
-            if val_node.children.len() > 0:
+            # For list literals with string elements, retain all elements
+            if val_node.kind == "list" and val_node.children.len() > 0:
                 elem_tid := c_get_expr_type(val_node.children[0])
                 if elem_tid == TID_STRING:
                     g_write_indent()
@@ -1519,15 +1516,15 @@ fn g_emit_assignment(node_idx: Int):
     is_simple_var := target_node.kind == "ident"
     mut target_name := ""
     mut target_tid := TID_ERR
+    mut needs_rc := false
     if is_simple_var:
         target_name = target_node.value
         if g_local_types.contains_key(target_name):
             target_tid = g_local_types[target_name]
-    # ARC: release old value before assignment for strings
-    if is_simple_var:
-        if node.value == "=":
-            if g_type_needs_rc(target_tid):
-                g_emit_release(target_name, target_tid)
+            needs_rc = g_type_needs_rc(target_tid)
+    # ARC: release old value before simple assignment (=) for RC types
+    if is_simple_var and node.value == "=" and needs_rc:
+        g_emit_release(target_name, target_tid)
     g_write_indent()
     g_emit_expr(target_idx)
     if node.value == "=":
@@ -1544,11 +1541,9 @@ fn g_emit_assignment(node_idx: Int):
         g_write(" = ")
     g_emit_expr(node.children[1])
     g_write(";\n")
-    # ARC: retain new value after assignment for strings
-    if is_simple_var:
-        if node.value == "=":
-            if g_type_needs_rc(target_tid):
-                g_emit_retain(target_name, target_tid)
+    # ARC: retain new value after simple assignment (=) for RC types
+    if is_simple_var and node.value == "=" and needs_rc:
+        g_emit_retain(target_name, target_tid)
 
 fn g_emit_if_stmt(node_idx: Int):
     node := get_node(node_idx)
