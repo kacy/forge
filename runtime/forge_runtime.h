@@ -240,7 +240,9 @@ static inline forge_string_t forge_string_trim(forge_string_t s) {
         start++;
     while (end > start && (*(end - 1) == ' ' || *(end - 1) == '\t' || *(end - 1) == '\n' || *(end - 1) == '\r'))
         end--;
-    return forge_string_from(start, (int64_t)(end - start));
+    // Return a view into the original data, NOT a heap-allocated copy
+    // This string should NOT be retained/released separately
+    return (forge_string_t){ .data = start, .len = (int64_t)(end - start), .is_heap = false };
 }
 
 static inline forge_string_t forge_string_to_upper(forge_string_t s) {
