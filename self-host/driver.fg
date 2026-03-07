@@ -71,6 +71,10 @@ pub fn find_imports(root_idx: Int) -> List[String]:
 # must be global because collections are passed by copy in forge.
 mut dr_visited: Map[String, Bool] := {}
 
+# global checking map for cycle detection.
+# tracks files currently being processed to detect circular imports.
+mut dr_checking: Map[String, Bool] := {}
+
 # stdlib root — set by compile_to_c before resolving imports
 mut dr_stdlib_root: String := ""
 
@@ -129,11 +133,19 @@ pub fn resolve_imports(root_idx: Int, source_path: String) -> List[Int]!:
             file_path = dir + "/" + rel_path + ".fg"
         if dr_visited.contains_key(file_path):
             continue
+        # Check for import cycles
+        if dr_checking.contains_key(file_path):
+            # Import cycle detected!
+            # TODO: emit proper error E235
+            # For now, skip to prevent infinite recursion
+            continue
+        dr_checking.insert(file_path, true)
         dr_visited.insert(file_path, true)
         content := read_file(file_path)!
         tokens := lex_all(content)
         mod_root := parse(tokens)
         sub_roots := resolve_imports(mod_root, file_path)!
+        dr_checking.remove(file_path)
         for sr in sub_roots:
             roots.push(sr)
         roots.push(mod_root)
@@ -144,10 +156,11 @@ pub fn mark_visited(path: String):
     dr_visited.insert(path, true)
 
 # initialize driver state for import resolution.
-# sets up stdlib root and resets the visited map.
+# sets up stdlib root and resets the visited and checking maps.
 pub fn init_driver(source_path: String):
     dr_stdlib_root = find_stdlib_root(source_path)
     dr_visited = {}
+    dr_checking = {}
     mark_visited(source_path)
 
 # run the full compile pipeline: lex, parse, resolve imports, check, codegen.
