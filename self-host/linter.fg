@@ -20,7 +20,7 @@ from checker import Diagnostic
 mut l_diagnostics: List[Diagnostic] := []
 
 fn l_warning(code: String, message: String):
-    l_diagnostics.push(Diagnostic("warning", code, message, 0, 0, ""))
+    l_diagnostics.push(Diagnostic("warning", code, message, "", 0, 0, ""))
 
 # ---------------------------------------------------------------
 # public entry point

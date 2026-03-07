@@ -19,11 +19,20 @@ pub fn render_diagnostics(diags: List[Diagnostic], source: String) -> String:
 fn e_render_one(d: Diagnostic, source: String) -> String:
     mut output := ""
 
-    # header: severity and message (with error code if present)
+    # header: file:line:col + severity + message (with error code)
+    mut location := ""
+    if d.file != "":
+        location = location + d.file
+        if d.line > 0:
+            location = location + ":" + d.line.to_string()
+            if d.col > 0:
+                location = location + ":" + d.col.to_string()
+        location = location + ": "
+    
     if d.code != "":
-        output = output + d.severity + "[" + d.code + "]: " + d.message + "\n"
+        output = output + location + d.severity + "[" + d.code + "]: " + d.message + "\n"
     else:
-        output = output + d.severity + ": " + d.message + "\n"
+        output = output + location + d.severity + ": " + d.message + "\n"
 
     # source line + underline (only if we have line info)
     if d.line > 0:
@@ -64,10 +73,23 @@ pub fn render_diagnostics_json(diags: List[Diagnostic]) -> String:
 # render a single diagnostic as a JSON object.
 fn e_render_json_one(d: Diagnostic) -> String:
     mut output := chr(123)
-    output = output + "\"severity\":\"" + e_json_escape(d.severity) + "\""
-    output = output + ",\"code\":"
+    output = output + "\"file\":"
+    if d.file != "":
+        output = output + "\"" + e_json_escape(d.file) + "\""
+    else:
+        output = output + "null"
+    output = output + ",\"severity\":\"" + e_json_escape(d.severity) + "\""
+    output = output + ",\"code":
     if d.code != "":
         output = output + "\"" + e_json_escape(d.code) + "\""
+    else:
+        output = output + "null"
+    output = output + ",\"message\":\"" + e_json_escape(d.message) + "\""
+    output = output + ",\"line\":" + d.line.to_string()
+    output = output + ",\"col\":" + d.col.to_string()
+    output = output + ",\"fix\":"
+    if d.fix != "":
+        output = output + "\"" + e_json_escape(d.fix) + "\""
     else:
         output = output + "null"
     output = output + ",\"message\":\"" + e_json_escape(d.message) + "\""
