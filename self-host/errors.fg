@@ -19,10 +19,10 @@ pub fn render_diagnostics(diags: List[Diagnostic], source: String) -> String:
 fn e_render_one(d: Diagnostic, source: String) -> String:
     mut output := ""
 
-    # header: file:line:col + severity + message (with error code)
+    # header: file + severity + message (with error code)
     mut location := ""
     if d.file != "":
-        location = location + d.file
+        location = d.file
         if d.line > 0:
             location = location + ":" + d.line.to_string()
             if d.col > 0:
