@@ -66,3 +66,30 @@ pub unsafe extern "C" fn forge_print(s: string::ForgeString) {
 pub extern "C" fn forge_print_int(n: i64) {
     println!("{}", n);
 }
+
+/// Print a C string (null-terminated)
+/// 
+/// # Safety
+/// ptr must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_print_cstr(ptr: *const i8) {
+    if ptr.is_null() {
+        println!();
+        return;
+    }
+    
+    // Calculate length
+    let mut len = 0;
+    let mut p = ptr;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+    
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        println!("{}", str_ref);
+    } else {
+        println!();
+    }
+}

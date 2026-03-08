@@ -165,6 +165,13 @@ fn compile_expr(
     match node {
         AstNode::IntLiteral(n) => Ok(builder.ins().iconst(types::I64, *n)),
         
+        AstNode::StringLiteral(s) => {
+            // For now, return pointer to string data as i64
+            // In full implementation, we'd create a data section entry
+            let ptr = s.as_ptr() as i64;
+            Ok(builder.ins().iconst(types::I64, ptr))
+        }
+        
         AstNode::Identifier(name) => {
             match variables.get(name) {
                 Some(var) => Ok(var.value),
@@ -190,21 +197,26 @@ fn compile_expr(
         }
         
         AstNode::Call { func, args } => {
-            let func_id = if func.starts_with('.') {
-                // Method call - not supported yet
-                return Err(CompileError::UnsupportedFeature(format!("method {}", func)));
+            // Special handling for print with string literals
+            let (func_name, use_cstr) = if func == "print" && args.len() == 1 {
+                if let AstNode::StringLiteral(_) = &args[0] {
+                    ("forge_print_cstr", true)
+                } else {
+                    ("forge_print", false)
+                }
             } else {
                 let runtime_name = match func.as_str() {
                     "print" => "forge_print",
                     "print_int" => "forge_print_int",
                     _ => func,
                 };
-                
-                runtime_funcs.get(runtime_name)
-                    .copied()
-                    .or_else(|| declared_funcs.get(func).copied())
-                    .ok_or_else(|| CompileError::UnknownFunction(func.clone()))?
+                (runtime_name, false)
             };
+            
+            let func_id = runtime_funcs.get(func_name)
+                .copied()
+                .or_else(|| declared_funcs.get(func).copied())
+                .ok_or_else(|| CompileError::UnknownFunction(func.clone()))?;
             
             let func_ref = module.declare_func_in_func(func_id, builder.func);
             
