@@ -270,6 +270,7 @@ fn compile_call(
         // Map high-level function names to runtime function names
         let runtime_name = match func_name {
             "print" => "forge_print",
+            "print_int" => "forge_print_int",
             _ => func_name,
         };
         
