@@ -267,9 +267,9 @@ pub fn declare_runtime_functions(
 
     let string_from_cstr = declare_runtime_function(
         module,
-        "forge_string_from_cstr",
-        &[types::I64], // cstr pointer
-        &[types::I64], // returns ForgeString
+        "forge_string_from_cstr_ptr",
+        &[types::I64, types::I64], // cstr pointer, out pointer
+        &[],
     )?;
     funcs.insert("forge_string_from_cstr".to_string(), string_from_cstr);
 
@@ -508,60 +508,60 @@ pub fn declare_runtime_functions(
     )?;
     funcs.insert("forge_map_insert_int".to_string(), map_insert_int);
 
-    // String methods
+    // String methods (using pointer-based ABI wrappers)
     let string_len = declare_runtime_function(
         module,
-        "forge_string_len",
-        &[types::I64], // ForgeString
+        "forge_string_len_ptr",
+        &[types::I64], // *const ForgeString
         &[types::I64], // returns length
     )?;
     funcs.insert("forge_string_len".to_string(), string_len);
 
     let string_contains = declare_runtime_function(
         module,
-        "forge_string_contains",
-        &[types::I64, types::I64], // haystack, needle (both ForgeString)
+        "forge_string_contains_ptr",
+        &[types::I64, types::I64], // *const haystack, *const needle
         &[types::I8],              // returns bool
     )?;
     funcs.insert("forge_string_contains".to_string(), string_contains);
 
     let string_substring = declare_runtime_function(
         module,
-        "forge_string_substring",
-        &[types::I64, types::I64, types::I64], // ForgeString, start, end
-        &[types::I64],                         // returns ForgeString
+        "forge_string_substring_ptr",
+        &[types::I64, types::I64, types::I64, types::I64], // *const s, start, end, *mut out
+        &[],
     )?;
     funcs.insert("forge_string_substring".to_string(), string_substring);
 
     let string_trim = declare_runtime_function(
         module,
-        "forge_string_trim",
-        &[types::I64], // ForgeString
-        &[types::I64], // returns ForgeString
+        "forge_string_trim_ptr",
+        &[types::I64, types::I64], // *const s, *mut out
+        &[],
     )?;
     funcs.insert("forge_string_trim".to_string(), string_trim);
 
     let string_starts_with = declare_runtime_function(
         module,
-        "forge_string_starts_with",
-        &[types::I64, types::I64], // s, prefix (both ForgeString)
+        "forge_string_starts_with_ptr",
+        &[types::I64, types::I64], // *const s, *const prefix
         &[types::I8],              // returns bool
     )?;
     funcs.insert("forge_string_starts_with".to_string(), string_starts_with);
 
     let string_ends_with = declare_runtime_function(
         module,
-        "forge_string_ends_with",
-        &[types::I64, types::I64], // s, suffix (both ForgeString)
+        "forge_string_ends_with_ptr",
+        &[types::I64, types::I64], // *const s, *const suffix
         &[types::I8],              // returns bool
     )?;
     funcs.insert("forge_string_ends_with".to_string(), string_ends_with);
 
     let string_concat = declare_runtime_function(
         module,
-        "forge_string_concat",
-        &[types::I64, types::I64], // a, b (both ForgeString)
-        &[types::I64],             // returns ForgeString
+        "forge_string_concat_ptr",
+        &[types::I64, types::I64, types::I64], // *const a, *const b, *mut out
+        &[],
     )?;
     funcs.insert("forge_string_concat".to_string(), string_concat);
 

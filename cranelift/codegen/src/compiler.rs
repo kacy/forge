@@ -660,11 +660,22 @@ fn compile_expr(
                 builder.ins().iconst(types::I64, ptr)
             };
 
-            // Convert pointer to ForgeString struct using forge_string_from_cstr
+            // Convert pointer to ForgeString struct on stack
             if let Some(&from_cstr_id) = runtime_funcs.get("forge_string_from_cstr") {
                 let from_cstr_ref = module.declare_func_in_func(from_cstr_id, builder.func);
-                let call = builder.ins().call(from_cstr_ref, &[ptr_val]);
-                Ok(builder.func.dfg.first_result(call))
+                // Create stack slot for ForgeString (24 bytes)
+                let string_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    24, // ForgeString size
+                    3,  // 8-byte alignment
+                ));
+                let string_slot_addr = builder.ins().stack_addr(types::I64, string_slot, 0);
+                // Call forge_string_from_cstr_ptr(cstr, out_ptr)
+                builder
+                    .ins()
+                    .call(from_cstr_ref, &[ptr_val, string_slot_addr]);
+                // Return pointer to the ForgeString struct
+                Ok(string_slot_addr)
             } else {
                 // Fallback: just return the pointer
                 Ok(ptr_val)
