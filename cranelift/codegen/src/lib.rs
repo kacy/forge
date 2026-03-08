@@ -204,6 +204,64 @@ pub fn declare_runtime_functions(module: &mut ObjectModule) -> Result<HashMap<St
     )?;
     funcs.insert("forge_print_cstr".to_string(), print_cstr);
     
+    // String concatenation (pointer-based)
+    let concat_cstr = declare_runtime_function(
+        module,
+        "forge_concat_cstr",
+        &[types::I64, types::I64], // *const i8, *const i8
+        &[types::I64], // returns *mut i8
+    )?;
+    funcs.insert("forge_concat_cstr".to_string(), concat_cstr);
+    
+    // Bitwise operations
+    let bit_and = declare_runtime_function(
+        module,
+        "forge_bit_and",
+        &[types::I64, types::I64],
+        &[types::I64],
+    )?;
+    funcs.insert("bit_and".to_string(), bit_and);
+    
+    let bit_or = declare_runtime_function(
+        module,
+        "forge_bit_or",
+        &[types::I64, types::I64],
+        &[types::I64],
+    )?;
+    funcs.insert("bit_or".to_string(), bit_or);
+    
+    let bit_xor = declare_runtime_function(
+        module,
+        "forge_bit_xor",
+        &[types::I64, types::I64],
+        &[types::I64],
+    )?;
+    funcs.insert("bit_xor".to_string(), bit_xor);
+    
+    let bit_shl = declare_runtime_function(
+        module,
+        "forge_bit_shl",
+        &[types::I64, types::I64],
+        &[types::I64],
+    )?;
+    funcs.insert("bit_shl".to_string(), bit_shl);
+    
+    let bit_shr = declare_runtime_function(
+        module,
+        "forge_bit_shr",
+        &[types::I64, types::I64],
+        &[types::I64],
+    )?;
+    funcs.insert("bit_shr".to_string(), bit_shr);
+    
+    let bit_not = declare_runtime_function(
+        module,
+        "forge_bit_not",
+        &[types::I64],
+        &[types::I64],
+    )?;
+    funcs.insert("bit_not".to_string(), bit_not);
+    
     // List functions
     let list_new = declare_runtime_function(
         module,

@@ -7,7 +7,7 @@ Successfully migrated Forge from C transpilation to native Cranelift-based compi
 
 ### Core Language Features
 - **Integers**: Literals, arithmetic (+, -, *, /), comparisons (==, >, <, >=, <=)
-- **Strings**: Literals, printing to stdout, variable assignment
+- **Strings**: Literals, printing to stdout, variable assignment, concatenation
 - **Variables**: `let` declarations with type inference
 - **Functions**: Definition, calls, parameters, return values
 - **Control Flow**: If/else statements with proper branching
@@ -77,6 +77,16 @@ fn main():
 ```
 **Output**: `hello!`
 
+### ✅ test_concat.fg (NEW - string concatenation)
+```forge
+fn main():
+    let a := "Hello, "
+    let b := "World!"
+    let c := a + b
+    print(c)
+```
+**Output**: `Hello, World!`
+
 ## Architecture
 
 ### Three-Crate Workspace
@@ -138,14 +148,13 @@ cargo build --bin forge
 ## Known Limitations
 
 ### Current
-- String concatenation: Returns left operand only (needs struct passing)
+- ✅ **String concatenation**: Fixed! Now properly concatenates strings using runtime
 - Float and boolean operations: Partially implemented
 - While loops: Not fully tested
 - Collections: Structure ready, not fully integrated
 - Pattern matching: Not implemented
 
 ### Future Work
-- Full string operations (concatenation, interpolation)
 - Complete collection support (List, Map, Set)
 - Full concurrency (spawn/await)
 - Generics and interfaces

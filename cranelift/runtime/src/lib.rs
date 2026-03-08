@@ -67,6 +67,84 @@ pub extern "C" fn forge_print_int(n: i64) {
     println!("{}", n);
 }
 
+/// Simple string concatenation for two C string pointers
+/// Allocates new memory for the result
+/// 
+/// # Safety
+/// Both pointers must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_concat_cstr(a: *const i8, b: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    
+    if a.is_null() {
+        return if b.is_null() { std::ptr::null_mut() } else { forge_strdup(b) };
+    }
+    if b.is_null() {
+        return forge_strdup(a);
+    }
+    
+    // Calculate lengths
+    let mut len_a = 0;
+    let mut p = a;
+    while *p != 0 {
+        len_a += 1;
+        p = p.add(1);
+    }
+    
+    let mut len_b = 0;
+    let mut p = b;
+    while *p != 0 {
+        len_b += 1;
+        p = p.add(1);
+    }
+    
+    let total_len = len_a + len_b;
+    let layout = Layout::from_size_align(total_len + 1, 1).unwrap();
+    let result = alloc(layout) as *mut i8;
+    
+    if result.is_null() {
+        return std::ptr::null_mut();
+    }
+    
+    // Copy a
+    std::ptr::copy_nonoverlapping(a, result, len_a);
+    // Copy b
+    std::ptr::copy_nonoverlapping(b, result.add(len_a), len_b);
+    // Null terminator
+    *result.add(total_len) = 0;
+    
+    result
+}
+
+/// Duplicate a C string
+/// 
+/// # Safety
+/// ptr must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_strdup(ptr: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    
+    let mut len = 0;
+    let mut p = ptr;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+    
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let result = alloc(layout) as *mut i8;
+    
+    if !result.is_null() {
+        std::ptr::copy_nonoverlapping(ptr, result, len + 1);
+    }
+    
+    result
+}
+
 /// Print a C string (null-terminated)
 /// 
 /// # Safety
@@ -92,4 +170,40 @@ pub unsafe extern "C" fn forge_print_cstr(ptr: *const i8) {
     } else {
         println!();
     }
+}
+
+/// Bitwise AND
+#[no_mangle]
+pub extern "C" fn forge_bit_and(a: i64, b: i64) -> i64 {
+    a & b
+}
+
+/// Bitwise OR
+#[no_mangle]
+pub extern "C" fn forge_bit_or(a: i64, b: i64) -> i64 {
+    a | b
+}
+
+/// Bitwise XOR
+#[no_mangle]
+pub extern "C" fn forge_bit_xor(a: i64, b: i64) -> i64 {
+    a ^ b
+}
+
+/// Bitwise NOT
+#[no_mangle]
+pub extern "C" fn forge_bit_not(a: i64) -> i64 {
+    !a
+}
+
+/// Bitwise shift left
+#[no_mangle]
+pub extern "C" fn forge_bit_shl(a: i64, b: i64) -> i64 {
+    a << b
+}
+
+/// Bitwise shift right (arithmetic)
+#[no_mangle]
+pub extern "C" fn forge_bit_shr(a: i64, b: i64) -> i64 {
+    a >> b
 }

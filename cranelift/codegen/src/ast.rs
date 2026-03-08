@@ -87,6 +87,11 @@ pub enum BinaryOp {
     Gte,
     And,
     Or,
+    BitAnd,   // &
+    BitOr,    // |
+    BitXor,   // ^
+    Shl,      // <<
+    Shr,      // >>
 }
 
 /// Unary operators
@@ -94,6 +99,7 @@ pub enum BinaryOp {
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,   // ~
 }
 
 /// Local variable slot
@@ -183,6 +189,11 @@ fn compile_expr(
                 }
                 BinaryOp::And => builder.ins().band(left_val, right_val),
                 BinaryOp::Or => builder.ins().bor(left_val, right_val),
+                BinaryOp::BitAnd => builder.ins().band(left_val, right_val),
+                BinaryOp::BitOr => builder.ins().bor(left_val, right_val),
+                BinaryOp::BitXor => builder.ins().bxor(left_val, right_val),
+                BinaryOp::Shl => builder.ins().ishl(left_val, right_val),
+                BinaryOp::Shr => builder.ins().sshr(left_val, right_val),
             };
             
             Ok(result)
@@ -198,6 +209,7 @@ fn compile_expr(
                     let one = builder.ins().iconst(types::I8, 1);
                     builder.ins().bxor(val, one)
                 }
+                UnaryOp::BitNot => builder.ins().bnot(val),
             };
             
             Ok(result)

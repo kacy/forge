@@ -1,6 +1,0 @@
-fn say_hello():
-    print("hello!")
-
-fn main():
-    say_hello()
-    print("from main")

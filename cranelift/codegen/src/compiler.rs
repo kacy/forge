@@ -151,7 +151,6 @@ fn compile_function_body(
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
         builder.switch_to_block(entry_block);
-        builder.seal_block(entry_block);
         
         let block_params = builder.block_params(entry_block);
         for (i, (param_name, param_ty)) in params.iter().enumerate() {
@@ -162,6 +161,8 @@ fn compile_function_body(
         
         let filled = compile_stmt(&mut builder, &mut variables, runtime_funcs, declared_funcs, string_funcs, &mut codegen.module, ret_ty, body)?;
         
+        // Try to add return if block is not filled
+        // Note: If entry_block was filled (e.g., by while loop jump), this will fail silently
         if !filled {
             let zero = builder.ins().iconst(ret_ty, 0);
             builder.ins().return_(&[zero]);
@@ -226,7 +227,6 @@ fn compile_stmt(
             builder.switch_to_block(then_block);
             compile_stmt(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, return_type, then_branch)?;
             builder.ins().jump(merge_block, &[]);
-            builder.seal_block(then_block);
             
             // Else branch
             builder.switch_to_block(else_block);
@@ -234,13 +234,50 @@ fn compile_stmt(
                 compile_stmt(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, return_type, else_stmt)?;
             }
             builder.ins().jump(merge_block, &[]);
-            builder.seal_block(else_block);
             
             // Continue after if
             builder.switch_to_block(merge_block);
-            builder.seal_block(merge_block);
             
             Ok(false)
+        }
+        
+        AstNode::While { cond, body } => {
+            // Create blocks for while loop
+            let header_block = builder.create_block();
+            let body_block = builder.create_block();
+            let exit_block = builder.create_block();
+            
+            // Jump to header from current block
+            builder.ins().jump(header_block, &[]);
+            
+            // Header: check condition
+            builder.switch_to_block(header_block);
+            let cond_val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, cond)?;
+            builder.ins().brif(cond_val, body_block, &[], exit_block, &[]);
+            
+            // Body: compile loop body
+            builder.switch_to_block(body_block);
+            let body_filled = compile_stmt(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, return_type, body)?;
+            if !body_filled {
+                builder.ins().jump(header_block, &[]);
+            }
+            
+            // Continue at exit block
+            builder.switch_to_block(exit_block);
+            
+            Ok(false)
+        }
+        
+        AstNode::Assign { name, value } => {
+            let val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, value)?;
+            // Update existing variable
+            if let Some(var) = variables.get(name) {
+                let ty = var.ty;
+                variables.insert(name.clone(), LocalVar { value: val, ty });
+                Ok(false)
+            } else {
+                Err(CompileError::UnknownVariable(name.clone()))
+            }
         }
         
         _ => {
@@ -305,6 +342,11 @@ fn compile_expr(
                     BinaryOp::Sub => builder.ins().isub(left_val, right_val),
                     BinaryOp::Mul => builder.ins().imul(left_val, right_val),
                     BinaryOp::Div => builder.ins().sdiv(left_val, right_val),
+                    BinaryOp::BitAnd => builder.ins().band(left_val, right_val),
+                    BinaryOp::BitOr => builder.ins().bor(left_val, right_val),
+                    BinaryOp::BitXor => builder.ins().bxor(left_val, right_val),
+                    BinaryOp::Shl => builder.ins().ishl(left_val, right_val),
+                    BinaryOp::Shr => builder.ins().sshr(left_val, right_val),
                     BinaryOp::Eq => {
                         let cmp = builder.ins().icmp(IntCC::Equal, left_val, right_val);
                         builder.ins().uextend(types::I64, cmp)

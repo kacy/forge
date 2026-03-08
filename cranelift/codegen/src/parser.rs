@@ -355,6 +355,29 @@ impl TextAstParser {
                 Ok(AstNode::Identifier(name))
             }
             "binary" => {
+                // Check if it's a pipe operation
+                if let Some(line) = self.current() {
+                    if line.value == "pipe" {
+                        self.advance();
+                        // Parse left operand (value)
+                        let value = self.parse_expression()?;
+                        // Parse right operand (function name)
+                        let func_line = self.current()
+                            .ok_or_else(|| CompileError::UnsupportedFeature("Expected function name after pipe".to_string()))?;
+                        if func_line.kind != "ident" {
+                            return Err(CompileError::UnsupportedFeature(
+                                format!("Expected function identifier in pipe, got '{}'", func_line.kind)
+                            ));
+                        }
+                        let func_name = func_line.value.clone();
+                        self.advance();
+                        // Transform pipe into function call
+                        return Ok(AstNode::Call {
+                            func: func_name,
+                            args: vec![value],
+                        });
+                    }
+                }
                 self.parse_binary()
             }
             "method_call" => {
