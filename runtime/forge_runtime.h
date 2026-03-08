@@ -1678,12 +1678,11 @@ static inline bool forge_exec_output_impl(forge_string_t cmd, forge_string_t *ou
 static inline forge_string_t forge_input(void) {
     char buf[4096];
     if (!fgets(buf, sizeof(buf), stdin)) {
-        return forge_string_from("", 0);
+        return forge_string_empty;
     }
     int64_t len = (int64_t)strlen(buf);
     if (len > 0 && buf[len - 1] == '\n') len--;
-    char *copy = (char *)malloc((size_t)len + 1);
-    if (!copy) { fprintf(stderr, "forge: out of memory\n"); exit(1); }
+    char *copy = forge_str_alloc_rc(len);
     memcpy(copy, buf, (size_t)len);
     copy[len] = '\0';
     return (forge_string_t){ .data = copy, .len = len, .is_heap = true };
@@ -2282,8 +2281,13 @@ static inline bool forge_process_read_impl(int64_t handle, int64_t max_bytes, fo
     if (!buf) { *out = forge_string_empty; return false; }
     ssize_t n = read(p->stdout_fd, buf, (size_t)max_bytes);
     if (n < 0) { free(buf); *out = forge_string_empty; return false; }
-    buf[n] = '\0';
-    *out = forge_string_from(buf, (int64_t)n);
+    // copy to RC-allocated memory
+    char *rcbuf = forge_str_alloc_rc((int64_t)n);
+    if (!rcbuf) { free(buf); *out = forge_string_empty; return false; }
+    memcpy(rcbuf, buf, (size_t)n);
+    rcbuf[n] = '\0';
+    free(buf);
+    *out = (forge_string_t){ .data = rcbuf, .len = (int64_t)n, .is_heap = true };
     return true;
 }
 
@@ -2302,8 +2306,13 @@ static inline bool forge_process_read_err_impl(int64_t handle, int64_t max_bytes
     if (!buf) { *out = forge_string_empty; return false; }
     ssize_t n = read(p->stderr_fd, buf, (size_t)max_bytes);
     if (n < 0) { free(buf); *out = forge_string_empty; return false; }
-    buf[n] = '\0';
-    *out = forge_string_from(buf, (int64_t)n);
+    // copy to RC-allocated memory
+    char *rcbuf = forge_str_alloc_rc((int64_t)n);
+    if (!rcbuf) { free(buf); *out = forge_string_empty; return false; }
+    memcpy(rcbuf, buf, (size_t)n);
+    rcbuf[n] = '\0';
+    free(buf);
+    *out = (forge_string_t){ .data = rcbuf, .len = (int64_t)n, .is_heap = true };
     return true;
 }
 
