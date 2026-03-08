@@ -284,6 +284,7 @@ impl TextAstParser {
             }
             "return" => self.parse_return(),
             "if" => self.parse_if(),
+            "while" => self.parse_while(),
             "bind" => {
                 // bind name <value> - this is a let statement
                 // Handle case where name includes "mut" marker: "bind i mut"
@@ -575,6 +576,36 @@ impl TextAstParser {
         Ok(AstNode::Call {
             func: func_name,
             args: vec![obj],
+        })
+    }
+
+    /// Parse while loop
+    fn parse_while(&mut self) -> Result<AstNode, CompileError> {
+        let line = self.current().unwrap();
+        let indent = line.indent;
+        self.advance();
+
+        // Parse condition
+        let cond = self.parse_expression()?;
+
+        // Parse body statements (everything indented more than 'while')
+        let mut body_stmts = Vec::new();
+        while let Some(line) = self.current() {
+            if line.indent <= indent {
+                break;
+            }
+            body_stmts.push(self.parse_statement()?);
+        }
+
+        let body = if body_stmts.len() == 1 {
+            body_stmts.into_iter().next().unwrap()
+        } else {
+            AstNode::Block(body_stmts)
+        };
+
+        Ok(AstNode::While {
+            cond: Box::new(cond),
+            body: Box::new(body),
         })
     }
 
