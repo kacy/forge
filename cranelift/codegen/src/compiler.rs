@@ -451,7 +451,22 @@ fn compile_stmt(
                     module,
                     e,
                 )?;
-                builder.ins().return_(&[val]);
+
+                // Convert to return type if necessary
+                let val_ty = builder.func.dfg.value_type(val);
+                let final_val = if val_ty != return_type {
+                    if val_ty.bits() > return_type.bits() {
+                        // Truncate (e.g., i64 -> i8)
+                        builder.ins().ireduce(return_type, val)
+                    } else {
+                        // Extend (e.g., i8 -> i64)
+                        builder.ins().uextend(return_type, val)
+                    }
+                } else {
+                    val
+                };
+
+                builder.ins().return_(&[final_val]);
             } else {
                 let zero = builder.ins().iconst(return_type, 0);
                 builder.ins().return_(&[zero]);
@@ -705,46 +720,110 @@ fn compile_expr(
                     right,
                 )?;
 
+                let left_ty = builder.func.dfg.value_type(left_val);
+                let is_float = left_ty == types::F64;
+
                 Ok(match op {
-                    BinaryOp::Add => builder.ins().iadd(left_val, right_val),
-                    BinaryOp::Sub => builder.ins().isub(left_val, right_val),
-                    BinaryOp::Mul => builder.ins().imul(left_val, right_val),
-                    BinaryOp::Div => builder.ins().sdiv(left_val, right_val),
+                    BinaryOp::Add => {
+                        if is_float {
+                            builder.ins().fadd(left_val, right_val)
+                        } else {
+                            builder.ins().iadd(left_val, right_val)
+                        }
+                    }
+                    BinaryOp::Sub => {
+                        if is_float {
+                            builder.ins().fsub(left_val, right_val)
+                        } else {
+                            builder.ins().isub(left_val, right_val)
+                        }
+                    }
+                    BinaryOp::Mul => {
+                        if is_float {
+                            builder.ins().fmul(left_val, right_val)
+                        } else {
+                            builder.ins().imul(left_val, right_val)
+                        }
+                    }
+                    BinaryOp::Div => {
+                        if is_float {
+                            builder.ins().fdiv(left_val, right_val)
+                        } else {
+                            builder.ins().sdiv(left_val, right_val)
+                        }
+                    }
                     BinaryOp::BitAnd => builder.ins().band(left_val, right_val),
                     BinaryOp::BitOr => builder.ins().bor(left_val, right_val),
                     BinaryOp::BitXor => builder.ins().bxor(left_val, right_val),
                     BinaryOp::Shl => builder.ins().ishl(left_val, right_val),
                     BinaryOp::Shr => builder.ins().sshr(left_val, right_val),
                     BinaryOp::Eq => {
-                        let cmp = builder.ins().icmp(IntCC::Equal, left_val, right_val);
-                        builder.ins().uextend(types::I64, cmp)
+                        if is_float {
+                            let cmp = builder.ins().fcmp(FloatCC::Equal, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        } else {
+                            let cmp = builder.ins().icmp(IntCC::Equal, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        }
                     }
                     BinaryOp::Gt => {
-                        let cmp = builder
-                            .ins()
-                            .icmp(IntCC::SignedGreaterThan, left_val, right_val);
-                        builder.ins().uextend(types::I64, cmp)
+                        if is_float {
+                            let cmp = builder
+                                .ins()
+                                .fcmp(FloatCC::GreaterThan, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        } else {
+                            let cmp =
+                                builder
+                                    .ins()
+                                    .icmp(IntCC::SignedGreaterThan, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        }
                     }
                     BinaryOp::Lt => {
-                        let cmp = builder
-                            .ins()
-                            .icmp(IntCC::SignedLessThan, left_val, right_val);
-                        builder.ins().uextend(types::I64, cmp)
+                        if is_float {
+                            let cmp = builder.ins().fcmp(FloatCC::LessThan, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        } else {
+                            let cmp =
+                                builder
+                                    .ins()
+                                    .icmp(IntCC::SignedLessThan, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        }
                     }
                     BinaryOp::Gte => {
-                        let cmp = builder.ins().icmp(
-                            IntCC::SignedGreaterThanOrEqual,
-                            left_val,
-                            right_val,
-                        );
-                        builder.ins().uextend(types::I64, cmp)
+                        if is_float {
+                            let cmp = builder.ins().fcmp(
+                                FloatCC::GreaterThanOrEqual,
+                                left_val,
+                                right_val,
+                            );
+                            builder.ins().uextend(types::I64, cmp)
+                        } else {
+                            let cmp = builder.ins().icmp(
+                                IntCC::SignedGreaterThanOrEqual,
+                                left_val,
+                                right_val,
+                            );
+                            builder.ins().uextend(types::I64, cmp)
+                        }
                     }
                     BinaryOp::Lte => {
-                        let cmp =
-                            builder
-                                .ins()
-                                .icmp(IntCC::SignedLessThanOrEqual, left_val, right_val);
-                        builder.ins().uextend(types::I64, cmp)
+                        if is_float {
+                            let cmp =
+                                builder
+                                    .ins()
+                                    .fcmp(FloatCC::LessThanOrEqual, left_val, right_val);
+                            builder.ins().uextend(types::I64, cmp)
+                        } else {
+                            let cmp = builder.ins().icmp(
+                                IntCC::SignedLessThanOrEqual,
+                                left_val,
+                                right_val,
+                            );
+                            builder.ins().uextend(types::I64, cmp)
+                        }
                     }
                     _ => builder.ins().iconst(types::I64, 0),
                 })

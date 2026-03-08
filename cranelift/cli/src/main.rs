@@ -5,7 +5,7 @@ use std::fs;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    
+
     if args.len() < 2 {
         println!("Usage: forge <command> [args...]");
         println!("Commands:");
@@ -15,9 +15,9 @@ fn main() {
         println!("  parse <file.fg>    Parse and display AST");
         return;
     }
-    
+
     let command = &args[1];
-    
+
     match command.as_str() {
         "build" => {
             if args.len() < 3 {
@@ -52,19 +52,19 @@ fn main() {
 }
 
 fn build_file(path: &str) {
-    use forge_codegen::parser::parse_file;
     use forge_codegen::compiler::compile_module;
     use forge_codegen::create_codegen;
     use forge_codegen::finalize_module;
     use forge_codegen::linker::build_executable;
-    
+    use forge_codegen::parser::parse_file;
+
     println!("Building {}...", path);
-    
+
     // Parse the file
     match parse_file(path) {
         Ok(ast_nodes) => {
             println!("Parsed {} top-level declarations", ast_nodes.len());
-            
+
             // Create codegen
             match create_codegen() {
                 Ok(mut codegen) => {
@@ -72,19 +72,25 @@ fn build_file(path: &str) {
                     match compile_module(&mut codegen, ast_nodes) {
                         Ok(funcs) => {
                             println!("Compiled {} functions", funcs.len());
-                            
+
                             // Finalize and write object file
                             match finalize_module(codegen.module) {
                                 Ok(bytes) => {
                                     let obj_path = path.replace(".fg", ".o");
                                     match fs::write(&obj_path, &bytes) {
                                         Ok(_) => {
-                                            println!("Written {} ({} bytes)", obj_path, bytes.len());
-                                            
+                                            println!(
+                                                "Written {} ({} bytes)",
+                                                obj_path,
+                                                bytes.len()
+                                            );
+
                                             // Link to create executable
                                             let exe_path = path.replace(".fg", "");
                                             match build_executable(&obj_path, &exe_path) {
-                                                Ok(_) => println!("Created executable: {}", exe_path),
+                                                Ok(_) => {
+                                                    println!("Created executable: {}", exe_path)
+                                                }
                                                 Err(e) => eprintln!("Error linking: {}", e),
                                             }
                                         }
@@ -106,9 +112,9 @@ fn build_file(path: &str) {
 
 fn parse_file(path: &str) {
     use forge_codegen::parser::parse_file;
-    
+
     println!("Parsing {}...", path);
-    
+
     match parse_file(path) {
         Ok(ast_nodes) => {
             println!("Parsed {} top-level declarations:", ast_nodes.len());

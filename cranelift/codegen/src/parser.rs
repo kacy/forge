@@ -255,7 +255,16 @@ impl TextAstParser {
         let mut stmts = Vec::new();
 
         while let Some(line) = self.current() {
+            // Stop if we hit a lower indentation
             if line.indent < start_indent {
+                break;
+            }
+
+            // Stop if we hit another top-level declaration at same level
+            // (e.g., another function after a short function like `do_nothing`)
+            if line.indent == start_indent
+                && (line.kind == "fn" || line.kind == "test" || line.kind == "import")
+            {
                 break;
             }
 
@@ -369,11 +378,18 @@ impl TextAstParser {
 
     /// Parse return statement
     fn parse_return(&mut self) -> Result<AstNode, CompileError> {
+        let return_line = self.current().unwrap();
+        let return_indent = return_line.indent;
         // Advance past the return keyword first
         self.advance();
 
-        let value = if self.current().is_some() {
-            Some(Box::new(self.parse_expression()?))
+        // Only parse a return value if the next line is indented more
+        let value = if let Some(line) = self.current() {
+            if line.indent > return_indent {
+                Some(Box::new(self.parse_expression()?))
+            } else {
+                None
+            }
         } else {
             None
         };
