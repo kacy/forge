@@ -231,6 +231,7 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "forge-runtime",
+ "target-lexicon",
 ]
 
 [[package]]
