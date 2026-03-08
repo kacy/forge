@@ -116,6 +116,7 @@ impl TextAstParser {
             "struct" => self.parse_struct(),
             "from" => self.parse_import(),
             "test" => self.parse_test(),
+            "bind" => self.parse_top_level_bind(),
             "pub" => {
                 self.advance();
                 self.parse_top_level()
@@ -305,6 +306,42 @@ impl TextAstParser {
         Ok(AstNode::Test {
             name: test_name,
             body: Box::new(AstNode::Block(stmts)),
+        })
+    }
+
+    /// Parse a top-level bind (global variable declaration)
+    /// e.g., mut d_count: Int := 0
+    fn parse_top_level_bind(&mut self) -> Result<AstNode, CompileError> {
+        let line = self.current().unwrap();
+        let name = line
+            .value
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| line.value.clone());
+        let name_indent = line.indent;
+        self.advance();
+
+        // Check for optional type annotation
+        let type_annotation = if let Some(type_line) = self.current() {
+            if type_line.kind == "type" && type_line.indent > name_indent {
+                let ty = type_line.value.clone();
+                self.advance();
+                Some(ty)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Parse value
+        let value = self.parse_expression()?;
+
+        Ok(AstNode::Let {
+            name,
+            type_annotation,
+            value: Box::new(value),
         })
     }
 
@@ -645,6 +682,27 @@ impl TextAstParser {
                 self.parse_binary()
             }
             "method_call" => self.parse_method_call(),
+            "unary" => {
+                // Parse unary operation: unary <op> followed by operand
+                let op_str = line.value.clone();
+                self.advance();
+
+                // Parse the operand
+                let operand = self.parse_expression()?;
+
+                // Map operator string to UnaryOp
+                let op = match op_str.as_str() {
+                    "negate" => UnaryOp::Neg,
+                    "not" => UnaryOp::Not,
+                    "bitnot" => UnaryOp::BitNot,
+                    _ => UnaryOp::Neg, // Default to negate for unknown
+                };
+
+                Ok(AstNode::UnaryOp {
+                    op,
+                    operand: Box::new(operand),
+                })
+            }
             _ => {
                 // Skip unknown nodes
                 self.advance();
