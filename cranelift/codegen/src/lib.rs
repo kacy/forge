@@ -565,6 +565,15 @@ pub fn declare_runtime_functions(
     )?;
     funcs.insert("forge_string_concat".to_string(), string_concat);
 
+    // Simple strlen-based length for null-terminated strings (debugging/workaround)
+    let cstring_len = declare_runtime_function(
+        module,
+        "forge_cstring_len",
+        &[types::I64], // *const cstr
+        &[types::I64], // returns length
+    )?;
+    funcs.insert("forge_cstring_len".to_string(), cstring_len);
+
     Ok(funcs)
 }
 

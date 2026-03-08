@@ -650,6 +650,7 @@ fn compile_expr(
 
         AstNode::StringLiteral(s) => {
             // Call the string data function to get the address
+            // For now, just return the pointer directly (using simple strlen for .len())
             let ptr_val = if let Some(&str_func_id) = string_funcs.get(s.as_str()) {
                 let str_func_ref = module.declare_func_in_func(str_func_id, builder.func);
                 let call = builder.ins().call(str_func_ref, &[]);
@@ -660,26 +661,13 @@ fn compile_expr(
                 builder.ins().iconst(types::I64, ptr)
             };
 
-            // Convert pointer to ForgeString struct on stack
-            if let Some(&from_cstr_id) = runtime_funcs.get("forge_string_from_cstr") {
-                let from_cstr_ref = module.declare_func_in_func(from_cstr_id, builder.func);
-                // Create stack slot for ForgeString (24 bytes)
-                let string_slot = builder.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    24, // ForgeString size
-                    3,  // 8-byte alignment
-                ));
-                let string_slot_addr = builder.ins().stack_addr(types::I64, string_slot, 0);
-                // Call forge_string_from_cstr_ptr(cstr, out_ptr)
-                builder
-                    .ins()
-                    .call(from_cstr_ref, &[ptr_val, string_slot_addr]);
-                // Return pointer to the ForgeString struct
-                Ok(string_slot_addr)
-            } else {
-                // Fallback: just return the pointer
-                Ok(ptr_val)
-            }
+            // Note: For full ForgeString struct support, we would:
+            // 1. Create a stack slot for the 24-byte struct
+            // 2. Call forge_string_from_cstr_ptr to initialize it
+            // 3. Return the address of the stack slot
+            // For now, we just return the raw pointer and use strlen-based len()
+
+            Ok(ptr_val)
         }
 
         AstNode::StringInterp { parts: _ } => {
@@ -1098,6 +1086,65 @@ fn compile_expr(
         }
 
         AstNode::Call { func, args } => {
+            // Check for string method calls FIRST (before list methods, since "len" overlaps)
+            let string_methods = [
+                "len",
+                "contains",
+                "substring",
+                "trim",
+                "starts_with",
+                "ends_with",
+            ];
+            if string_methods.contains(&func.as_str()) && !args.is_empty() {
+                // Transform string.method(args) to forge_string_method(string, args)
+                let string_arg = &args[0];
+                let string_val = compile_expr(
+                    builder,
+                    variables,
+                    runtime_funcs,
+                    declared_funcs,
+                    string_funcs,
+                    module,
+                    string_arg,
+                )?;
+
+                // Special case: use simple strlen for .len() on raw strings
+                if func == "len" {
+                    if let Some(&len_func_id) = runtime_funcs.get("forge_cstring_len") {
+                        let len_func_ref = module.declare_func_in_func(len_func_id, builder.func);
+                        let call = builder.ins().call(len_func_ref, &[string_val]);
+                        return Ok(builder.func.dfg.first_result(call));
+                    }
+                }
+
+                let runtime_func_name = format!("forge_string_{}", func);
+                if let Some(&func_id) = runtime_funcs.get(&runtime_func_name) {
+                    let func_ref = module.declare_func_in_func(func_id, builder.func);
+
+                    // Compile additional args (if any)
+                    let mut arg_values = vec![string_val];
+                    for arg in &args[1..] {
+                        let arg_val = compile_expr(
+                            builder,
+                            variables,
+                            runtime_funcs,
+                            declared_funcs,
+                            string_funcs,
+                            module,
+                            arg,
+                        )?;
+                        arg_values.push(arg_val);
+                    }
+
+                    let call = builder.ins().call(func_ref, &arg_values);
+                    return if !builder.func.dfg.inst_results(call).is_empty() {
+                        Ok(builder.func.dfg.first_result(call))
+                    } else {
+                        Ok(builder.ins().iconst(types::I64, 0))
+                    };
+                }
+            }
+
             // Check for list method calls
             let list_methods = ["len", "push", "pop", "get", "set"];
             if list_methods.contains(&func.as_str()) && !args.is_empty() {
@@ -1171,56 +1218,6 @@ fn compile_expr(
                             module,
                             arg,
                         )?);
-                    }
-
-                    let call = builder.ins().call(func_ref, &arg_values);
-                    return if !builder.func.dfg.inst_results(call).is_empty() {
-                        Ok(builder.func.dfg.first_result(call))
-                    } else {
-                        Ok(builder.ins().iconst(types::I64, 0))
-                    };
-                }
-            }
-
-            // Check for string method calls
-            let string_methods = [
-                "len",
-                "contains",
-                "substring",
-                "trim",
-                "starts_with",
-                "ends_with",
-            ];
-            if string_methods.contains(&func.as_str()) && !args.is_empty() {
-                // Transform string.method(args) to forge_string_method(string, args)
-                let string_arg = &args[0];
-                let string_val = compile_expr(
-                    builder,
-                    variables,
-                    runtime_funcs,
-                    declared_funcs,
-                    string_funcs,
-                    module,
-                    string_arg,
-                )?;
-
-                let runtime_func_name = format!("forge_string_{}", func);
-                if let Some(&func_id) = runtime_funcs.get(&runtime_func_name) {
-                    let func_ref = module.declare_func_in_func(func_id, builder.func);
-
-                    // Compile additional args (if any)
-                    let mut arg_values = vec![string_val];
-                    for arg in &args[1..] {
-                        let arg_val = compile_expr(
-                            builder,
-                            variables,
-                            runtime_funcs,
-                            declared_funcs,
-                            string_funcs,
-                            module,
-                            arg,
-                        )?;
-                        arg_values.push(arg_val);
                     }
 
                     let call = builder.ins().call(func_ref, &arg_values);

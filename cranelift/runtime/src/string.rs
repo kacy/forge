@@ -535,9 +535,25 @@ pub extern "C" fn forge_bool_to_string(b: bool) -> ForgeString {
 }
 
 // ============================================================================
-// ABI-compatible wrapper functions (taking pointers instead of structs)
-// These are used by the Cranelift backend to avoid passing 24-byte structs
+// Simple strlen-based length (for debugging ABI issues)
 // ============================================================================
+
+/// Simple strlen-based length for null-terminated strings
+#[no_mangle]
+pub extern "C" fn forge_cstring_len(cstr: *const i8) -> i64 {
+    if cstr.is_null() {
+        return 0;
+    }
+    unsafe {
+        let mut len = 0i64;
+        let mut p = cstr;
+        while *p != 0 {
+            len += 1;
+            p = p.add(1);
+        }
+        len
+    }
+}
 
 /// ABI wrapper for forge_string_len - takes pointer to ForgeString
 #[no_mangle]
