@@ -435,9 +435,19 @@ impl TextAstParser {
         // Parse object (should be next expression)
         let obj = self.parse_expression()?;
         
-        // Convert to call: method(obj, args...)
+        // Strip leading dot and map to runtime function
+        let func_name = if method.starts_with('.') {
+            match method.as_str() {
+                ".to_string" => "forge_int_to_cstr".to_string(),
+                _ => method[1..].to_string(), // Remove leading dot
+            }
+        } else {
+            method
+        };
+        
+        // Convert to call: func_name(obj)
         Ok(AstNode::Call {
-            func: method,
+            func: func_name,
             args: vec![obj],
         })
     }

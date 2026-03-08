@@ -207,3 +207,21 @@ pub extern "C" fn forge_bit_shl(a: i64, b: i64) -> i64 {
 pub extern "C" fn forge_bit_shr(a: i64, b: i64) -> i64 {
     a >> b
 }
+
+/// Convert int to C string (returns pointer, caller must free with forge_free)
+#[no_mangle]
+pub unsafe extern "C" fn forge_int_to_cstr(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    
+    let s = n.to_string();
+    let len = s.len();
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, len);
+        *ptr.add(len) = 0;
+    }
+    
+    ptr
+}

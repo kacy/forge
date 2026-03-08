@@ -186,6 +186,15 @@ pub fn declare_runtime_functions(module: &mut ObjectModule) -> Result<HashMap<St
     )?;
     funcs.insert("forge_int_to_string".to_string(), int_to_string);
     
+    // Int to C string conversion (for method calls)
+    let int_to_cstr = declare_runtime_function(
+        module,
+        "forge_int_to_cstr",
+        &[types::I64], // Int
+        &[types::I64], // Returns *mut i8
+    )?;
+    funcs.insert("forge_int_to_cstr".to_string(), int_to_cstr);
+    
     // Print int function (for debugging)
     let print_int = declare_runtime_function(
         module,
