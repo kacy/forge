@@ -368,7 +368,7 @@ pub fn declare_runtime_functions(
     let list_push = declare_runtime_function(
         module,
         "forge_list_push",
-        &[types::I64, types::I64, types::I64], // list_ptr, elem_ptr, elem_size
+        &[types::I64, types::I64, types::I64], // *mut ForgeList (list addr), *mut elem, elem_size
         &[],
     )?;
     funcs.insert("forge_list_push".to_string(), list_push);

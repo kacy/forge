@@ -695,6 +695,18 @@ fn compile_expr(
                 .ok_or_else(|| CompileError::UnknownFunction("forge_list_push".to_string()))?;
             let push_ref = module.declare_func_in_func(*push_func, builder.func);
 
+            // Create a stack slot for the list so we can pass its address to push
+            let list_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                8, // ForgeList is 8 bytes (one pointer)
+                3, // align_shift = 8 bytes
+            ));
+            let list_slot_addr = builder.ins().stack_addr(types::I64, list_slot, 0);
+            builder
+                .ins()
+                .store(MemFlags::new(), list_val, list_slot_addr, 0);
+            let list_ptr = list_slot_addr;
+
             for elem in elements {
                 let elem_val = compile_expr(
                     builder,
@@ -706,16 +718,16 @@ fn compile_expr(
                     elem,
                 )?;
                 // Store elem_val to stack and pass pointer
-                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                let elem_slot = builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
                     8,
                     3, // align_shift = 8 bytes
                 ));
-                let elem_ptr = builder.ins().stack_addr(types::I64, slot, 0);
+                let elem_ptr = builder.ins().stack_addr(types::I64, elem_slot, 0);
                 builder.ins().store(MemFlags::new(), elem_val, elem_ptr, 0);
                 builder
                     .ins()
-                    .call(push_ref, &[list_val, elem_ptr, elem_size_val]);
+                    .call(push_ref, &[list_ptr, elem_ptr, elem_size_val]);
             }
 
             Ok(list_val)
