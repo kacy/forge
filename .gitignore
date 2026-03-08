@@ -72,3 +72,4 @@ Thumbs.db
 .vscode/
 .idea/
 *.fg binaries
+/target
