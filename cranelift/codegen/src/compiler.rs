@@ -16,11 +16,69 @@ pub struct LocalVar {
     pub ty: Type,
 }
 
+/// Collect all string literals from AST
+fn collect_strings(node: &AstNode, strings: &mut Vec<String>) {
+    match node {
+        AstNode::StringLiteral(s) => strings.push(s.clone()),
+        AstNode::BinaryOp { left, right, .. } => {
+            collect_strings(left, strings);
+            collect_strings(right, strings);
+        }
+        AstNode::UnaryOp { operand, .. } => collect_strings(operand, strings),
+        AstNode::Call { args, .. } => {
+            for arg in args {
+                collect_strings(arg, strings);
+            }
+        }
+        AstNode::Let { value, .. } => collect_strings(value, strings),
+        AstNode::Block(stmts) => {
+            for stmt in stmts {
+                collect_strings(stmt, strings);
+            }
+        }
+        AstNode::If { cond, then_branch, else_branch } => {
+            collect_strings(cond, strings);
+            collect_strings(then_branch, strings);
+            if let Some(else_) = else_branch {
+                collect_strings(else_, strings);
+            }
+        }
+        AstNode::While { cond, body } => {
+            collect_strings(cond, strings);
+            collect_strings(body, strings);
+        }
+        AstNode::Return(expr) => {
+            if let Some(e) = expr {
+                collect_strings(e, strings);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Compile all functions from AST with two-pass approach
 pub fn compile_module(
     codegen: &mut CodeGen,
     ast_nodes: Vec<AstNode>,
 ) -> Result<HashMap<String, FuncId>, CompileError> {
+    // Collect all string literals first
+    let mut all_strings = Vec::new();
+    for node in &ast_nodes {
+        if let AstNode::Function { body, .. } = node {
+            collect_strings(body, &mut all_strings);
+        }
+    }
+    
+    // Declare string data
+    let mut string_funcs = HashMap::new();
+    for (i, s) in all_strings.iter().enumerate() {
+        let name = format!("str_{}", i);
+        match crate::declare_string_data(&mut codegen.module, &name, s) {
+            Ok(func_id) => { string_funcs.insert(s.clone(), func_id); }
+            Err(_) => {}
+        }
+    }
+    
     // Pass 1: Declare all functions
     let mut declared_funcs = HashMap::new();
     
@@ -57,6 +115,7 @@ pub fn compile_module(
                     &body,
                     &runtime_funcs,
                     &declared_funcs,
+                    &string_funcs,
                 )?;
             }
         }
@@ -73,6 +132,7 @@ fn compile_function_body(
     body: &AstNode,
     runtime_funcs: &HashMap<String, FuncId>,
     declared_funcs: &HashMap<String, FuncId>,
+    string_funcs: &HashMap<String, FuncId>,
 ) -> Result<(), CompileError> {
     let mut ctx = codegen.module.make_context();
     
@@ -100,7 +160,7 @@ fn compile_function_body(
             variables.insert(param_name.clone(), LocalVar { value: param_val, ty });
         }
         
-        compile_stmt(&mut builder, &mut variables, runtime_funcs, declared_funcs, &mut codegen.module, ret_ty, body)?;
+        compile_stmt(&mut builder, &mut variables, runtime_funcs, declared_funcs, string_funcs, &mut codegen.module, ret_ty, body)?;
         
         let zero = builder.ins().iconst(ret_ty, 0);
         builder.ins().return_(&[zero]);
@@ -117,13 +177,14 @@ fn compile_stmt(
     variables: &mut HashMap<String, LocalVar>,
     runtime_funcs: &HashMap<String, FuncId>,
     declared_funcs: &HashMap<String, FuncId>,
+    string_funcs: &HashMap<String, FuncId>,
     module: &mut dyn Module,
     return_type: Type,
     node: &AstNode,
 ) -> Result<(), CompileError> {
     match node {
         AstNode::Let { name, value } => {
-            let val = compile_expr(builder, variables, runtime_funcs, declared_funcs, module, value)?;
+            let val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, value)?;
             let ty = builder.func.dfg.value_type(val);
             variables.insert(name.clone(), LocalVar { value: val, ty });
             Ok(())
@@ -131,14 +192,14 @@ fn compile_stmt(
         
         AstNode::Block(stmts) => {
             for stmt in stmts {
-                compile_stmt(builder, variables, runtime_funcs, declared_funcs, module, return_type, stmt)?;
+                compile_stmt(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, return_type, stmt)?;
             }
             Ok(())
         }
         
         AstNode::Return(expr) => {
             if let Some(e) = expr {
-                let val = compile_expr(builder, variables, runtime_funcs, declared_funcs, module, e)?;
+                let val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, e)?;
                 builder.ins().return_(&[val]);
             } else {
                 let zero = builder.ins().iconst(return_type, 0);
@@ -148,7 +209,7 @@ fn compile_stmt(
         }
         
         _ => {
-            compile_expr(builder, variables, runtime_funcs, declared_funcs, module, node)?;
+            compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, node)?;
             Ok(())
         }
     }
@@ -159,6 +220,7 @@ fn compile_expr(
     variables: &mut HashMap<String, LocalVar>,
     runtime_funcs: &HashMap<String, FuncId>,
     declared_funcs: &HashMap<String, FuncId>,
+    string_funcs: &HashMap<String, FuncId>,
     module: &mut dyn Module,
     node: &AstNode,
 ) -> Result<Value, CompileError> {
@@ -166,10 +228,16 @@ fn compile_expr(
         AstNode::IntLiteral(n) => Ok(builder.ins().iconst(types::I64, *n)),
         
         AstNode::StringLiteral(s) => {
-            // For now, return pointer to string data as i64
-            // In full implementation, we'd create a data section entry
-            let ptr = s.as_ptr() as i64;
-            Ok(builder.ins().iconst(types::I64, ptr))
+            // Call the string data function to get the address
+            if let Some(&str_func_id) = string_funcs.get(s) {
+                let str_func_ref = module.declare_func_in_func(str_func_id, builder.func);
+                let call = builder.ins().call(str_func_ref, &[]);
+                Ok(builder.func.dfg.first_result(call))
+            } else {
+                // Fallback: return pointer directly (will segfault but compiles)
+                let ptr = s.as_ptr() as i64;
+                Ok(builder.ins().iconst(types::I64, ptr))
+            }
         }
         
         AstNode::Identifier(name) => {
@@ -180,8 +248,8 @@ fn compile_expr(
         }
         
         AstNode::BinaryOp { op, left, right } => {
-            let left_val = compile_expr(builder, variables, runtime_funcs, declared_funcs, module, left)?;
-            let right_val = compile_expr(builder, variables, runtime_funcs, declared_funcs, module, right)?;
+            let left_val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, left)?;
+            let right_val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, right)?;
             
             Ok(match op {
                 BinaryOp::Add => builder.ins().iadd(left_val, right_val),
@@ -222,7 +290,7 @@ fn compile_expr(
             
             let mut arg_values = Vec::new();
             for arg in args {
-                arg_values.push(compile_expr(builder, variables, runtime_funcs, declared_funcs, module, arg)?);
+                arg_values.push(compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, arg)?);
             }
             
             let call = builder.ins().call(func_ref, &arg_values);

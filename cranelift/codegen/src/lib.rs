@@ -224,7 +224,52 @@ pub fn declare_runtime_functions(module: &mut ObjectModule) -> Result<HashMap<St
     Ok(funcs)
 }
 
-/// Generate a simple test function that adds two integers
+/// Declare a string in the data section and return its address
+pub fn declare_string_data(module: &mut ObjectModule, name: &str, content: &str) -> Result<FuncId, CompileError> {
+    use cranelift_module::DataDescription;
+    
+    // Create null-terminated string data
+    let mut data = content.as_bytes().to_vec();
+    data.push(0); // Null terminator
+    
+    let mut data_desc = DataDescription::new();
+    data_desc.define(data.into_boxed_slice());
+    
+    let data_id = module.declare_data(name, cranelift_module::Linkage::Local, false, false)
+        .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+    
+    module.define_data(data_id, &data_desc)
+        .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+    
+    // Create a function that returns the address of the string data
+    let mut ctx = module.make_context();
+    ctx.func.signature.returns.push(AbiParam::new(types::I64));
+    
+    let func_name = format!("__str_{}", name);
+    let func_id = module.declare_function(&func_name, Linkage::Local, &ctx.func.signature)
+        .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+    
+    let mut builder_ctx = FunctionBuilderContext::new();
+    {
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+        let entry_block = builder.create_block();
+        builder.switch_to_block(entry_block);
+        builder.seal_block(entry_block);
+        
+        // Get address of data
+        let data_ref = module.declare_data_in_func(data_id, builder.func);
+        let addr = builder.ins().global_value(types::I64, data_ref);
+        
+        builder.ins().return_(&[addr]);
+        
+        builder.finalize();
+    }
+    
+    module.define_function(func_id, &mut ctx)
+        .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+    
+    Ok(func_id)
+}
 pub fn generate_test_function(module: &mut ObjectModule) -> Result<FuncId, CompileError> {
     let mut ctx = module.make_context();
     
