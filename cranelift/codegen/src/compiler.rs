@@ -678,6 +678,16 @@ fn compile_expr(
             Ok(empty_str)
         }
 
+        AstNode::StructInit { name: _, fields: _ } => {
+            // For now, return 0 (placeholder)
+            // Full struct initialization requires:
+            // 1. Type layout information
+            // 2. Memory allocation for the struct
+            // 3. Field value assignment
+            let struct_val = builder.ins().iconst(types::I64, 0);
+            Ok(struct_val)
+        }
+
         AstNode::ListLiteral {
             elements,
             elem_type: _,
@@ -858,6 +868,53 @@ fn compile_expr(
                 module,
                 error,
             )
+        }
+
+        AstNode::FieldAccess { obj, field } => {
+            // Compile the object expression
+            let obj_val = compile_expr(
+                builder,
+                variables,
+                runtime_funcs,
+                declared_funcs,
+                string_funcs,
+                module,
+                obj,
+            )?;
+
+            // For now, just return the object value (placeholder)
+            // Full field access requires:
+            // 1. Type information to know field offsets
+            // 2. Proper struct layout
+            // 3. Load instruction with offset
+
+            // Remove leading dot from field name if present
+            let field_name = if field.starts_with('.') {
+                &field[1..]
+            } else {
+                field.as_str()
+            };
+
+            // For now, return the object value (will need proper offset calculation)
+            // In a full implementation, we would:
+            // - Look up the type of obj
+            // - Find the field offset in the type layout
+            // - Use builder.ins().load() with the offset
+
+            // Placeholder: return 0 for most fields
+            match field_name {
+                "len" => {
+                    // Special case: try to call .len() method
+                    if let Some(&len_func_id) = runtime_funcs.get("forge_list_len") {
+                        let len_func_ref = module.declare_func_in_func(len_func_id, builder.func);
+                        let call = builder.ins().call(len_func_ref, &[obj_val]);
+                        Ok(builder.func.dfg.first_result(call))
+                    } else {
+                        Ok(builder.ins().iconst(types::I64, 0))
+                    }
+                }
+                _ => Ok(builder.ins().iconst(types::I64, 0)),
+            }
         }
 
         AstNode::Identifier(name) => match variables.get(name) {
