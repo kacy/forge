@@ -53,15 +53,15 @@ fn main() {
 
 fn build_file(path: &str) {
     use forge_codegen::compiler::compile_module;
+    use forge_codegen::compiler::parse_file_with_imports;
     use forge_codegen::create_codegen;
     use forge_codegen::finalize_module;
     use forge_codegen::linker::build_executable;
-    use forge_codegen::parser::parse_file;
 
-    println!("Building {}...", path);
+    println!("Building {} with import resolution...", path);
 
-    // Parse the file
-    match parse_file(path) {
+    // Parse the file and all imports
+    match parse_file_with_imports(path) {
         Ok(ast_nodes) => {
             println!("Parsed {} top-level declarations", ast_nodes.len());
 
@@ -111,11 +111,11 @@ fn build_file(path: &str) {
 }
 
 fn parse_file(path: &str) {
-    use forge_codegen::parser::parse_file;
+    use forge_codegen::compiler::parse_file_with_imports;
 
-    println!("Parsing {}...", path);
+    println!("Parsing {} with imports...", path);
 
-    match parse_file(path) {
+    match parse_file_with_imports(path) {
         Ok(ast_nodes) => {
             println!("Parsed {} top-level declarations:", ast_nodes.len());
             for (i, node) in ast_nodes.iter().enumerate() {

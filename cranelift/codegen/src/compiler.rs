@@ -107,6 +107,62 @@ fn collect_generic_types(node: &AstNode, registry: &mut crate::GenericRegistry) 
     }
 }
 
+/// Parse a file with automatic import resolution
+/// Returns merged AST from main file and all imported modules
+pub fn parse_file_with_imports(path: &str) -> Result<Vec<AstNode>, CompileError> {
+    use crate::parser::parse_file;
+    use std::collections::HashSet;
+
+    let mut all_nodes = Vec::new();
+    let mut parsed_files = HashSet::new();
+    let mut files_to_parse = vec![path.to_string()];
+
+    while let Some(file_path) = files_to_parse.pop() {
+        // Skip if already parsed (handles circular imports)
+        if parsed_files.contains(&file_path) {
+            continue;
+        }
+
+        eprintln!("Parsing: {}", file_path);
+
+        // Parse the file
+        let nodes = parse_file(&file_path)?;
+
+        // Collect imports
+        for node in &nodes {
+            if let AstNode::Import { module, .. } = node {
+                // Convert module name to file path
+                // e.g., "lexer" -> "lexer.fg"
+                let import_path = format!("{}.fg", module);
+
+                // Check if file exists in same directory as main file
+                let base_dir = std::path::Path::new(path)
+                    .parent()
+                    .map(|p| p.to_str().unwrap_or("."))
+                    .unwrap_or(".");
+                let full_path = format!("{}/{}", base_dir, import_path);
+
+                if std::path::Path::new(&full_path).exists() && !parsed_files.contains(&full_path) {
+                    files_to_parse.push(full_path);
+                } else if std::path::Path::new(&import_path).exists()
+                    && !parsed_files.contains(&import_path)
+                {
+                    files_to_parse.push(import_path);
+                }
+            }
+        }
+
+        // Add nodes to collection
+        all_nodes.extend(nodes);
+        parsed_files.insert(file_path);
+    }
+
+    eprintln!("Total files parsed: {}", parsed_files.len());
+    eprintln!("Total AST nodes: {}", all_nodes.len());
+
+    Ok(all_nodes)
+}
+
 /// Compile all functions from AST with two-pass approach
 pub fn compile_module(
     codegen: &mut CodeGen,
