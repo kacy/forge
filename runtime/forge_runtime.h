@@ -1,8 +1,13 @@
 // forge_runtime.h — minimal C runtime for forge-generated code
 //
 // provides string type, print, and basic helpers. this is intentionally
-// simple — just enough to get programs running. memory management is
-// "leak everything" for now; ARC comes later.
+// simple — just enough to get programs running.
+//
+// ARC STATUS (Automatic Reference Counting):
+// - Strings: FULLY IMPLEMENTED — all heap strings use RC headers
+// - Collections: NOT IMPLEMENTED — Lists/Maps leak memory
+// - Closures: NOT IMPLEMENTED — lambda environments leak memory
+// - Cycle Detection: NOT IMPLEMENTED — infrastructure exists but unused
 
 #ifndef FORGE_RUNTIME_H
 #define FORGE_RUNTIME_H
