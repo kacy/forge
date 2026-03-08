@@ -1,0 +1,6 @@
+fn greet(name: String) -> String:
+    return "hello!"
+
+fn main():
+    let msg := greet("world")
+    print(msg)

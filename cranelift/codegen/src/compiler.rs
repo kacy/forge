@@ -160,10 +160,12 @@ fn compile_function_body(
             variables.insert(param_name.clone(), LocalVar { value: param_val, ty });
         }
         
-        compile_stmt(&mut builder, &mut variables, runtime_funcs, declared_funcs, string_funcs, &mut codegen.module, ret_ty, body)?;
+        let filled = compile_stmt(&mut builder, &mut variables, runtime_funcs, declared_funcs, string_funcs, &mut codegen.module, ret_ty, body)?;
         
-        let zero = builder.ins().iconst(ret_ty, 0);
-        builder.ins().return_(&[zero]);
+        if !filled {
+            let zero = builder.ins().iconst(ret_ty, 0);
+            builder.ins().return_(&[zero]);
+        }
     }
     
     codegen.module.define_function(func_id, &mut ctx)
@@ -181,20 +183,23 @@ fn compile_stmt(
     module: &mut dyn Module,
     return_type: Type,
     node: &AstNode,
-) -> Result<(), CompileError> {
+) -> Result<bool, CompileError> {
     match node {
         AstNode::Let { name, value } => {
             let val = compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, value)?;
             let ty = builder.func.dfg.value_type(val);
             variables.insert(name.clone(), LocalVar { value: val, ty });
-            Ok(())
+            Ok(false)
         }
         
         AstNode::Block(stmts) => {
             for stmt in stmts {
-                compile_stmt(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, return_type, stmt)?;
+                let filled = compile_stmt(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, return_type, stmt)?;
+                if filled {
+                    return Ok(true);
+                }
             }
-            Ok(())
+            Ok(false)
         }
         
         AstNode::Return(expr) => {
@@ -205,7 +210,7 @@ fn compile_stmt(
                 let zero = builder.ins().iconst(return_type, 0);
                 builder.ins().return_(&[zero]);
             }
-            Ok(())
+            Ok(true)
         }
         
         AstNode::If { cond, then_branch, else_branch } => {
@@ -235,12 +240,12 @@ fn compile_stmt(
             builder.switch_to_block(merge_block);
             builder.seal_block(merge_block);
             
-            Ok(())
+            Ok(false)
         }
         
         _ => {
             compile_expr(builder, variables, runtime_funcs, declared_funcs, string_funcs, module, node)?;
-            Ok(())
+            Ok(false)
         }
     }
 }

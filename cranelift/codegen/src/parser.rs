@@ -216,14 +216,12 @@ impl TextAstParser {
                 if line.value == "let" {
                     self.advance();
                     self.parse_let()
-                } else if line.value == "return" {
-                    self.advance();
-                    self.parse_return()
                 } else {
                     // Expression statement
                     self.parse_expression()
                 }
             }
+            "return" => self.parse_return(),
             "if" => self.parse_if(),
             "bind" => {
                 // bind name <value> - this is a let statement
@@ -266,6 +264,9 @@ impl TextAstParser {
     
     /// Parse return statement
     fn parse_return(&mut self) -> Result<AstNode, CompileError> {
+        // Advance past the return keyword first
+        self.advance();
+        
         let value = if self.current().is_some() {
             Some(Box::new(self.parse_expression()?))
         } else {
