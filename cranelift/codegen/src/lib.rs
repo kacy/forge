@@ -195,6 +195,23 @@ pub fn declare_runtime_functions(module: &mut ObjectModule) -> Result<HashMap<St
     )?;
     funcs.insert("forge_int_to_cstr".to_string(), int_to_cstr);
     
+    // ord/chr functions (C string versions)
+    let ord = declare_runtime_function(
+        module,
+        "forge_ord_cstr",
+        &[types::I64], // *const i8
+        &[types::I64], // Returns i64
+    )?;
+    funcs.insert("ord".to_string(), ord);
+    
+    let chr = declare_runtime_function(
+        module,
+        "forge_chr_cstr",
+        &[types::I64], // i64
+        &[types::I64], // Returns *mut i8
+    )?;
+    funcs.insert("chr".to_string(), chr);
+    
     // Print int function (for debugging)
     let print_int = declare_runtime_function(
         module,
@@ -212,6 +229,15 @@ pub fn declare_runtime_functions(module: &mut ObjectModule) -> Result<HashMap<St
         &[],
     )?;
     funcs.insert("forge_print_cstr".to_string(), print_cstr);
+    
+    // Print error function (to stderr)
+    let print_err = declare_runtime_function(
+        module,
+        "forge_print_err",
+        &[types::I64], // *const i8
+        &[],
+    )?;
+    funcs.insert("print_err".to_string(), print_err);
     
     // String concatenation (pointer-based)
     let concat_cstr = declare_runtime_function(

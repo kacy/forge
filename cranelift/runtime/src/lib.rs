@@ -172,6 +172,60 @@ pub unsafe extern "C" fn forge_print_cstr(ptr: *const i8) {
     }
 }
 
+/// Print a C string to stderr (null-terminated)
+/// 
+/// # Safety
+/// ptr must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_print_err(ptr: *const i8) {
+    use std::io::Write;
+    
+    if ptr.is_null() {
+        eprintln!();
+        return;
+    }
+    
+    // Calculate length
+    let mut len = 0;
+    let mut p = ptr;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+    
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        eprintln!("{}", str_ref);
+    } else {
+        eprintln!();
+    }
+}
+
+/// Get ASCII value of first char in C string (ord)
+#[no_mangle]
+pub unsafe extern "C" fn forge_ord_cstr(s: *const i8) -> i64 {
+    if s.is_null() || *s == 0 {
+        return 0;
+    }
+    *s as i64
+}
+
+/// Convert ASCII value to single-char C string (chr)
+#[no_mangle]
+pub unsafe extern "C" fn forge_chr_cstr(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    
+    let layout = Layout::from_size_align(2, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    
+    if !ptr.is_null() {
+        *ptr = (n as u8) as i8;
+        *ptr.add(1) = 0;
+    }
+    
+    ptr
+}
+
 /// Bitwise AND
 #[no_mangle]
 pub extern "C" fn forge_bit_and(a: i64, b: i64) -> i64 {

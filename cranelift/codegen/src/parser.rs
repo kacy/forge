@@ -323,10 +323,19 @@ impl TextAstParser {
         
         match line.kind.as_str() {
             "int" => {
-                let value = line.value.parse::<i64>()
-                    .map_err(|_| CompileError::UnsupportedFeature(
-                        format!("Invalid integer: {}", line.value)
-                    ))?;
+                let value_str = &line.value;
+                let value = if value_str.starts_with("0x") || value_str.starts_with("0X") {
+                    // Parse hexadecimal
+                    i64::from_str_radix(&value_str[2..], 16)
+                        .map_err(|_| CompileError::UnsupportedFeature(
+                            format!("Invalid hex integer: {}", value_str)
+                        ))?
+                } else {
+                    value_str.parse::<i64>()
+                        .map_err(|_| CompileError::UnsupportedFeature(
+                            format!("Invalid integer: {}", value_str)
+                        ))?
+                };
                 self.advance();
                 Ok(AstNode::IntLiteral(value))
             }
