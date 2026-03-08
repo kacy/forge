@@ -234,20 +234,47 @@ fn map_type_id(tid: Int) -> String:
         return "void*"  # Use void* as a safe placeholder for error types
     return ""
 
+# check if a type is a List type
+fn is_list_type(tid: Int) -> Bool:
+    if tid >= 0 and tid < get_type_count():
+        info := get_type_info(tid)
+        return info.kind == "list"
+    return false
+
+# check if a type is a Map type
+fn is_map_type(tid: Int) -> Bool:
+    if tid >= 0 and tid < get_type_count():
+        info := get_type_info(tid)
+        return info.kind == "map"
+    return false
+
+# check if a type is a Set type
+fn is_set_type(tid: Int) -> Bool:
+    if tid >= 0 and tid < get_type_count():
+        info := get_type_info(tid)
+        return info.kind == "set"
+    return false
+
 # check if a type needs reference counting (strings, lists, maps)
+# For collections, we return true if the collection itself needs RC (always true for now)
+# OR if any of its element types need RC
 fn type_needs_reference_counting(tid: Int) -> Bool:
     if tid == TID_STRING:
         return true
-    # check for List[String], Map[String, _], Map[_, String], etc.
+    # check for List, Map, Set - these are heap-allocated and need RC
     if tid >= 0:
         if tid < get_type_count():
             info := get_type_info(tid)
             if info.kind == "list":
-                return type_needs_reference_counting(info.inner)
+                # List always needs RC (it's heap allocated)
+                # Also check if inner type needs RC for element management
+                return true
             if info.kind == "map":
-                return type_needs_reference_counting(info.key_type) or type_needs_reference_counting(info.value_type)
+                # Map always needs RC
+                return true
             if info.kind == "set":
-                return type_needs_reference_counting(info.inner)
+                # Set always needs RC
+                return true
     return false
 
 # emit retain call for a variable
@@ -257,12 +284,44 @@ fn emit_retain_call(name: String, tid: Int):
         emit_code("forge_string_retain(")
         emit_code(name)
         emit_code(");\n")
+    elif is_list_type(tid):
+        write_indent()
+        emit_code("forge_list_retain(&")
+        emit_code(name)
+        emit_code(");\n")
+    elif is_map_type(tid):
+        write_indent()
+        emit_code("forge_map_retain(&")
+        emit_code(name)
+        emit_code(");\n")
+    elif is_set_type(tid):
+        # Sets use list implementation
+        write_indent()
+        emit_code("forge_list_retain(&")
+        emit_code(name)
+        emit_code(");\n")
 
 # emit release call for a variable
 fn emit_release_call(name: String, tid: Int):
     if tid == TID_STRING:
         write_indent()
         emit_code("forge_string_release(")
+        emit_code(name)
+        emit_code(");\n")
+    elif is_list_type(tid):
+        write_indent()
+        emit_code("forge_list_release(&")
+        emit_code(name)
+        emit_code(");\n")
+    elif is_map_type(tid):
+        write_indent()
+        emit_code("forge_map_release(&")
+        emit_code(name)
+        emit_code(");\n")
+    elif is_set_type(tid):
+        # Sets use list implementation
+        write_indent()
+        emit_code("forge_list_release(&")
         emit_code(name)
         emit_code(");\n")
 
