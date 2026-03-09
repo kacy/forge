@@ -1013,6 +1013,34 @@ pub fn declare_runtime_functions(
     funcs.insert("release".to_string(), sem_release);
     funcs.insert("forge_semaphore_release".to_string(), sem_release);
 
+    // Additional string utility functions
+    let to_upper = declare_runtime_function(
+        module,
+        "forge_cstring_to_upper",
+        &[types::I64], // *const cstr
+        &[types::I64], // returns *mut cstr
+    )?;
+    funcs.insert("to_upper".to_string(), to_upper);
+    funcs.insert("forge_cstring_to_upper".to_string(), to_upper);
+
+    let to_lower = declare_runtime_function(
+        module,
+        "forge_cstring_to_lower",
+        &[types::I64], // *const cstr
+        &[types::I64], // returns *mut cstr
+    )?;
+    funcs.insert("to_lower".to_string(), to_lower);
+    funcs.insert("forge_cstring_to_lower".to_string(), to_lower);
+
+    let reverse = declare_runtime_function(
+        module,
+        "forge_cstring_reverse",
+        &[types::I64], // *const cstr
+        &[types::I64], // returns *mut cstr
+    )?;
+    funcs.insert("reverse".to_string(), reverse);
+    funcs.insert("forge_cstring_reverse".to_string(), reverse);
+
     // Note: list_dir returns a linked list - needs special handling
     // For now, declare but don't use directly
 

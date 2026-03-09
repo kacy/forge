@@ -1753,6 +1753,9 @@ fn compile_expr(
                         "trim",
                         "starts_with",
                         "ends_with",
+                        "to_upper",
+                        "to_lower",
+                        "reverse",
                     ];
                     if string_methods.contains(&func.as_str()) {
                         let string_arg = &args[0];
@@ -1779,10 +1782,18 @@ fn compile_expr(
 
                         // String methods that return strings need special handling
                         // (they require output pointer). For now, return placeholder.
-                        let string_return_methods = ["substring", "trim"];
+                        let string_return_methods =
+                            ["substring", "trim", "to_upper", "to_lower", "reverse"];
                         if string_return_methods.contains(&func.as_str()) {
                             // These methods need proper struct return handling
-                            // For now, return the original string as placeholder
+                            // For now, try to call cstring versions if available
+                            let cstring_func_name = format!("forge_cstring_{}", func);
+                            if let Some(&func_id) = runtime_funcs.get(&cstring_func_name) {
+                                let func_ref = module.declare_func_in_func(func_id, builder.func);
+                                let call = builder.ins().call(func_ref, &[string_val]);
+                                return Ok(builder.func.dfg.first_result(call));
+                            }
+                            // Fallback: return the original string as placeholder
                             return Ok(string_val);
                         }
 
@@ -1822,6 +1833,9 @@ fn compile_expr(
                         "trim",
                         "starts_with",
                         "ends_with",
+                        "to_upper",
+                        "to_lower",
+                        "reverse",
                     ];
                     if string_methods.contains(&func.as_str()) {
                         let ident_name = match &args[0] {
@@ -1856,8 +1870,16 @@ fn compile_expr(
                                 }
                             }
 
-                            let string_return_methods = ["substring", "trim"];
+                            let string_return_methods =
+                                ["substring", "trim", "to_upper", "to_lower", "reverse"];
                             if string_return_methods.contains(&func.as_str()) {
+                                let cstring_func_name = format!("forge_cstring_{}", func);
+                                if let Some(&func_id) = runtime_funcs.get(&cstring_func_name) {
+                                    let func_ref =
+                                        module.declare_func_in_func(func_id, builder.func);
+                                    let call = builder.ins().call(func_ref, &[string_val]);
+                                    return Ok(builder.func.dfg.first_result(call));
+                                }
                                 return Ok(string_val);
                             }
 

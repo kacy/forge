@@ -1240,6 +1240,92 @@ pub unsafe extern "C" fn forge_cstring_trim_left(s: *const i8) -> *mut i8 {
     forge_cstring_substring(s, start as i64, len as i64)
 }
 
+/// Convert C string to uppercase
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_to_upper(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..len {
+            let c = slice[i];
+            *ptr.add(i) = (c as char).to_ascii_uppercase() as u8 as i8;
+        }
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
+/// Convert C string to lowercase
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_to_lower(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..len {
+            let c = slice[i];
+            *ptr.add(i) = (c as char).to_ascii_lowercase() as u8 as i8;
+        }
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
+/// Reverse a C string
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_reverse(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..len {
+            *ptr.add(i) = slice[len - 1 - i] as i8;
+        }
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
 // Re-export concurrency primitive FFI functions
 pub use concurrency::{
     forge_mutex_free, forge_mutex_lock, forge_mutex_new, forge_mutex_unlock,
