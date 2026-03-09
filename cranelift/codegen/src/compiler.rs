@@ -1990,10 +1990,7 @@ fn compile_expr(
                         | AstNode::UnaryOp { .. }
                         | AstNode::Index { .. }
                 ) || matches!(&args[0], AstNode::Call { func, .. } if func == "len")
-                    || matches!(
-                        arg_kind,
-                        ValueKind::Int | ValueKind::Bool | ValueKind::Unknown
-                    );
+                    || matches!(arg_kind, ValueKind::Int | ValueKind::Bool);
 
                 // Compile the first argument to determine its type
                 let first_arg = compile_expr(
