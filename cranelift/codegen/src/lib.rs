@@ -919,6 +919,100 @@ pub fn declare_runtime_functions(
     )?;
     funcs.insert("forge_cstring_char_at".to_string(), cstring_char_at);
 
+    // Concurrency primitive functions
+    // Mutex
+    let mutex_new = declare_runtime_function(
+        module,
+        "forge_mutex_new",
+        &[],           // no args
+        &[types::I64], // returns mutex handle
+    )?;
+    funcs.insert("Mutex".to_string(), mutex_new);
+    funcs.insert("forge_mutex_new".to_string(), mutex_new);
+
+    let mutex_lock = declare_runtime_function(
+        module,
+        "forge_mutex_lock",
+        &[types::I64], // mutex handle
+        &[],           // no return
+    )?;
+    funcs.insert("lock".to_string(), mutex_lock);
+    funcs.insert("forge_mutex_lock".to_string(), mutex_lock);
+
+    let mutex_unlock = declare_runtime_function(
+        module,
+        "forge_mutex_unlock",
+        &[types::I64], // mutex handle
+        &[],           // no return
+    )?;
+    funcs.insert("unlock".to_string(), mutex_unlock);
+    funcs.insert("forge_mutex_unlock".to_string(), mutex_unlock);
+
+    // WaitGroup
+    let wg_new = declare_runtime_function(
+        module,
+        "forge_waitgroup_new",
+        &[],           // no args
+        &[types::I64], // returns waitgroup handle
+    )?;
+    funcs.insert("WaitGroup".to_string(), wg_new);
+    funcs.insert("forge_waitgroup_new".to_string(), wg_new);
+
+    let wg_add = declare_runtime_function(
+        module,
+        "forge_waitgroup_add",
+        &[types::I64, types::I64], // handle, count
+        &[],                       // no return
+    )?;
+    funcs.insert("add".to_string(), wg_add);
+    funcs.insert("forge_waitgroup_add".to_string(), wg_add);
+
+    let wg_done = declare_runtime_function(
+        module,
+        "forge_waitgroup_done",
+        &[types::I64], // handle
+        &[],           // no return
+    )?;
+    funcs.insert("done".to_string(), wg_done);
+    funcs.insert("forge_waitgroup_done".to_string(), wg_done);
+
+    let wg_wait = declare_runtime_function(
+        module,
+        "forge_waitgroup_wait",
+        &[types::I64], // handle
+        &[],           // no return
+    )?;
+    funcs.insert("wait".to_string(), wg_wait);
+    funcs.insert("forge_waitgroup_wait".to_string(), wg_wait);
+
+    // Semaphore
+    let sem_new = declare_runtime_function(
+        module,
+        "forge_semaphore_new",
+        &[types::I64], // initial count
+        &[types::I64], // returns semaphore handle
+    )?;
+    funcs.insert("Semaphore".to_string(), sem_new);
+    funcs.insert("forge_semaphore_new".to_string(), sem_new);
+
+    let sem_acquire = declare_runtime_function(
+        module,
+        "forge_semaphore_acquire",
+        &[types::I64], // handle
+        &[],           // no return
+    )?;
+    funcs.insert("acquire".to_string(), sem_acquire);
+    funcs.insert("forge_semaphore_acquire".to_string(), sem_acquire);
+
+    let sem_release = declare_runtime_function(
+        module,
+        "forge_semaphore_release",
+        &[types::I64], // handle
+        &[],           // no return
+    )?;
+    funcs.insert("release".to_string(), sem_release);
+    funcs.insert("forge_semaphore_release".to_string(), sem_release);
+
     // Note: list_dir returns a linked list - needs special handling
     // For now, declare but don't use directly
 

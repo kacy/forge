@@ -1239,3 +1239,11 @@ pub unsafe extern "C" fn forge_cstring_trim_left(s: *const i8) -> *mut i8 {
 
     forge_cstring_substring(s, start as i64, len as i64)
 }
+
+// Re-export concurrency primitive FFI functions
+pub use concurrency::{
+    forge_mutex_free, forge_mutex_lock, forge_mutex_new, forge_mutex_unlock,
+    forge_semaphore_acquire, forge_semaphore_free, forge_semaphore_new, forge_semaphore_release,
+    forge_waitgroup_add, forge_waitgroup_done, forge_waitgroup_free, forge_waitgroup_new,
+    forge_waitgroup_wait,
+};
