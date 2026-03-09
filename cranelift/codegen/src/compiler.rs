@@ -1609,28 +1609,36 @@ fn compile_expr(
 
         AstNode::Call { func, args } => {
             // Check if this is a method call on a list literal
+            let (is_list_literal, is_string_literal, is_identifier, is_string_like) =
+                if !args.is_empty() {
+                    let first_arg = &args[0];
+                    let is_list_literal = matches!(first_arg, AstNode::ListLiteral { .. });
+                    let is_string_literal = matches!(
+                        first_arg,
+                        AstNode::StringLiteral(_) | AstNode::StringInterp { .. }
+                    );
+
+                    let is_identifier = matches!(first_arg, AstNode::Identifier(_));
+                    let is_string_like = matches!(
+                        first_arg,
+                        AstNode::FieldAccess { .. } | AstNode::Index { .. }
+                    );
+                    (
+                        is_list_literal,
+                        is_string_literal,
+                        is_identifier,
+                        is_string_like,
+                    )
+                } else {
+                    (false, false, false, false)
+                };
+
             if !args.is_empty() {
-                let first_arg = &args[0];
-                let is_list_literal = matches!(first_arg, AstNode::ListLiteral { .. });
-                let is_string_literal = matches!(
-                    first_arg,
-                    AstNode::StringLiteral(_) | AstNode::StringInterp { .. }
-                );
-
-                let is_identifier = matches!(first_arg, AstNode::Identifier(_));
-                let is_string_like = matches!(
-                    first_arg,
-                    AstNode::FieldAccess { .. } | AstNode::Index { .. }
-                );
-
                 // If calling .len() on a list literal, use list method
                 if is_list_literal && func == "len" {
                     // Fall through to list method check below
-                } else if is_string_literal || is_identifier || is_string_like {
-                    // Check for string method calls on string literals or identifiers
-                    // Note: For identifiers, we assume they might be strings since we don't
-                    // have full type information. This is a heuristic that works for the
-                    // self-hosted compiler where string method calls are common.
+                } else if is_string_literal || is_string_like {
+                    // Check for string method calls on string literals or field accesses
                     let string_methods = [
                         "len",
                         "contains",
@@ -1695,6 +1703,82 @@ fn compile_expr(
                             } else {
                                 Ok(builder.ins().iconst(types::I64, 0))
                             };
+                        }
+                    }
+                } else if is_identifier {
+                    // For identifiers with unknown types, try string methods as fallback
+                    // This maintains compatibility with code that relies on the heuristic
+                    let string_methods = [
+                        "len",
+                        "contains",
+                        "substring",
+                        "trim",
+                        "starts_with",
+                        "ends_with",
+                    ];
+                    if string_methods.contains(&func.as_str()) {
+                        let ident_name = match &args[0] {
+                            AstNode::Identifier(name) => name,
+                            _ => "",
+                        };
+                        let ident_kind = variables
+                            .get(ident_name)
+                            .map(|v| v.kind)
+                            .unwrap_or(ValueKind::Unknown);
+
+                        // Only try string methods if type is String or Unknown
+                        if ident_kind == ValueKind::String || ident_kind == ValueKind::Unknown {
+                            let string_arg = &args[0];
+                            let string_val = compile_expr(
+                                builder,
+                                variables,
+                                runtime_funcs,
+                                declared_funcs,
+                                string_funcs,
+                                module,
+                                string_arg,
+                                func_signatures,
+                            )?;
+
+                            if func == "len" {
+                                if let Some(&len_func_id) = runtime_funcs.get("forge_cstring_len") {
+                                    let len_func_ref =
+                                        module.declare_func_in_func(len_func_id, builder.func);
+                                    let call = builder.ins().call(len_func_ref, &[string_val]);
+                                    return Ok(builder.func.dfg.first_result(call));
+                                }
+                            }
+
+                            let string_return_methods = ["substring", "trim"];
+                            if string_return_methods.contains(&func.as_str()) {
+                                return Ok(string_val);
+                            }
+
+                            let runtime_func_name = format!("forge_string_{}", func);
+                            if let Some(&func_id) = runtime_funcs.get(&runtime_func_name) {
+                                let func_ref = module.declare_func_in_func(func_id, builder.func);
+
+                                let mut arg_values = vec![string_val];
+                                for arg in &args[1..] {
+                                    arg_values.push(compile_expr(
+                                        builder,
+                                        variables,
+                                        runtime_funcs,
+                                        declared_funcs,
+                                        string_funcs,
+                                        module,
+                                        arg,
+                                        func_signatures,
+                                    )?);
+                                }
+
+                                let call = builder.ins().call(func_ref, &arg_values);
+                                return if !builder.func.dfg.inst_results(call).is_empty() {
+                                    Ok(builder.func.dfg.first_result(call))
+                                } else {
+                                    Ok(builder.ins().iconst(types::I64, 0))
+                                };
+                            }
                         }
                     }
                 }
