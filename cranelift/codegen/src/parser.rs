@@ -392,6 +392,15 @@ impl TextAstParser {
             "return" => self.parse_return(),
             "if" => self.parse_if(),
             "while" => self.parse_while(),
+            "for" => self.parse_for(),
+            "break" => {
+                self.advance();
+                Ok(AstNode::Break)
+            }
+            "continue" => {
+                self.advance();
+                Ok(AstNode::Continue)
+            }
             "fail" => self.parse_fail(),
             "bind" => {
                 // bind name <type>? <value> - this is a let statement
@@ -993,6 +1002,38 @@ impl TextAstParser {
 
         Ok(AstNode::While {
             cond: Box::new(cond),
+            body: Box::new(body),
+        })
+    }
+
+    /// Parse for-in loop: for var in iterable { body }
+    fn parse_for(&mut self) -> Result<AstNode, CompileError> {
+        let line = self.current().unwrap();
+        let indent = line.indent;
+        let var_name = line.value.clone(); // The loop variable name
+        self.advance();
+
+        // Parse iterable expression
+        let iterable = self.parse_expression()?;
+
+        // Parse body statements (everything indented more than 'for')
+        let mut body_stmts = Vec::new();
+        while let Some(line) = self.current() {
+            if line.indent <= indent {
+                break;
+            }
+            body_stmts.push(self.parse_statement()?);
+        }
+
+        let body = if body_stmts.len() == 1 {
+            body_stmts.into_iter().next().unwrap()
+        } else {
+            AstNode::Block(body_stmts)
+        };
+
+        Ok(AstNode::For {
+            var: var_name,
+            iterable: Box::new(iterable),
             body: Box::new(body),
         })
     }

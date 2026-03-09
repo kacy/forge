@@ -52,8 +52,18 @@ pub enum AstNode {
         cond: Box<AstNode>,
         body: Box<AstNode>,
     },
+    /// For-in loop: for var in iterable { body }
+    For {
+        var: String,
+        iterable: Box<AstNode>,
+        body: Box<AstNode>,
+    },
     /// Return statement: return value
     Return(Option<Box<AstNode>>),
+    /// Break statement: break (exit loop)
+    Break,
+    /// Continue statement: continue (skip to next iteration)
+    Continue,
     /// Import statement: from module import names
     Import { module: String, names: Vec<String> },
     /// Test declaration: test "name": body

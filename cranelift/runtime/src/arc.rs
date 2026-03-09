@@ -13,7 +13,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
-use std::sync::{Mutex, LazyLock};
+use std::sync::{LazyLock, Mutex};
 
 /// RC Header stored before each heap-allocated FFI object
 #[repr(C)]
@@ -64,14 +64,14 @@ struct ObjectList {
 unsafe impl Send for ObjectList {}
 unsafe impl Sync for ObjectList {}
 
-static OBJECT_LIST: LazyLock<Mutex<ObjectList>> = 
+static OBJECT_LIST: LazyLock<Mutex<ObjectList>> =
     LazyLock::new(|| Mutex::new(ObjectList { head: None }));
 
 /// Add object to global list
 fn add_to_object_list(header: *mut RcHeader) {
     let mut list = OBJECT_LIST.lock().unwrap();
     let header_nn = NonNull::new(header).unwrap();
-    
+
     unsafe {
         if let Some(old_head) = (*header).next.lock().unwrap().take() {
             *(*header).next.lock().unwrap() = Some(old_head);
@@ -83,16 +83,16 @@ fn add_to_object_list(header: *mut RcHeader) {
 /// Remove object from global list
 fn remove_from_object_list(header_to_remove: *mut RcHeader) {
     let mut list = OBJECT_LIST.lock().unwrap();
-    
+
     unsafe {
         let mut curr_opt = list.head;
         let mut prev_opt: Option<NonNull<RcHeader>> = None;
-        
+
         while let Some(curr) = curr_opt {
             if curr.as_ptr() == header_to_remove {
                 // Found it - remove from list
                 let next_opt = (*curr.as_ptr()).next.lock().unwrap().take();
-                
+
                 if let Some(prev) = prev_opt {
                     *(*prev.as_ptr()).next.lock().unwrap() = next_opt;
                 } else {
@@ -101,7 +101,7 @@ fn remove_from_object_list(header_to_remove: *mut RcHeader) {
                 }
                 return;
             }
-            
+
             prev_opt = curr_opt;
             curr_opt = *(*curr.as_ptr()).next.lock().unwrap();
         }
@@ -109,7 +109,7 @@ fn remove_from_object_list(header_to_remove: *mut RcHeader) {
 }
 
 /// Allocate memory with RC header
-/// 
+///
 /// # Safety
 /// Returns a valid pointer to uninitialized memory after the header
 #[no_mangle]
@@ -122,28 +122,28 @@ pub unsafe extern "C" fn forge_rc_alloc(size: usize, type_tag: u32) -> *mut u8 {
             std::process::abort();
         }
     };
-    
+
     let ptr = alloc(layout);
     if ptr.is_null() {
         eprintln!("forge: out of memory");
         std::process::abort();
     }
-    
+
     // Initialize header
     let header = ptr as *mut RcHeader;
     (*header).ref_count = AtomicI64::new(1);
     (*header).type_tag = AtomicU32::new(type_tag);
     (*header).flags = AtomicU32::new(0);
     (*header).next = Mutex::new(None);
-    
+
     // Add to global list
     add_to_object_list(header);
-    
+
     ptr.add(HEADER_SIZE)
 }
 
 /// Increment reference count
-/// 
+///
 /// # Safety
 /// ptr must be a valid heap-allocated FFI object or null
 #[no_mangle]
@@ -156,7 +156,7 @@ pub unsafe extern "C" fn forge_rc_retain(ptr: *mut u8) {
 }
 
 /// Decrement reference count
-/// 
+///
 /// # Safety
 /// ptr must be a valid heap-allocated FFI object or null
 #[inline]
@@ -164,49 +164,52 @@ pub unsafe fn rc_release_internal(ptr: *mut u8) -> bool {
     if ptr.is_null() {
         return false;
     }
-    
+
     let header = (ptr.sub(HEADER_SIZE)) as *mut RcHeader;
     let count = (*header).ref_count.fetch_sub(1, Ordering::Release);
-    
+
     count == 1
 }
 
 /// Release with destructor callback and cycle detection
-/// 
+///
 /// # Safety
 /// ptr must be a valid heap-allocated FFI object or null
 #[no_mangle]
-pub unsafe extern "C" fn forge_rc_release(ptr: *mut u8, destructor: Option<extern "C" fn(*mut u8)>) {
+pub unsafe extern "C" fn forge_rc_release(
+    ptr: *mut u8,
+    destructor: Option<extern "C" fn(*mut u8)>,
+) {
     // Check if we should trigger cycle collection
     let should_collect = RC_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed) >= RC_RELEASE_THRESHOLD;
-    
+
     if should_collect {
         collect_cycles();
         RC_RELEASE_COUNT.store(0, Ordering::Relaxed);
     }
-    
+
     if !rc_release_internal(ptr) {
         return;
     }
-    
+
     // Check if object is in a cycle (shouldn't be freed yet)
     let header = (ptr.sub(HEADER_SIZE)) as *mut RcHeader;
     let flags = (*header).flags.load(Ordering::Relaxed);
-    
+
     if flags & FLAG_IN_CYCLE != 0 {
         // Object is part of a cycle, don't free yet
         // It will be freed during cycle collection
         return;
     }
-    
+
     // Last reference and not in cycle, destroy and free
     if let Some(dtor) = destructor {
         dtor(ptr);
     }
-    
+
     // Remove from global list
     remove_from_object_list(header);
-    
+
     // Free memory
     let layout = Layout::from_size_align(HEADER_SIZE + 4096, 8).unwrap();
     dealloc(header as *mut u8, layout);
@@ -215,7 +218,7 @@ pub unsafe extern "C" fn forge_rc_release(ptr: *mut u8, destructor: Option<exter
 /// Clear all mark flags
 fn clear_marks() {
     let list = OBJECT_LIST.lock().unwrap();
-    
+
     unsafe {
         let mut curr_opt = list.head;
         while let Some(curr) = curr_opt {
@@ -231,7 +234,9 @@ fn mark_as_root(header: *mut RcHeader) {
     unsafe {
         let flags = (*header).flags.load(Ordering::Relaxed);
         if flags & FLAG_MARKED == 0 {
-            (*header).flags.store(flags | FLAG_MARKED | FLAG_ROOT, Ordering::Relaxed);
+            (*header)
+                .flags
+                .store(flags | FLAG_MARKED | FLAG_ROOT, Ordering::Relaxed);
         }
     }
 }
@@ -239,18 +244,18 @@ fn mark_as_root(header: *mut RcHeader) {
 /// Mark all objects reachable from roots
 fn mark_reachable() {
     let list = OBJECT_LIST.lock().unwrap();
-    
+
     unsafe {
         // First pass: mark objects with RC > 0 as roots
         let mut curr_opt = list.head;
         while let Some(curr) = curr_opt {
             let header = curr.as_ptr();
             let ref_count = (*header).ref_count.load(Ordering::Relaxed);
-            
+
             if ref_count > 0 {
                 mark_as_root(header);
             }
-            
+
             curr_opt = *(*header).next.lock().unwrap();
         }
     }
@@ -260,24 +265,26 @@ fn mark_reachable() {
 fn collect_unmarked() -> Vec<*mut RcHeader> {
     let list = OBJECT_LIST.lock().unwrap();
     let mut to_collect = Vec::new();
-    
+
     unsafe {
         let mut curr_opt = list.head;
         while let Some(curr) = curr_opt {
             let header = curr.as_ptr();
             let ref_count = (*header).ref_count.load(Ordering::Relaxed);
             let flags = (*header).flags.load(Ordering::Relaxed);
-            
+
             // Object has RC == 0 and is not marked as reachable -> it's in a cycle
             if ref_count <= 0 && flags & FLAG_MARKED == 0 {
-                (*header).flags.store(flags | FLAG_IN_CYCLE, Ordering::Relaxed);
+                (*header)
+                    .flags
+                    .store(flags | FLAG_IN_CYCLE, Ordering::Relaxed);
                 to_collect.push(header);
             }
-            
+
             curr_opt = *(*header).next.lock().unwrap();
         }
     }
-    
+
     to_collect
 }
 
@@ -287,19 +294,19 @@ fn free_cycles(cycles: Vec<*mut RcHeader>) {
         for header in cycles {
             // Get the object pointer
             let obj_ptr = (header as *mut u8).add(HEADER_SIZE);
-            
+
             // Remove from global list
             remove_from_object_list(header);
-            
+
             // Get the destructor based on type
             let type_tag = (*header).type_tag.load(Ordering::Relaxed);
             let destructor = get_destructor_for_type(type_tag);
-            
+
             // Call destructor if present
             if let Some(dtor) = destructor {
                 dtor(obj_ptr);
             }
-            
+
             // Free the memory
             let layout = Layout::from_size_align(HEADER_SIZE + 4096, 8).unwrap();
             dealloc(header as *mut u8, layout);
@@ -319,7 +326,7 @@ fn get_destructor_for_type(type_tag: u32) -> Option<extern "C" fn(*mut u8)> {
 }
 
 /// Mark and scan cycle collection
-/// 
+///
 /// This is the main cycle collection algorithm:
 /// 1. Clear all marks
 /// 2. Mark all objects with RC > 0 as roots
@@ -328,19 +335,19 @@ fn get_destructor_for_type(type_tag: u32) -> Option<extern "C" fn(*mut u8)> {
 pub fn collect_cycles() {
     // Step 1: Clear all marks
     clear_marks();
-    
+
     // Step 2: Mark all reachable objects
     mark_reachable();
-    
+
     // Step 3: Collect unmarked objects with RC == 0
     let cycles = collect_unmarked();
-    
+
     // Step 4: Free the cycles
     free_cycles(cycles);
 }
 
 /// Initialize cycle collector
-/// 
+///
 /// This can start a background thread for periodic collection
 pub fn init_cycle_collector() {
     // For now, cycle collection is triggered on releases

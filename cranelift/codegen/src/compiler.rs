@@ -251,6 +251,18 @@ pub fn compile_module(
         })
         .collect();
 
+    // Collect global variable names (top-level bind/Let nodes)
+    let global_vars: Vec<String> = ast_nodes
+        .iter()
+        .filter_map(|node| {
+            if let AstNode::Let { name, .. } = node {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Pass 2: Compile all function and test bodies
     let runtime_funcs = crate::declare_runtime_functions(&mut codegen.module)?;
 
@@ -266,12 +278,14 @@ pub fn compile_module(
                 compile_function_body(
                     codegen,
                     func_id,
+                    name,
                     params,
                     return_type,
                     body,
                     &runtime_funcs,
                     &declared_funcs,
                     &string_funcs,
+                    &global_vars,
                 )?;
             }
         }
@@ -301,12 +315,14 @@ pub fn compile_module(
 fn compile_function_body(
     codegen: &mut CodeGen,
     func_id: FuncId,
+    func_name: &str,
     params: &[(String, String)],
     return_type: &str,
     body: &AstNode,
     runtime_funcs: &HashMap<String, FuncId>,
     declared_funcs: &HashMap<String, FuncId>,
     string_funcs: &HashMap<String, FuncId>,
+    global_vars: &[String],
 ) -> Result<(), CompileError> {
     let mut ctx = codegen.module.make_context();
 
@@ -325,6 +341,21 @@ fn compile_function_body(
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
         builder.switch_to_block(entry_block);
+
+        // Add global variables as placeholders (initialized to 0)
+        for global_name in global_vars {
+            let var = next_variable();
+            builder.declare_var(var, types::I64);
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.def_var(var, zero);
+            variables.insert(
+                global_name.clone(),
+                LocalVar {
+                    var,
+                    ty: types::I64,
+                },
+            );
+        }
 
         // Collect block params into a Vec to avoid borrow issues
         let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
@@ -349,6 +380,8 @@ fn compile_function_body(
             &mut codegen.module,
             ret_ty,
             body,
+            None,
+            None,
         )?;
 
         // Try to add return if the body compilation didn't fill a block
@@ -370,10 +403,14 @@ fn compile_function_body(
         builder.seal_all_blocks();
     }
 
+    eprintln!("DEBUG: Defining '{}'", func_name);
     codegen
         .module
         .define_function(func_id, &mut ctx)
-        .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+        .map_err(|e| {
+            eprintln!("DEBUG: Error in '{}': {}", func_name, e);
+            CompileError::ModuleError(e.to_string())
+        })?;
 
     Ok(())
 }
@@ -408,6 +445,8 @@ fn compile_test_body(
             &mut codegen.module,
             types::I64,
             body,
+            None,
+            None,
         )?;
 
         // If block not filled (e.g., no explicit return), return 0 (success)
@@ -497,6 +536,8 @@ fn compile_stmt(
     module: &mut dyn Module,
     return_type: Type,
     node: &AstNode,
+    loop_header: Option<Block>,
+    loop_exit: Option<Block>,
 ) -> Result<bool, CompileError> {
     match node {
         AstNode::Let { name, value, .. } => {
@@ -531,6 +572,8 @@ fn compile_stmt(
                     module,
                     return_type,
                     stmt,
+                    loop_header,
+                    loop_exit,
                 )?;
                 if filled {
                     return Ok(true);
@@ -573,6 +616,28 @@ fn compile_stmt(
             Ok(true)
         }
 
+        AstNode::Break => {
+            if let Some(exit) = loop_exit {
+                builder.ins().jump(exit, &[]);
+                Ok(true)
+            } else {
+                Err(CompileError::UnsupportedFeature(
+                    "break outside of loop".to_string(),
+                ))
+            }
+        }
+
+        AstNode::Continue => {
+            if let Some(header) = loop_header {
+                builder.ins().jump(header, &[]);
+                Ok(true)
+            } else {
+                Err(CompileError::UnsupportedFeature(
+                    "continue outside of loop".to_string(),
+                ))
+            }
+        }
+
         AstNode::If {
             cond,
             then_branch,
@@ -607,6 +672,8 @@ fn compile_stmt(
                 module,
                 return_type,
                 then_branch,
+                loop_header,
+                loop_exit,
             )?;
             if !then_filled {
                 builder.ins().jump(merge_block, &[]);
@@ -625,6 +692,8 @@ fn compile_stmt(
                     module,
                     return_type,
                     else_stmt,
+                    loop_header,
+                    loop_exit,
                 )?
             } else {
                 false
@@ -634,11 +703,19 @@ fn compile_stmt(
             }
             builder.seal_block(else_block);
 
-            // Continue after if
-            builder.switch_to_block(merge_block);
-            // Merge block will be sealed later when all predecessors are known
-
-            Ok(false)
+            // Continue after if - only if at least one branch falls through
+            // If both branches are filled (return/break), the code after if is unreachable
+            if then_filled && else_filled {
+                // Both branches filled - merge block is unreachable, create new block
+                let unreachable_block = builder.create_block();
+                builder.switch_to_block(unreachable_block);
+                Ok(true) // Current block is filled (unreachable)
+            } else {
+                // At least one branch falls through - continue at merge
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
+                Ok(false)
+            }
         }
 
         AstNode::While { cond, body } => {
@@ -677,6 +754,8 @@ fn compile_stmt(
                 module,
                 return_type,
                 body,
+                Some(header_block),
+                Some(exit_block),
             )?;
             if !body_filled {
                 builder.ins().jump(header_block, &[]);
@@ -689,6 +768,110 @@ fn compile_stmt(
 
             // Continue at exit block
             builder.switch_to_block(exit_block);
+
+            Ok(false)
+        }
+
+        AstNode::For {
+            var,
+            iterable,
+            body,
+        } => {
+            // Simplified for loop using index-based iteration
+
+            // Compile the iterable and get length
+            let list_val = compile_expr(
+                builder,
+                variables,
+                runtime_funcs,
+                declared_funcs,
+                string_funcs,
+                module,
+                iterable,
+            )?;
+
+            // Get list length
+            let len_func_id = runtime_funcs
+                .get("forge_list_len")
+                .ok_or_else(|| CompileError::UnknownFunction("forge_list_len".to_string()))?;
+            let len_func_ref = module.declare_func_in_func(*len_func_id, builder.func);
+            let len_call = builder.ins().call(len_func_ref, &[list_val]);
+            let len_val = builder.func.dfg.first_result(len_call);
+
+            // Create variables before any branching
+            let idx_var = next_variable();
+            let count_var = next_variable();
+            builder.declare_var(idx_var, types::I64);
+            builder.declare_var(count_var, types::I64);
+
+            // Set initial values
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.def_var(idx_var, zero);
+            builder.def_var(count_var, len_val);
+
+            // Create blocks
+            let header = builder.create_block();
+            let body_block = builder.create_block();
+            let exit = builder.create_block();
+
+            // Jump to header
+            builder.ins().jump(header, &[]);
+
+            // Header block
+            builder.switch_to_block(header);
+            let idx_val = builder.use_var(idx_var);
+            let count_val = builder.use_var(count_var);
+            let cmp = builder
+                .ins()
+                .icmp(IntCC::UnsignedLessThan, idx_val, count_val);
+            builder.ins().brif(cmp, body_block, &[], exit, &[]);
+
+            // Body block
+            builder.switch_to_block(body_block);
+
+            // Create loop variable with current index as placeholder
+            let loop_var = next_variable();
+            builder.declare_var(loop_var, types::I64);
+            let cur_idx = builder.use_var(idx_var);
+            builder.def_var(loop_var, cur_idx);
+
+            // Add to scope
+            let var_info = LocalVar {
+                var: loop_var,
+                ty: types::I64,
+            };
+            variables.insert(var.clone(), var_info);
+
+            // Compile body
+            let body_ref: &AstNode = &**body;
+            let filled = compile_stmt(
+                builder,
+                variables,
+                runtime_funcs,
+                declared_funcs,
+                string_funcs,
+                module,
+                return_type,
+                body_ref,
+                Some(header),
+                Some(exit),
+            )?;
+
+            variables.remove(var);
+
+            // Loop back with incremented index
+            if !filled {
+                let cur_idx_2 = builder.use_var(idx_var);
+                let next_idx = builder.ins().iadd_imm(cur_idx_2, 1);
+                builder.def_var(idx_var, next_idx);
+                builder.ins().jump(header, &[]);
+            }
+
+            builder.seal_block(body_block);
+            builder.seal_block(header);
+
+            // Exit
+            builder.switch_to_block(exit);
 
             Ok(false)
         }
@@ -746,6 +929,8 @@ fn compile_expr(
         AstNode::IntLiteral(n) => Ok(builder.ins().iconst(types::I64, *n)),
 
         AstNode::FloatLiteral(f) => Ok(builder.ins().f64const(*f)),
+
+        AstNode::BoolLiteral(b) => Ok(builder.ins().iconst(types::I64, if *b { 1 } else { 0 })),
 
         AstNode::StringLiteral(s) => {
             // Call the string data function to get the address
@@ -848,6 +1033,8 @@ fn compile_expr(
                     .call(push_ref, &[list_ptr, elem_ptr, elem_size_val]);
             }
 
+            // Return the list VALUE (not pointer to stack slot)
+            // This is what gets stored in variables and passed to other functions
             Ok(list_val)
         }
 
@@ -966,6 +1153,35 @@ fn compile_expr(
                 module,
                 error,
             )
+        }
+
+        AstNode::Index { expr, index } => {
+            // Index access: expr[index]
+            // For now, return 0 as placeholder
+            // Full implementation requires:
+            // - For lists: bounds check and element access
+            // - For strings: character access (returns String)
+            // - For maps: key lookup
+            let _expr_val = compile_expr(
+                builder,
+                variables,
+                runtime_funcs,
+                declared_funcs,
+                string_funcs,
+                module,
+                expr,
+            )?;
+            let _index_val = compile_expr(
+                builder,
+                variables,
+                runtime_funcs,
+                declared_funcs,
+                string_funcs,
+                module,
+                index,
+            )?;
+            // Placeholder: return 0
+            Ok(builder.ins().iconst(types::I64, 0))
         }
 
         AstNode::FieldAccess { obj, field } => {
@@ -1194,11 +1410,16 @@ fn compile_expr(
                     AstNode::StringLiteral(_) | AstNode::StringInterp { .. }
                 );
 
+                let is_identifier = matches!(first_arg, AstNode::Identifier(_));
+
                 // If calling .len() on a list literal, use list method
                 if is_list_literal && func == "len" {
                     // Fall through to list method check below
-                } else if is_string_literal {
-                    // Check for string method calls on string literals
+                } else if is_string_literal || is_identifier {
+                    // Check for string method calls on string literals or identifiers
+                    // Note: For identifiers, we assume they might be strings since we don't
+                    // have full type information. This is a heuristic that works for the
+                    // self-hosted compiler where string method calls are common.
                     let string_methods = [
                         "len",
                         "contains",
@@ -1227,6 +1448,15 @@ fn compile_expr(
                                 let call = builder.ins().call(len_func_ref, &[string_val]);
                                 return Ok(builder.func.dfg.first_result(call));
                             }
+                        }
+
+                        // String methods that return strings need special handling
+                        // (they require output pointer). For now, return placeholder.
+                        let string_return_methods = ["substring", "trim"];
+                        if string_return_methods.contains(&func.as_str()) {
+                            // These methods need proper struct return handling
+                            // For now, return the original string as placeholder
+                            return Ok(string_val);
                         }
 
                         let runtime_func_name = format!("forge_string_{}", func);
@@ -1341,14 +1571,62 @@ fn compile_expr(
                 }
             }
 
-            // Use forge_print_cstr for all print calls (expects just a pointer)
-            let func_name = if func == "print" {
-                "forge_print_cstr"
+            // Handle print function selection based on argument type
+            let (func_name, arg_values) = if func == "print" && !args.is_empty() {
+                // Compile the first argument to determine its type
+                let first_arg = compile_expr(
+                    builder,
+                    variables,
+                    runtime_funcs,
+                    declared_funcs,
+                    string_funcs,
+                    module,
+                    &args[0],
+                )?;
+                let first_arg_ty = builder.func.dfg.value_type(first_arg);
+
+                // Compile remaining args if any
+                let mut all_args = vec![first_arg];
+                for arg in &args[1..] {
+                    all_args.push(compile_expr(
+                        builder,
+                        variables,
+                        runtime_funcs,
+                        declared_funcs,
+                        string_funcs,
+                        module,
+                        arg,
+                    )?);
+                }
+
+                // Choose print function based on argument type
+                if first_arg_ty == types::I64 {
+                    ("forge_print_int", all_args)
+                } else {
+                    ("forge_print_cstr", all_args)
+                }
             } else {
-                match func.as_str() {
+                // Original logic for other functions
+                let fname = match func.as_str() {
+                    "print" => "forge_print_cstr",
                     "print_int" => "forge_print_int",
                     _ => func,
+                };
+
+                // Compile all arguments
+                let mut avals = Vec::new();
+                for arg in args {
+                    avals.push(compile_expr(
+                        builder,
+                        variables,
+                        runtime_funcs,
+                        declared_funcs,
+                        string_funcs,
+                        module,
+                        arg,
+                    )?);
                 }
+                (fname, avals)
             };
 
             let func_id = runtime_funcs
@@ -1358,19 +1636,6 @@ fn compile_expr(
                 .ok_or_else(|| CompileError::UnknownFunction(func.clone()))?;
 
             let func_ref = module.declare_func_in_func(func_id, builder.func);
-
-            let mut arg_values = Vec::new();
-            for arg in args {
-                arg_values.push(compile_expr(
-                    builder,
-                    variables,
-                    runtime_funcs,
-                    declared_funcs,
-                    string_funcs,
-                    module,
-                    arg,
-                )?);
-            }
 
             let call = builder.ins().call(func_ref, &arg_values);
 

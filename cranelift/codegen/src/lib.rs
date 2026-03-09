@@ -654,6 +654,225 @@ pub fn declare_runtime_functions(
     )?;
     funcs.insert("forge_cstring_len".to_string(), cstring_len);
 
+    // Filesystem functions
+    let file_exists = declare_runtime_function(
+        module,
+        "forge_file_exists",
+        &[types::I64], // *const path
+        &[types::I8],  // returns bool (0/1)
+    )?;
+    funcs.insert("file_exists".to_string(), file_exists);
+
+    let dir_exists = declare_runtime_function(
+        module,
+        "forge_dir_exists",
+        &[types::I64], // *const path
+        &[types::I8],  // returns bool (0/1)
+    )?;
+    funcs.insert("dir_exists".to_string(), dir_exists);
+
+    let mkdir = declare_runtime_function(
+        module,
+        "forge_mkdir",
+        &[types::I64], // *const path
+        &[types::I8],  // returns bool (0/1)
+    )?;
+    funcs.insert("mkdir".to_string(), mkdir);
+
+    let remove_file = declare_runtime_function(
+        module,
+        "forge_remove_file",
+        &[types::I64], // *const path
+        &[types::I8],  // returns bool (0/1)
+    )?;
+    funcs.insert("remove_file".to_string(), remove_file);
+
+    let rename_file = declare_runtime_function(
+        module,
+        "forge_rename_file",
+        &[types::I64, types::I64], // *const from, *const to
+        &[types::I8],              // returns bool (0/1)
+    )?;
+    funcs.insert("rename_file".to_string(), rename_file);
+
+    // File I/O functions
+    let read_file = declare_runtime_function(
+        module,
+        "forge_read_file",
+        &[types::I64], // *const path
+        &[types::I64], // returns *mut cstr (null on error)
+    )?;
+    funcs.insert("read_file".to_string(), read_file);
+
+    let write_file = declare_runtime_function(
+        module,
+        "forge_write_file",
+        &[types::I64, types::I64], // *const path, *const content
+        &[types::I8],              // returns bool (0/1)
+    )?;
+    funcs.insert("write_file".to_string(), write_file);
+
+    let append_file = declare_runtime_function(
+        module,
+        "forge_append_file",
+        &[types::I64, types::I64], // *const path, *const content
+        &[types::I8],              // returns bool (0/1)
+    )?;
+    funcs.insert("append_file".to_string(), append_file);
+
+    // Process/environment functions
+    let exit = declare_runtime_function(
+        module,
+        "forge_exit",
+        &[types::I64], // exit code
+        &[],           // no return
+    )?;
+    funcs.insert("exit".to_string(), exit);
+
+    let sleep = declare_runtime_function(
+        module,
+        "forge_sleep",
+        &[types::I64], // milliseconds
+        &[],           // no return
+    )?;
+    funcs.insert("sleep".to_string(), sleep);
+
+    let time = declare_runtime_function(
+        module,
+        "forge_time",
+        &[],           // no args
+        &[types::I64], // returns timestamp
+    )?;
+    funcs.insert("time".to_string(), time);
+
+    let env = declare_runtime_function(
+        module,
+        "forge_env",
+        &[types::I64], // *const name
+        &[types::I64], // returns *const cstr (null if not found)
+    )?;
+    funcs.insert("env".to_string(), env);
+
+    let input = declare_runtime_function(
+        module,
+        "forge_input",
+        &[],           // no args
+        &[types::I64], // returns *mut cstr
+    )?;
+    funcs.insert("input".to_string(), input);
+
+    // Command execution
+    let exec = declare_runtime_function(
+        module,
+        "forge_exec",
+        &[types::I64], // *const command
+        &[types::I64], // returns exit code
+    )?;
+    funcs.insert("exec".to_string(), exec);
+
+    // Random functions
+    let random_float = declare_runtime_function(
+        module,
+        "forge_random_float",
+        &[],           // no args
+        &[types::F64], // returns float
+    )?;
+    funcs.insert("random_float".to_string(), random_float);
+
+    let random_seed = declare_runtime_function(
+        module,
+        "forge_random_seed",
+        &[types::I64], // seed
+        &[],           // no return
+    )?;
+    funcs.insert("random_seed".to_string(), random_seed);
+
+    let random_int = declare_runtime_function(
+        module,
+        "forge_random_int",
+        &[types::I64, types::I64], // min, max
+        &[types::I64],             // returns int
+    )?;
+    funcs.insert("random_int".to_string(), random_int);
+
+    // Math functions (aliases to the ones already defined)
+    funcs.insert("math_sqrt".to_string(), sqrt);
+    funcs.insert("math_floor".to_string(), floor);
+    funcs.insert("math_ceil".to_string(), ceil);
+    funcs.insert("math_round".to_string(), round);
+    funcs.insert("math_pow".to_string(), pow);
+
+    // String/utility functions
+    let fmt_float = declare_runtime_function(
+        module,
+        "forge_fmt_float",
+        &[types::F64, types::I64], // n, precision
+        &[types::I64],             // returns *mut cstr
+    )?;
+    funcs.insert("fmt_float".to_string(), fmt_float);
+
+    let random_string = declare_runtime_function(
+        module,
+        "forge_random_string",
+        &[types::I64], // length
+        &[types::I64], // returns *mut cstr
+    )?;
+    funcs.insert("random_string".to_string(), random_string);
+
+    // Command line arguments
+    let args = declare_runtime_function(
+        module,
+        "forge_args",
+        &[],           // no args
+        &[types::I64], // returns *mut StringNode (linked list head)
+    )?;
+    funcs.insert("args".to_string(), args);
+
+    // String utility functions (standalone versions for free function calls)
+    // Note: These are simplified versions that work with C strings for now
+    let substring = declare_runtime_function(
+        module,
+        "forge_cstring_substring", // We'll need to implement this
+        &[types::I64, types::I64, types::I64], // str, start, end
+        &[types::I64],             // returns *mut cstr
+    )?;
+    funcs.insert("substring".to_string(), substring);
+
+    let contains = declare_runtime_function(
+        module,
+        "forge_cstring_contains",  // We'll need to implement this
+        &[types::I64, types::I64], // haystack, needle
+        &[types::I8],              // returns bool
+    )?;
+    funcs.insert("contains".to_string(), contains);
+
+    let split = declare_runtime_function(
+        module,
+        "forge_cstring_split",     // We'll need to implement this
+        &[types::I64, types::I64], // str, delimiter
+        &[types::I64],             // returns *mut StringNode (list)
+    )?;
+    funcs.insert("split".to_string(), split);
+
+    let trim = declare_runtime_function(
+        module,
+        "forge_cstring_trim", // We'll need to implement this
+        &[types::I64],        // str
+        &[types::I64],        // returns *mut cstr
+    )?;
+    funcs.insert("trim".to_string(), trim);
+
+    let trim_left = declare_runtime_function(
+        module,
+        "forge_cstring_trim_left", // We'll need to implement this
+        &[types::I64],             // str
+        &[types::I64],             // returns *mut cstr
+    )?;
+    funcs.insert("trim_left".to_string(), trim_left);
+
+    // Note: list_dir returns a linked list - needs special handling
+    // For now, declare but don't use directly
+
     Ok(funcs)
 }
 
