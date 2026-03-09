@@ -96,6 +96,23 @@ pub enum AstNode {
         fields: Vec<(String, String)>, // (field_name, field_type)
         is_pub: bool,
     },
+    /// Enum declaration: enum Name { variants... }
+    EnumDecl {
+        name: String,
+        variants: Vec<EnumVariant>,
+        is_pub: bool,
+    },
+    /// Enum variant constructor: EnumName.VariantName or EnumName.VariantName(args)
+    EnumVariantConstruct {
+        enum_name: String,
+        variant_name: String,
+        args: Vec<AstNode>,
+    },
+    /// Match expression: match expr { arms... }
+    Match {
+        expr: Box<AstNode>,
+        arms: Vec<MatchArm>,
+    },
     /// Struct initialization: TypeName { field: value, ... }
     StructInit {
         name: String,
@@ -110,6 +127,37 @@ pub enum AstNode {
         return_type: String,
         body: Box<AstNode>,
     },
+}
+
+/// Enum variant definition
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub data_types: Vec<String>, // Types of associated data (empty for simple variants)
+}
+
+/// Match arm: pattern => expr
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub expr: Box<AstNode>,
+}
+
+/// Match pattern
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    /// Enum variant pattern: EnumName.VariantName or EnumName.VariantName(args)
+    EnumVariant {
+        enum_name: String,
+        variant_name: String,
+        bind_vars: Vec<String>, // Variable names to bind for associated data
+    },
+    /// Literal value
+    Literal(AstNode),
+    /// Wildcard: _
+    Wildcard,
+    /// Variable binding
+    Variable(String),
 }
 
 /// Binary operators

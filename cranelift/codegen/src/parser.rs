@@ -7,7 +7,9 @@
 //!       body
 //!         ...
 
-use crate::ast::{AstNode, BinaryOp, StringInterpPart, UnaryOp};
+use crate::ast::{
+    AstNode, BinaryOp, EnumVariant, MatchArm, MatchPattern, StringInterpPart, UnaryOp,
+};
 use crate::CompileError;
 use std::collections::HashMap;
 
@@ -114,6 +116,7 @@ impl TextAstParser {
         match line.kind.as_str() {
             "fn" => self.parse_function(),
             "struct" => self.parse_struct(),
+            "enum" => self.parse_enum(),
             "from" => self.parse_import(),
             "test" => self.parse_test(),
             "bind" => self.parse_top_level_bind(),
@@ -255,6 +258,58 @@ impl TextAstParser {
         Ok(AstNode::StructDecl {
             name,
             fields,
+            is_pub,
+        })
+    }
+
+    /// Parse an enum declaration: enum Name { variants... }
+    fn parse_enum(&mut self) -> Result<AstNode, CompileError> {
+        let line = self.current().unwrap();
+        let name = line.value.clone();
+        let enum_indent = line.indent;
+        let is_pub = false; // TODO: track pub status
+        self.advance();
+
+        let mut variants = Vec::new();
+
+        // Parse variants until we hit a lower or equal indentation
+        while let Some(variant_line) = self.current() {
+            if variant_line.indent <= enum_indent {
+                break;
+            }
+
+            if variant_line.kind == "variant" {
+                let variant_name = variant_line.value.clone();
+                let variant_indent = variant_line.indent;
+                self.advance();
+
+                // Parse associated data types if any (indented under variant)
+                let mut data_types = Vec::new();
+                while let Some(type_line) = self.current() {
+                    if type_line.indent <= variant_indent {
+                        break;
+                    }
+                    if type_line.kind == "type" {
+                        data_types.push(type_line.value.clone());
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                variants.push(crate::ast::EnumVariant {
+                    name: variant_name,
+                    data_types,
+                });
+            } else {
+                // Skip unknown nodes under enum
+                self.advance();
+            }
+        }
+
+        Ok(AstNode::EnumDecl {
+            name,
+            variants,
             is_pub,
         })
     }
@@ -720,6 +775,7 @@ impl TextAstParser {
                     operand: Box::new(operand),
                 })
             }
+            "match" => self.parse_match(),
             _ => {
                 // Skip unknown nodes
                 self.advance();
@@ -1086,6 +1142,105 @@ impl TextAstParser {
             func: func_name,
             args,
         })
+    }
+
+    /// Parse match expression: match expr { arms... }
+    fn parse_match(&mut self) -> Result<AstNode, CompileError> {
+        let line = self.current().unwrap();
+        let match_indent = line.indent;
+        self.advance();
+
+        // Parse the expression being matched
+        let expr = self.parse_expression()?;
+
+        // Parse match arms
+        let mut arms = Vec::new();
+        while let Some(line) = self.current() {
+            if line.indent <= match_indent {
+                break;
+            }
+
+            if line.kind == "arm" {
+                self.advance();
+                // Parse pattern and expression for this arm
+                let pattern = self.parse_match_pattern()?;
+                let arm_expr = self.parse_expression()?;
+                arms.push(crate::ast::MatchArm {
+                    pattern,
+                    expr: Box::new(arm_expr),
+                });
+            } else {
+                // Skip unknown nodes
+                self.advance();
+            }
+        }
+
+        Ok(AstNode::Match {
+            expr: Box::new(expr),
+            arms,
+        })
+    }
+
+    /// Parse a match pattern
+    fn parse_match_pattern(&mut self) -> Result<crate::ast::MatchPattern, CompileError> {
+        let line = self.current().ok_or_else(|| {
+            CompileError::UnsupportedFeature("Expected pattern in match arm".to_string())
+        })?;
+
+        match line.kind.as_str() {
+            "variant" => {
+                // Enum variant pattern: EnumName.VariantName
+                let variant_str = line.value.clone();
+                self.advance();
+
+                // Parse EnumName.VariantName format
+                let parts: Vec<&str> = variant_str.split('.').collect();
+                if parts.len() == 2 {
+                    let enum_name = parts[0].to_string();
+                    let variant_name = parts[1].to_string();
+
+                    // Check for bind variables (indented under variant)
+                    let mut bind_vars = Vec::new();
+                    while let Some(bind_line) = self.current() {
+                        if bind_line.kind == "bind" {
+                            let var_name = bind_line
+                                .value
+                                .split_whitespace()
+                                .next()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| bind_line.value.clone());
+                            bind_vars.push(var_name);
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    Ok(crate::ast::MatchPattern::EnumVariant {
+                        enum_name,
+                        variant_name,
+                        bind_vars,
+                    })
+                } else {
+                    // Simple variant or variable
+                    Ok(crate::ast::MatchPattern::Variable(variant_str))
+                }
+            }
+            "wildcard" => {
+                self.advance();
+                Ok(crate::ast::MatchPattern::Wildcard)
+            }
+            "ident" => {
+                let name = line.value.clone();
+                self.advance();
+                Ok(crate::ast::MatchPattern::Variable(name))
+            }
+            _ => {
+                // Try to parse as literal
+                let literal = self.parse_expression()?;
+                Ok(crate::ast::MatchPattern::Literal(literal))
+            }
+        }
     }
 
     /// Parse while loop
