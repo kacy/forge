@@ -605,6 +605,8 @@ fn collect_strings(node: &AstNode, strings: &mut Vec<String>) {
         }
         AstNode::Spawn { expr } => collect_strings(expr, strings),
         AstNode::Await { expr } => collect_strings(expr, strings),
+        AstNode::Try { expr } => collect_strings(expr, strings),
+        AstNode::Fail { error } => collect_strings(error, strings),
         _ => {}
     }
 }
