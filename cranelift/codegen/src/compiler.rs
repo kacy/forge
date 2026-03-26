@@ -2782,86 +2782,50 @@ fn compile_expr(
         }
 
         AstNode::Try { expr } => {
-            // Try operator (!): For now, just pass through the value
-            // TODO: Implement proper Result type checking and error propagation
-            // The function returns the value directly (not wrapped in Result struct yet)
-            compile_expr(
-                builder,
-                variables,
-                module,
-                expr,
-                cctx,
-            )
+            // Try operator (!): evaluate expression, check for error (0 = error), propagate
+            // Convention: fail returns 0, success returns non-zero value
+            let val = compile_expr(builder, variables, module, expr, cctx)?;
+
+            // Check if result is 0 (error sentinel)
+            let is_ok = builder.ins().icmp_imm(IntCC::NotEqual, val, 0);
+
+            let ok_block = builder.create_block();
+            let err_block = builder.create_block();
+            let merge_block = builder.create_block();
+            builder.append_block_param(merge_block, types::I64);
+
+            builder.ins().brif(is_ok, ok_block, &[], err_block, &[]);
+
+            // OK path: pass through the value
+            builder.switch_to_block(ok_block);
+            builder.seal_block(ok_block);
+            builder.ins().jump(merge_block, &[val]);
+
+            // Error path: propagate 0 to caller
+            builder.switch_to_block(err_block);
+            builder.seal_block(err_block);
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.ins().return_(&[zero]);
+
+            builder.switch_to_block(merge_block);
+            builder.seal_block(merge_block);
+            Ok(builder.block_params(merge_block)[0])
         }
 
         AstNode::Fail { error } => {
-            // Fail statement: construct error result and return
-            // Compile the error expression
-            let err_val = compile_expr(
-                builder,
-                variables,
-                module,
-                error,
-                cctx,
-            )?;
+            // Fail: return 0 as error sentinel
+            let _err_val = compile_expr(builder, variables, module, error, cctx)?;
 
-            // Get the enclosing function's return type
-            let current_func = builder.func.name.to_string();
-            let enclosing_ret_type = crate::get_func_return_type(&current_func);
+            // Return 0 (error sentinel) — Try (!) checks for this
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.ins().return_(&[zero]);
 
-            if let Some(ref ret_ty) = enclosing_ret_type {
-                if crate::is_result_type(ret_ty) {
-                    // Allocate result struct on stack
-                    let result_slot = builder.create_sized_stack_slot(StackSlotData::new(
-                        StackSlotKind::ExplicitSlot,
-                        24,
-                        8,
-                    ));
-                    let result_ptr = builder.ins().stack_addr(types::I64, result_slot, 0);
+            // Switch to a new unreachable block so subsequent code doesn't pollute
+            // the terminated block (Cranelift verifier rejects code after return)
+            let unreachable_block = builder.create_block();
+            builder.switch_to_block(unreachable_block);
 
-                    // Store is_ok = false
-                    let false_val = builder.ins().iconst(types::I8, 0);
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), false_val, result_ptr, 0);
-
-                    // Store error message
-                    let err_field_ptr = builder.ins().iadd_imm(result_ptr, 16);
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), err_val, err_field_ptr, 0);
-
-                    // Return the error result
-                    builder.ins().return_(&[result_ptr]);
-
-                    // Return dummy value (unreachable)
-                    Ok(builder.ins().iconst(types::I64, 0))
-                } else {
-                    // Enclosing function doesn't return Result - print and exit
-                    if let Some(&print_id) = cctx.runtime_funcs.get("print_err") {
-                        let print_ref = module.declare_func_in_func(print_id, builder.func);
-                        builder.ins().call(print_ref, &[err_val]);
-                    }
-                    if let Some(&exit_id) = cctx.runtime_funcs.get("exit") {
-                        let exit_ref = module.declare_func_in_func(exit_id, builder.func);
-                        let exit_code = builder.ins().iconst(types::I64, 1);
-                        builder.ins().call(exit_ref, &[exit_code]);
-                    }
-                    Ok(builder.ins().iconst(types::I64, 0))
-                }
-            } else {
-                // No return type info - print and exit
-                if let Some(&print_id) = cctx.runtime_funcs.get("print_err") {
-                    let print_ref = module.declare_func_in_func(print_id, builder.func);
-                    builder.ins().call(print_ref, &[err_val]);
-                }
-                if let Some(&exit_id) = cctx.runtime_funcs.get("exit") {
-                    let exit_ref = module.declare_func_in_func(exit_id, builder.func);
-                    let exit_code = builder.ins().iconst(types::I64, 1);
-                    builder.ins().call(exit_ref, &[exit_code]);
-                }
-                Ok(builder.ins().iconst(types::I64, 0))
-            }
+            Ok(builder.ins().iconst(types::I64, 0))
         }
 
         AstNode::Index { expr, index } => {
