@@ -1,0 +1,3172 @@
+//! Forge Runtime - Core runtime library for the Forge language
+//!
+//! This crate provides the runtime support for Forge programs:
+//! - Reference counting (ARC) with cycle collection
+//! - String operations
+//! - Collections (List, Map, Set)
+//! - Concurrency primitives
+//!
+//! The runtime is designed to be called from Cranelift-generated code
+//! via a C-compatible FFI boundary.
+
+#![allow(clippy::missing_safety_doc)]
+
+pub mod arc;
+pub mod collections;
+pub mod concurrency;
+pub mod json;
+pub mod string;
+pub mod toml;
+
+use crate::collections::list::ForgeList;
+use std::sync::atomic::AtomicUsize;
+
+/// Global statistics for debugging
+pub static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+pub static LIVE_OBJECTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Closure environment: a fixed-size array of i64 slots for captured variables.
+/// Single-threaded programs can use this to pass captures to lambda functions
+/// compiled without a full closure ABI.
+static mut CLOSURE_ENV: [i64; 16] = [0i64; 16];
+
+/// Set a captured variable slot before calling a closure.
+#[no_mangle]
+pub unsafe extern "C" fn forge_closure_set_env(slot: i64, value: i64) {
+    if slot >= 0 && (slot as usize) < 16 {
+        CLOSURE_ENV[slot as usize] = value;
+    }
+}
+
+/// Read a captured variable from the closure environment.
+#[no_mangle]
+pub unsafe extern "C" fn forge_closure_get_env(slot: i64) -> i64 {
+    if slot >= 0 && (slot as usize) < 16 {
+        CLOSURE_ENV[slot as usize]
+    } else {
+        0
+    }
+}
+
+/// Initialize the runtime
+///
+/// # Safety
+/// Must be called before any other runtime functions
+#[no_mangle]
+pub unsafe extern "C" fn forge_runtime_init() {
+    arc::init_cycle_collector();
+}
+
+/// Clean up the runtime
+///
+/// # Safety
+/// Should be called at program exit
+#[no_mangle]
+pub unsafe extern "C" fn forge_runtime_shutdown() {
+    arc::shutdown_cycle_collector();
+}
+
+/// Print a string to stdout
+///
+/// # Safety
+/// s must be a valid ForgeString
+#[no_mangle]
+pub unsafe extern "C" fn forge_print(s: string::ForgeString) {
+    use std::io::Write;
+
+    if s.ptr.is_null() || s.len == 0 {
+        println!();
+        return;
+    }
+
+    let slice = std::slice::from_raw_parts(s.ptr, s.len as usize);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        println!("{}", str_ref);
+    } else {
+        println!();
+    }
+}
+
+/// Print an integer (for testing)
+#[no_mangle]
+pub extern "C" fn forge_print_int(n: i64) {
+    println!("{}", n);
+}
+
+/// Simple string concatenation for two C string pointers
+/// Allocates new memory for the result
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_concat_cstr(a: *const i8, b: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if a.is_null() {
+        return if b.is_null() {
+            std::ptr::null_mut()
+        } else {
+            forge_strdup(b)
+        };
+    }
+    if b.is_null() {
+        return forge_strdup(a);
+    }
+
+    // Calculate lengths
+    let mut len_a = 0;
+    let mut p = a;
+    while *p != 0 {
+        len_a += 1;
+        p = p.add(1);
+    }
+
+    let mut len_b = 0;
+    let mut p = b;
+    while *p != 0 {
+        len_b += 1;
+        p = p.add(1);
+    }
+
+    let total_len = len_a + len_b;
+    let layout = Layout::from_size_align(total_len + 1, 1).unwrap();
+    let result = alloc(layout) as *mut i8;
+
+    if result.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // Copy a
+    std::ptr::copy_nonoverlapping(a, result, len_a);
+    // Copy b
+    std::ptr::copy_nonoverlapping(b, result.add(len_a), len_b);
+    // Null terminator
+    *result.add(total_len) = 0;
+
+    result
+}
+
+/// Duplicate a C string
+///
+/// # Safety
+/// ptr must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_strdup(ptr: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let mut len = 0;
+    let mut p = ptr;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let result = alloc(layout) as *mut i8;
+
+    if !result.is_null() {
+        std::ptr::copy_nonoverlapping(ptr, result, len + 1);
+    }
+
+    result
+}
+
+/// Print a C string (null-terminated)
+///
+/// # Safety
+/// ptr must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_print_cstr(ptr: *const i8) {
+    if ptr.is_null() {
+        println!();
+        return;
+    }
+
+    // Calculate length
+    let mut len = 0;
+    let mut p = ptr;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        println!("{}", str_ref);
+    } else {
+        println!();
+    }
+}
+
+/// Print a C string to stderr (null-terminated)
+///
+/// # Safety
+/// ptr must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_print_err(ptr: *const i8) {
+    use std::io::Write;
+
+    if ptr.is_null() {
+        eprintln!();
+        return;
+    }
+
+    // Calculate length
+    let mut len = 0;
+    let mut p = ptr;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        eprintln!("{}", str_ref);
+    } else {
+        eprintln!();
+    }
+}
+
+/// Compare two C strings for equality (content-based, null-terminated)
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings or null
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_eq(a: *const i8, b: *const i8) -> i64 {
+    // Handle null cases
+    if a.is_null() && b.is_null() {
+        return 1;
+    }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
+
+    // Compare byte by byte
+    let mut pa = a;
+    let mut pb = b;
+
+    loop {
+        let ca = *pa;
+        let cb = *pb;
+
+        if ca != cb {
+            return 0;
+        }
+
+        if ca == 0 {
+            return 1;
+        }
+
+        pa = pa.add(1);
+        pb = pb.add(1);
+    }
+}
+
+/// Compare two C strings lexicographically (like strcmp).
+/// Returns negative if a < b, 0 if equal, positive if a > b.
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_cmp(a: *const i8, b: *const i8) -> i64 {
+    if a.is_null() && b.is_null() {
+        return 0;
+    }
+    if a.is_null() {
+        return -1;
+    }
+    if b.is_null() {
+        return 1;
+    }
+
+    let mut pa = a;
+    let mut pb = b;
+
+    loop {
+        let ca = *pa as u8;
+        let cb = *pb as u8;
+
+        if ca != cb {
+            return (ca as i64) - (cb as i64);
+        }
+
+        if ca == 0 {
+            return 0;
+        }
+
+        pa = pa.add(1);
+        pb = pb.add(1);
+    }
+}
+
+/// Get ASCII value of first char in C string (ord)
+#[no_mangle]
+pub unsafe extern "C" fn forge_ord_cstr(s: *const i8) -> i64 {
+    if s.is_null() || *s == 0 {
+        return 0;
+    }
+    *s as i64
+}
+
+/// Convert ASCII value to single-char C string (chr)
+#[no_mangle]
+pub unsafe extern "C" fn forge_chr_cstr(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    let layout = Layout::from_size_align(2, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        *ptr = (n as u8) as i8;
+        *ptr.add(1) = 0;
+    }
+
+    ptr
+}
+
+/// Test assertion helpers
+static mut TEST_FAILED: bool = false;
+
+/// Assert that condition is true
+#[no_mangle]
+pub extern "C" fn forge_assert(cond: i64) {
+    unsafe {
+        if cond == 0 {
+            TEST_FAILED = true;
+            eprintln!("Assertion failed");
+        }
+    }
+}
+
+/// Assert that two values are equal
+#[no_mangle]
+pub extern "C" fn forge_assert_eq(a: i64, b: i64) {
+    unsafe {
+        if a != b {
+            TEST_FAILED = true;
+            eprintln!("Assertion failed: {} != {}", a, b);
+        }
+    }
+}
+
+/// Assert that two values are not equal  
+#[no_mangle]
+pub extern "C" fn forge_assert_ne(a: i64, b: i64) {
+    unsafe {
+        if a == b {
+            TEST_FAILED = true;
+            eprintln!("Assertion failed: {} == {}", a, b);
+        }
+    }
+}
+
+/// Check if any test failed
+#[no_mangle]
+pub extern "C" fn forge_test_result() -> i64 {
+    unsafe {
+        if TEST_FAILED {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+/// Reset test state
+#[no_mangle]
+pub extern "C" fn forge_test_reset() {
+    unsafe {
+        TEST_FAILED = false;
+    }
+}
+
+/// Bitwise AND
+#[no_mangle]
+pub extern "C" fn forge_bit_and(a: i64, b: i64) -> i64 {
+    a & b
+}
+
+/// Bitwise OR
+#[no_mangle]
+pub extern "C" fn forge_bit_or(a: i64, b: i64) -> i64 {
+    a | b
+}
+
+/// Bitwise XOR
+#[no_mangle]
+pub extern "C" fn forge_bit_xor(a: i64, b: i64) -> i64 {
+    a ^ b
+}
+
+/// Bitwise NOT
+#[no_mangle]
+pub extern "C" fn forge_bit_not(a: i64) -> i64 {
+    !a
+}
+
+/// Bitwise shift left
+#[no_mangle]
+pub extern "C" fn forge_bit_shl(a: i64, b: i64) -> i64 {
+    a << b
+}
+
+/// Bitwise shift right (arithmetic)
+#[no_mangle]
+pub extern "C" fn forge_bit_shr(a: i64, b: i64) -> i64 {
+    a >> b
+}
+
+/// Absolute value
+#[no_mangle]
+pub extern "C" fn forge_abs(n: i64) -> i64 {
+    n.abs()
+}
+
+/// Minimum of two values
+#[no_mangle]
+pub extern "C" fn forge_min(a: i64, b: i64) -> i64 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Maximum of two values
+#[no_mangle]
+pub extern "C" fn forge_max(a: i64, b: i64) -> i64 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Clamp value between min and max
+#[no_mangle]
+pub extern "C" fn forge_clamp(n: i64, min: i64, max: i64) -> i64 {
+    if n < min {
+        min
+    } else if n > max {
+        max
+    } else {
+        n
+    }
+}
+
+/// Power: a^b (floating point)
+#[no_mangle]
+pub extern "C" fn forge_pow(a: f64, b: f64) -> f64 {
+    a.powf(b)
+}
+
+/// Square root
+#[no_mangle]
+pub extern "C" fn forge_sqrt(n: f64) -> f64 {
+    n.sqrt()
+}
+
+/// Floor
+#[no_mangle]
+pub extern "C" fn forge_floor(n: f64) -> f64 {
+    n.floor()
+}
+
+/// Ceiling
+#[no_mangle]
+pub extern "C" fn forge_ceil(n: f64) -> f64 {
+    n.ceil()
+}
+
+/// Round
+#[no_mangle]
+pub extern "C" fn forge_round(n: f64) -> f64 {
+    n.round()
+}
+
+/// Convert int to C string (returns pointer, caller must free with forge_free)
+#[no_mangle]
+pub unsafe extern "C" fn forge_int_to_cstr(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    let s = n.to_string();
+    let len = s.len();
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, len);
+        *ptr.add(len) = 0;
+    }
+
+    ptr
+}
+
+/// Convert float (f64) to a C string
+#[no_mangle]
+pub extern "C" fn forge_float_to_cstr(n: f64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    // Format with up to 6 decimal places, stripping trailing zeros
+    let s = if n == n.floor() && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        let formatted = format!("{:.6}", n);
+        formatted
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    };
+    let len = s.len();
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = unsafe { alloc(layout) as *mut i8 };
+
+    if !ptr.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, len);
+            *ptr.add(len) = 0;
+        }
+    }
+
+    ptr
+}
+
+/// Convert bool to a C string
+#[no_mangle]
+pub extern "C" fn forge_bool_to_cstr(b: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    let s = if b != 0 { "true" } else { "false" };
+    let len = s.len();
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = unsafe { alloc(layout) as *mut i8 };
+
+    if !ptr.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, len);
+            *ptr.add(len) = 0;
+        }
+    }
+
+    ptr
+}
+
+/// Check if a file exists
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_exists(path: *const i8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+
+    let mut len = 0;
+    let mut p = path;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if std::path::Path::new(path_str).exists() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Check if a directory exists
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_dir_exists(path: *const i8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+
+    let mut len = 0;
+    let mut p = path;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        let path = std::path::Path::new(path_str);
+        if path.exists() && path.is_dir() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Create a directory
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_mkdir(path: *const i8) -> i64 {
+    use std::fs;
+
+    if path.is_null() {
+        return 0;
+    }
+
+    let mut len = 0;
+    let mut p = path;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if fs::create_dir_all(path_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Remove a file
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_remove_file(path: *const i8) -> i64 {
+    use std::fs;
+
+    if path.is_null() {
+        return 0;
+    }
+
+    let mut len = 0;
+    let mut p = path;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if fs::remove_file(path_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Rename a file
+///
+/// # Safety
+/// Both paths must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_rename_file(from: *const i8, to: *const i8) -> i64 {
+    use std::fs;
+
+    if from.is_null() || to.is_null() {
+        return 0;
+    }
+
+    let mut from_len = 0;
+    let mut p = from;
+    while *p != 0 {
+        from_len += 1;
+        p = p.add(1);
+    }
+
+    let mut to_len = 0;
+    let mut p = to;
+    while *p != 0 {
+        to_len += 1;
+        p = p.add(1);
+    }
+
+    let from_slice = std::slice::from_raw_parts(from as *const u8, from_len);
+    let to_slice = std::slice::from_raw_parts(to as *const u8, to_len);
+
+    if let (Ok(from_str), Ok(to_str)) = (
+        std::str::from_utf8(from_slice),
+        std::str::from_utf8(to_slice),
+    ) {
+        if fs::rename(from_str, to_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Read entire file contents as a C string
+/// Returns null pointer on error. Caller must free with forge_free.
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_read_file(path: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    use std::fs;
+
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let mut len = 0;
+    let mut p = path;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if let Ok(contents) = fs::read_to_string(path_str) {
+            let content_len = contents.len();
+            let layout = Layout::from_size_align(content_len + 1, 1).unwrap();
+            let ptr = alloc(layout) as *mut i8;
+
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(contents.as_ptr(), ptr as *mut u8, content_len);
+                *ptr.add(content_len) = 0;
+            }
+            return ptr;
+        }
+    }
+    std::ptr::null_mut()
+}
+
+/// Write string to file
+/// Returns 1 on success, 0 on failure
+///
+/// # Safety
+/// Both path and content must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_write_file(path: *const i8, content: *const i8) -> i64 {
+    use std::fs;
+
+    if path.is_null() || content.is_null() {
+        return 0;
+    }
+
+    let mut path_len = 0;
+    let mut p = path;
+    while *p != 0 {
+        path_len += 1;
+        p = p.add(1);
+    }
+
+    let mut content_len = 0;
+    let mut p = content;
+    while *p != 0 {
+        content_len += 1;
+        p = p.add(1);
+    }
+
+    let path_slice = std::slice::from_raw_parts(path as *const u8, path_len);
+    let content_slice = std::slice::from_raw_parts(content as *const u8, content_len);
+
+    if let (Ok(path_str), Ok(content_str)) = (
+        std::str::from_utf8(path_slice),
+        std::str::from_utf8(content_slice),
+    ) {
+        if fs::write(path_str, content_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Append string to file
+/// Returns 1 on success, 0 on failure
+///
+/// # Safety
+/// Both path and content must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_append_file(path: *const i8, content: *const i8) -> i64 {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    if path.is_null() || content.is_null() {
+        return 0;
+    }
+
+    let mut path_len = 0;
+    let mut p = path;
+    while *p != 0 {
+        path_len += 1;
+        p = p.add(1);
+    }
+
+    let mut content_len = 0;
+    let mut p = content;
+    while *p != 0 {
+        content_len += 1;
+        p = p.add(1);
+    }
+
+    let path_slice = std::slice::from_raw_parts(path as *const u8, path_len);
+    let content_slice = std::slice::from_raw_parts(content as *const u8, content_len);
+
+    if let (Ok(path_str), Ok(_content_str)) = (
+        std::str::from_utf8(path_slice),
+        std::str::from_utf8(content_slice),
+    ) {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path_str) {
+            if file.write_all(content_slice).is_ok() {
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// Exit the program with given status code
+#[no_mangle]
+pub extern "C" fn forge_exit(code: i64) {
+    std::process::exit(code as i32);
+}
+
+/// Sleep for given number of milliseconds
+#[no_mangle]
+pub extern "C" fn forge_sleep(ms: i64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}
+
+/// Get current time in milliseconds since epoch
+#[no_mangle]
+pub extern "C" fn forge_time() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Get environment variable value
+/// Returns null pointer if not found. Caller must not free.
+///
+/// # Safety
+/// name must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_env(name: *const i8) -> *const i8 {
+    use std::alloc::{alloc, Layout};
+
+    if name.is_null() {
+        return std::ptr::null();
+    }
+
+    let mut len = 0;
+    let mut p = name;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(name as *const u8, len);
+    if let Ok(name_str) = std::str::from_utf8(slice) {
+        if let Ok(var) = std::env::var(name_str) {
+            let var_len = var.len();
+            let layout = Layout::from_size_align(var_len + 1, 1).unwrap();
+            let ptr = alloc(layout) as *mut i8;
+
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(var.as_ptr(), ptr as *mut u8, var_len);
+                *ptr.add(var_len) = 0;
+                return ptr;
+            }
+        }
+    }
+    std::ptr::null()
+}
+
+/// Read a line from stdin
+/// Returns C string. Caller must free with forge_free.
+#[no_mangle]
+pub unsafe extern "C" fn forge_input() -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    use std::io::{self, BufRead};
+
+    let stdin = io::stdin();
+    let mut line = String::new();
+    if stdin.lock().read_line(&mut line).is_ok() {
+        // Remove trailing newline
+        if line.ends_with('\n') {
+            line.pop();
+        }
+        if line.ends_with('\r') {
+            line.pop();
+        }
+
+        let len = line.len();
+        let layout = Layout::from_size_align(len + 1, 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(line.as_ptr(), ptr as *mut u8, len);
+            *ptr.add(len) = 0;
+        }
+        return ptr;
+    }
+    std::ptr::null_mut()
+}
+
+/// Simple string list node for list_dir
+#[repr(C)]
+pub struct StringNode {
+    data: *mut i8,
+    next: *mut StringNode,
+}
+
+/// List directory contents
+/// Returns linked list of strings. Caller must free.
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_dir(path: *const i8) -> *mut StringNode {
+    use std::alloc::{alloc, Layout};
+    use std::fs;
+
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let mut len = 0;
+    let mut p = path;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if let Ok(entries) = fs::read_dir(path_str) {
+            let mut head: *mut StringNode = std::ptr::null_mut();
+            let mut tail: *mut StringNode = std::ptr::null_mut();
+
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    if let Some(name) = entry.file_name().to_str() {
+                        let name_len = name.len();
+                        let name_layout = Layout::from_size_align(name_len + 1, 1).unwrap();
+                        let name_ptr = alloc(name_layout) as *mut i8;
+
+                        if !name_ptr.is_null() {
+                            std::ptr::copy_nonoverlapping(
+                                name.as_ptr(),
+                                name_ptr as *mut u8,
+                                name_len,
+                            );
+                            *name_ptr.add(name_len) = 0;
+
+                            let node_layout = Layout::new::<StringNode>();
+                            let node_ptr = alloc(node_layout) as *mut StringNode;
+
+                            if !node_ptr.is_null() {
+                                (*node_ptr).data = name_ptr;
+                                (*node_ptr).next = std::ptr::null_mut();
+
+                                if head.is_null() {
+                                    head = node_ptr;
+                                    tail = node_ptr;
+                                } else {
+                                    (*tail).next = node_ptr;
+                                    tail = node_ptr;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return head;
+        }
+    }
+    std::ptr::null_mut()
+}
+
+/// Execute a command and return exit code
+///
+/// # Safety
+/// command must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_exec(command: *const i8) -> i64 {
+    use std::process::Command;
+
+    if command.is_null() {
+        return -1;
+    }
+
+    let mut len = 0;
+    let mut p = command;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+
+    let slice = std::slice::from_raw_parts(command as *const u8, len);
+    if let Ok(cmd_str) = std::str::from_utf8(slice) {
+        // Simple shell execution
+        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+        if parts.is_empty() {
+            return -1;
+        }
+
+        let mut cmd = Command::new(parts[0]);
+        if parts.len() > 1 {
+            cmd.args(&parts[1..]);
+        }
+
+        if let Ok(status) = cmd.status() {
+            if let Some(code) = status.code() {
+                return code as i64;
+            }
+            return 0;
+        }
+    }
+    -1
+}
+
+/// Random float between 0.0 and 1.0
+#[no_mangle]
+pub extern "C" fn forge_random_float() -> f64 {
+    use std::num::Wrapping;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEED: AtomicU64 = AtomicU64::new(123456789);
+
+    let s = SEED.load(Ordering::Relaxed);
+    // Simple LCG
+    let new_s = Wrapping(s) * Wrapping(6364136223846793005) + Wrapping(1);
+    SEED.store(new_s.0, Ordering::Relaxed);
+
+    // Convert to float in range [0, 1)
+    (new_s.0 >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Seed the random number generator
+#[no_mangle]
+pub extern "C" fn forge_random_seed(seed: i64) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEED: AtomicU64 = AtomicU64::new(123456789);
+    SEED.store(seed as u64, Ordering::Relaxed);
+}
+
+/// Random integer in range [min, max]
+#[no_mangle]
+pub extern "C" fn forge_random_int(min: i64, max: i64) -> i64 {
+    if min >= max {
+        return min;
+    }
+    let range = (max - min + 1) as u64;
+    let r = (forge_random_float() * range as f64) as i64;
+    min + r
+}
+
+/// Math sqrt (already defined but adding alias)
+pub use forge_sqrt as forge_math_sqrt;
+
+/// Math floor (already defined)
+pub use forge_floor as forge_math_floor;
+
+/// Math ceiling (already defined)
+pub use forge_ceil as forge_math_ceil;
+
+/// Math round (already defined)
+pub use forge_round as forge_math_round;
+
+/// Math pow (already defined)
+pub use forge_pow as forge_math_pow;
+
+/// Format float with given precision
+/// Returns C string. Caller must free.
+///
+/// # Safety
+/// fmt must be a valid null-terminated format string
+#[no_mangle]
+pub unsafe extern "C" fn forge_fmt_float(n: f64, precision: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    let s = format!("{:.1$}", n, precision as usize);
+    let len = s.len();
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, len);
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
+/// Generate random string of given length
+/// Returns C string. Caller must free.
+///
+/// # Safety
+/// Caller must free result with forge_free
+#[no_mangle]
+pub unsafe extern "C" fn forge_random_string(len: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let n = len.max(0) as usize;
+
+    let layout = Layout::from_size_align(n + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..n {
+            let idx = (forge_random_float() * CHARSET.len() as f64) as usize % CHARSET.len();
+            *ptr.add(i) = CHARSET[idx] as i8;
+        }
+        *ptr.add(n) = 0;
+    }
+    ptr
+}
+
+/// Free memory allocated by runtime
+///
+/// # Safety
+/// ptr must have been allocated by the runtime
+#[no_mangle]
+pub unsafe extern "C" fn forge_free(ptr: *mut i8) {
+    use std::alloc::{dealloc, Layout};
+
+    if !ptr.is_null() {
+        // We don't know the size, but we can deallocate with size 0
+        // This is implementation-specific but works with system allocators
+        std::alloc::dealloc(ptr as *mut u8, Layout::new::<u8>());
+    }
+}
+
+/// Get command line arguments as a Forge list of C string pointers.
+#[no_mangle]
+pub unsafe extern "C" fn forge_args() -> ForgeList {
+    use crate::collections::list::{forge_list_new, forge_list_push_value};
+    use std::alloc::{alloc, Layout};
+    use std::env;
+
+    let list = forge_list_new(8, 1);
+
+    for arg in env::args() {
+        let arg_len = arg.len();
+        let arg_layout = Layout::from_size_align(arg_len + 1, 1).unwrap();
+        let arg_ptr = alloc(arg_layout) as *mut i8;
+
+        if !arg_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(arg.as_ptr(), arg_ptr as *mut u8, arg_len);
+            *arg_ptr.add(arg_len) = 0;
+            forge_list_push_value(list, arg_ptr as i64);
+        }
+    }
+
+    list
+}
+
+/// Extract substring from C string (start inclusive, end exclusive)
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_substring(s: *const i8, start: i64, end: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s);
+    let start = start.max(0).min(len);
+    let end = end.max(start).min(len);
+    let sub_len = (end - start) as usize;
+
+    if sub_len == 0 {
+        let layout = Layout::from_size_align(1, 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+        if !ptr.is_null() {
+            *ptr = 0;
+        }
+        return ptr;
+    }
+
+    let layout = Layout::from_size_align(sub_len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(
+            s.offset(start as isize) as *const u8,
+            ptr as *mut u8,
+            sub_len,
+        );
+        *ptr.add(sub_len) = 0;
+    }
+    ptr
+}
+
+/// Split a string by delimiter and return as a ForgeList of strings
+///
+/// # Safety
+/// Both s and delim must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_string_split_to_list(s: *const i8, delim: *const i8) -> ForgeList {
+    use crate::collections::list::{forge_list_new, forge_list_push, ListTypeTag};
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() || delim.is_null() {
+        return forge_list_new(8, 0); // Return empty list
+    }
+
+    let s_len = crate::string::forge_cstring_len(s) as usize;
+    let delim_len = crate::string::forge_cstring_len(delim) as usize;
+
+    if s_len == 0 {
+        return forge_list_new(8, 0); // Return empty list for empty string
+    }
+
+    let s_slice = std::slice::from_raw_parts(s as *const u8, s_len);
+    let delim_slice = if delim_len == 0 {
+        &[] as &[u8]
+    } else {
+        std::slice::from_raw_parts(delim as *const u8, delim_len)
+    };
+
+    // Create a new list storing cstring pointers as i64 values (type_tag = 0, primitive)
+    let mut list = forge_list_new(8, 0);
+
+    let mut start = 0;
+    for i in 0..=s_len {
+        let is_delim = if delim_len == 0 {
+            false
+        } else if i + delim_len <= s_len {
+            &s_slice[i..i + delim_len] == delim_slice
+        } else {
+            false
+        };
+
+        if is_delim || i == s_len {
+            let part_len = i - start;
+            if part_len > 0 {
+                // Allocate and copy the substring
+                let part_layout = Layout::from_size_align(part_len + 1, 1).unwrap();
+                let part_ptr = alloc(part_layout) as *mut i8;
+
+                if !part_ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(&s_slice[start], part_ptr as *mut u8, part_len);
+                    *part_ptr.add(part_len) = 0;
+
+                    // Push the pointer VALUE into the list (not the data at the pointer)
+                    crate::collections::list::forge_list_push_value(list, part_ptr as i64);
+                }
+            }
+
+            if delim_len > 0 {
+                start = i + delim_len;
+            } else {
+                start = i + 1;
+            }
+        }
+    }
+
+    list
+}
+
+/// Trim ASCII whitespace from both ends of a C string.
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_trim(s: *const i8) -> *mut i8 {
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let mut start = 0usize;
+    let mut end = len;
+
+    while start < end && matches!(slice[start], b' ' | b'\t' | b'\n' | b'\r') {
+        start += 1;
+    }
+    while end > start && matches!(slice[end - 1], b' ' | b'\t' | b'\n' | b'\r') {
+        end -= 1;
+    }
+
+    forge_cstring_substring(s, start as i64, end as i64)
+}
+
+/// Get a single character from a C string at index as a new C string.
+/// Returns a newly allocated 1-character string (or empty string if out of bounds)
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_char_at(s: *const i8, index: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        let ptr = alloc(Layout::from_size_align(1, 1).unwrap()) as *mut i8;
+        if !ptr.is_null() {
+            *ptr = 0;
+        }
+        return ptr;
+    }
+
+    let len = crate::string::forge_cstring_len(s);
+    if index < 0 || index >= len {
+        // Out of bounds - return empty string
+        let ptr = alloc(Layout::from_size_align(1, 1).unwrap()) as *mut i8;
+        if !ptr.is_null() {
+            *ptr = 0;
+        }
+        return ptr;
+    }
+
+    // Allocate 2 bytes (1 char + null terminator)
+    let ptr = alloc(Layout::from_size_align(2, 1).unwrap()) as *mut i8;
+    if !ptr.is_null() {
+        *ptr = *s.offset(index as isize);
+        *ptr.add(1) = 0;
+    }
+    ptr
+}
+
+/// Trim ASCII whitespace from the left side of a C string.
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_trim_left(s: *const i8) -> *mut i8 {
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let mut start = 0usize;
+    while start < len && matches!(slice[start], b' ' | b'\t' | b'\n' | b'\r') {
+        start += 1;
+    }
+
+    forge_cstring_substring(s, start as i64, len as i64)
+}
+
+/// Convert C string to uppercase
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_to_upper(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..len {
+            let c = slice[i];
+            *ptr.add(i) = (c as char).to_ascii_uppercase() as u8 as i8;
+        }
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
+/// Convert C string to lowercase
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_to_lower(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..len {
+            let c = slice[i];
+            *ptr.add(i) = (c as char).to_ascii_lowercase() as u8 as i8;
+        }
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
+/// Reverse a C string
+/// Returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_reverse(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        for i in 0..len {
+            *ptr.add(i) = slice[len - 1 - i] as i8;
+        }
+        *ptr.add(len) = 0;
+    }
+    ptr
+}
+
+/// Split string into a list of single-character strings (chars)
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_chars(s: *const i8) -> i64 {
+    use crate::collections::list::{forge_list_new, forge_list_push_value};
+    let list = forge_list_new(8, 0); // ForgeList by value — stores cstring pointers
+    if !s.is_null() {
+        let len = crate::string::forge_cstring_len(s) as usize;
+        let bytes = std::slice::from_raw_parts(s as *const u8, len);
+        for &b in bytes {
+            let ch_ptr = forge_chr_cstr(b as i64);
+            forge_list_push_value(list, ch_ptr as i64);
+        }
+    }
+    // Return the internal pointer value (ForgeList.ptr), not a box pointer.
+    // All list functions (forge_list_len, forge_list_join, etc.) receive
+    // ForgeList by value, which is just this pointer field.
+    list.ptr as i64
+}
+
+/// Sort a list of C-string pointers in-place (lexicographic order)
+///
+/// # Safety
+/// list_ptr is i64 carrying the ForgeList's internal ptr value;
+/// each 8-byte element is a *const i8 pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_sort_strings(list_ptr: i64) {
+    use crate::collections::list::ForgeList;
+    let list = ForgeList {
+        ptr: list_ptr as *mut (),
+    };
+    if list.ptr.is_null() {
+        return;
+    }
+    let impl_ref = &mut *(list.ptr as *mut crate::collections::list::ListImpl);
+    impl_ref.elements.sort_by(|a, b| {
+        let ap = if a.len() >= 8 {
+            i64::from_ne_bytes(a[..8].try_into().unwrap_or([0; 8])) as *const i8
+        } else {
+            std::ptr::null()
+        };
+        let bp = if b.len() >= 8 {
+            i64::from_ne_bytes(b[..8].try_into().unwrap_or([0; 8])) as *const i8
+        } else {
+            std::ptr::null()
+        };
+        if ap.is_null() && bp.is_null() {
+            return std::cmp::Ordering::Equal;
+        }
+        if ap.is_null() {
+            return std::cmp::Ordering::Less;
+        }
+        if bp.is_null() {
+            return std::cmp::Ordering::Greater;
+        }
+        let a_str = std::ffi::CStr::from_ptr(ap);
+        let b_str = std::ffi::CStr::from_ptr(bp);
+        a_str.cmp(b_str)
+    });
+}
+
+/// Sort a list of i64 values in-place
+///
+/// # Safety
+/// list_ptr is i64 carrying the ForgeList's internal ptr value
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_sort(list_ptr: i64) {
+    use crate::collections::list::ForgeList;
+    let list = ForgeList {
+        ptr: list_ptr as *mut (),
+    };
+    if list.ptr.is_null() {
+        return;
+    }
+    let impl_ref = &mut *(list.ptr as *mut crate::collections::list::ListImpl);
+    impl_ref.elements.sort_by(|a, b| {
+        let av = if a.len() >= 8 {
+            i64::from_ne_bytes(a[..8].try_into().unwrap_or([0; 8]))
+        } else {
+            0
+        };
+        let bv = if b.len() >= 8 {
+            i64::from_ne_bytes(b[..8].try_into().unwrap_or([0; 8]))
+        } else {
+            0
+        };
+        av.cmp(&bv)
+    });
+}
+
+/// Get a sub-slice of a list
+///
+/// # Safety
+/// list_ptr is i64 carrying the ForgeList's internal ptr value
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_slice(list_ptr: i64, start: i64, end: i64) -> i64 {
+    use crate::collections::list::{forge_list_new, forge_list_push_value, ForgeList};
+    let new_list = forge_list_new(8, 0);
+    let list = ForgeList {
+        ptr: list_ptr as *mut (),
+    };
+    if !list.ptr.is_null() {
+        let impl_ref = &*(list.ptr as *const crate::collections::list::ListImpl);
+        let len = impl_ref.elements.len() as i64;
+        let s = start.max(0).min(len) as usize;
+        let e = end.max(0).min(len) as usize;
+        for i in s..e {
+            if let Some(elem) = impl_ref.elements.get(i) {
+                let val = if elem.len() >= 8 {
+                    i64::from_ne_bytes(elem[..8].try_into().unwrap_or([0; 8]))
+                } else {
+                    0
+                };
+                forge_list_push_value(new_list, val);
+            }
+        }
+    }
+    // Return the internal pointer value (ForgeList.ptr), not a box pointer
+    new_list.ptr as i64
+}
+
+/// Replace all occurrences of `from` with `to` in `s`
+/// Returns newly allocated C string
+///
+/// # Safety
+/// All pointers must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_replace(
+    s: *const i8,
+    from: *const i8,
+    to: *const i8,
+) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let s_len = crate::string::forge_cstring_len(s) as usize;
+    let from_len = if from.is_null() {
+        0
+    } else {
+        crate::string::forge_cstring_len(from) as usize
+    };
+    let to_len = if to.is_null() {
+        0
+    } else {
+        crate::string::forge_cstring_len(to) as usize
+    };
+
+    if from_len == 0 {
+        // Nothing to replace — return copy of s
+        let layout = Layout::from_size_align(s_len + 1, 1).unwrap();
+        let out = alloc(layout) as *mut i8;
+        if !out.is_null() {
+            std::ptr::copy_nonoverlapping(s, out, s_len);
+            *out.add(s_len) = 0;
+        }
+        return out;
+    }
+
+    let s_bytes = std::slice::from_raw_parts(s as *const u8, s_len);
+    let from_bytes = std::slice::from_raw_parts(from as *const u8, from_len);
+    let to_bytes = if to.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(to as *const u8, to_len)
+    };
+
+    // Find all occurrences and build result
+    let mut result: Vec<u8> = Vec::with_capacity(s_len);
+    let mut i = 0;
+    while i <= s_len.saturating_sub(from_len) {
+        if &s_bytes[i..i + from_len] == from_bytes {
+            result.extend_from_slice(to_bytes);
+            i += from_len;
+        } else {
+            result.push(s_bytes[i]);
+            i += 1;
+        }
+    }
+    // Copy remaining bytes
+    while i < s_len {
+        result.push(s_bytes[i]);
+        i += 1;
+    }
+
+    let out_len = result.len();
+    let layout = Layout::from_size_align(out_len + 1, 1).unwrap();
+    let out = alloc(layout) as *mut i8;
+    if !out.is_null() {
+        std::ptr::copy_nonoverlapping(result.as_ptr(), out as *mut u8, out_len);
+        *out.add(out_len) = 0;
+    }
+    out
+}
+
+/// Check if a C string is empty (null or zero-length)
+///
+/// # Safety
+/// s must be null or a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_is_empty(s: *const i8) -> i64 {
+    if s.is_null() {
+        return 1;
+    }
+    let len = crate::string::forge_cstring_len(s);
+    if len == 0 {
+        1
+    } else {
+        0
+    }
+}
+
+// List is_empty and reverse are implemented in collections/list.rs
+
+/// Convert i64 to f64
+#[no_mangle]
+pub extern "C" fn forge_int_to_float(n: i64) -> f64 {
+    n as f64
+}
+
+/// Convert f64 to i64 (truncates)
+#[no_mangle]
+pub extern "C" fn forge_float_to_int(n: f64) -> i64 {
+    n as i64
+}
+
+/// Parse string to int — returns 0 on failure
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_parse_int(s: *const i8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        str_ref.trim().parse::<i64>().unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Parse string to float — returns 0.0 on failure
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_parse_float(s: *const i8) -> f64 {
+    if s.is_null() {
+        return 0.0;
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, len);
+    if let Ok(str_ref) = std::str::from_utf8(slice) {
+        str_ref.trim().parse::<f64>().unwrap_or(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// Base64 encode a C string — returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_b64_encode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+
+    // Simple base64 encoding
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out: Vec<u8> = Vec::with_capacity((len + 2) / 3 * 4 + 1);
+    let mut i = 0;
+    while i < len {
+        let b0 = input[i];
+        let b1 = if i + 1 < len { input[i + 1] } else { 0 };
+        let b2 = if i + 2 < len { input[i + 2] } else { 0 };
+
+        out.push(CHARS[(b0 >> 2) as usize]);
+        out.push(CHARS[((b0 & 3) << 4 | b1 >> 4) as usize]);
+        out.push(if i + 1 < len {
+            CHARS[((b1 & 0xf) << 2 | b2 >> 6) as usize]
+        } else {
+            b'='
+        });
+        out.push(if i + 2 < len {
+            CHARS[(b2 & 0x3f) as usize]
+        } else {
+            b'='
+        });
+
+        i += 3;
+    }
+    out.push(0); // null terminator
+
+    let layout = Layout::from_size_align(out.len(), 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(out.as_ptr(), ptr as *mut u8, out.len());
+    }
+    ptr
+}
+
+/// Hex encode a C string — returns newly allocated C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_hex_encode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+    let hex_len = len * 2 + 1;
+    let layout = Layout::from_size_align(hex_len, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+
+    if !ptr.is_null() {
+        for (i, &byte) in input.iter().enumerate() {
+            let hi = (byte >> 4) as usize;
+            let lo = (byte & 0xf) as usize;
+            const HEX: &[u8] = b"0123456789abcdef";
+            *ptr.add(i * 2) = HEX[hi];
+            *ptr.add(i * 2 + 1) = HEX[lo];
+        }
+        *ptr.add(len * 2) = 0;
+    }
+    ptr as *mut i8
+}
+
+/// Decode a hex string back to the original string
+///
+/// # Safety
+/// s must be a valid null-terminated C string of hex digits
+#[no_mangle]
+pub unsafe extern "C" fn forge_from_hex(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    if len % 2 != 0 {
+        return std::ptr::null_mut();
+    }
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+    let out_len = len / 2;
+    let layout = Layout::from_size_align(out_len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+
+    if !ptr.is_null() {
+        for i in 0..out_len {
+            let hi = hex_digit(input[i * 2]);
+            let lo = hex_digit(input[i * 2 + 1]);
+            *ptr.add(i) = (hi << 4) | lo;
+        }
+        *ptr.add(out_len) = 0;
+    }
+    ptr as *mut i8
+}
+
+fn hex_digit(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 0,
+    }
+}
+
+/// Convert an integer to hex string (e.g., 255 → "ff")
+///
+/// # Safety
+/// Returns heap-allocated null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_int_to_hex(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let s = format!("{:x}", n);
+    let bytes = s.as_bytes();
+    let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Convert an integer to octal string (e.g., 8 → "10")
+///
+/// # Safety
+/// Returns heap-allocated null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_int_to_oct(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let s = format!("{:o}", n);
+    let bytes = s.as_bytes();
+    let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Convert an integer to binary string (e.g., 10 → "1010")
+///
+/// # Safety
+/// Returns heap-allocated null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_int_to_bin(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let s = format!("{:b}", n);
+    let bytes = s.as_bytes();
+    let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// SHA-256 hash of a C string — returns hex-encoded C string
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_sha256(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        // Return placeholder
+        let placeholder = b"0000000000000000000000000000000000000000000000000000000000000000\0";
+        let layout = Layout::from_size_align(placeholder.len(), 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(placeholder.as_ptr(), ptr as *mut u8, placeholder.len());
+        }
+        return ptr;
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+
+    // Simple SHA-256 implementation (no external deps)
+    let hash = sha256_compute(input);
+    let mut hex = Vec::with_capacity(65);
+    const HEX: &[u8] = b"0123456789abcdef";
+    for &byte in &hash {
+        hex.push(HEX[(byte >> 4) as usize]);
+        hex.push(HEX[(byte & 0xf) as usize]);
+    }
+    hex.push(0);
+
+    let layout = Layout::from_size_align(hex.len(), 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(hex.as_ptr(), ptr as *mut u8, hex.len());
+    }
+    ptr
+}
+
+/// Compute SHA-256 hash
+fn sha256_compute(data: &[u8]) -> [u8; 32] {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+
+    let orig_len = data.len();
+    let mut msg: Vec<u8> = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    let bit_len = (orig_len as u64) * 8;
+    msg.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in msg.chunks(64) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] =
+            [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]];
+
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+    }
+
+    let mut result = [0u8; 32];
+    for (i, &word) in h.iter().enumerate() {
+        result[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    result
+}
+
+/// Format time as string — takes unix timestamp (ms) and format string
+/// Simple implementation: returns ISO-like date string
+///
+/// # Safety
+/// fmt must be a valid null-terminated C string (or null for default)
+#[no_mangle]
+pub unsafe extern "C" fn forge_format_time_fmt(timestamp_ms: i64, _fmt: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    // Convert ms to seconds
+    let secs = timestamp_ms / 1000;
+    // Simple date formatting: just show the timestamp for now
+    let s = format!("{}", secs);
+    let bytes = s.as_bytes();
+    let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Format time as string — no-arg version (returns current timestamp)
+#[no_mangle]
+pub extern "C" fn forge_format_time() -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let s = ts.to_string();
+    let bytes = s.as_bytes();
+    let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
+    let ptr = unsafe { alloc(layout) as *mut i8 };
+    if !ptr.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+            *ptr.add(bytes.len()) = 0;
+        }
+    }
+    ptr
+}
+
+/// Write string to file path
+/// Returns 1 on success, 0 on failure
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_fs_write(path: *const i8, content: *const i8) -> i64 {
+    if path.is_null() || content.is_null() {
+        return 0;
+    }
+    let path_len = crate::string::forge_cstring_len(path) as usize;
+    let content_len = crate::string::forge_cstring_len(content) as usize;
+    let path_slice = std::slice::from_raw_parts(path as *const u8, path_len);
+    let content_slice = std::slice::from_raw_parts(content as *const u8, content_len);
+
+    if let (Ok(path_str), Ok(content_str)) = (
+        std::str::from_utf8(path_slice),
+        std::str::from_utf8(content_slice),
+    ) {
+        match std::fs::write(path_str, content_str) {
+            Ok(_) => 1,
+            Err(_) => 0,
+        }
+    } else {
+        0
+    }
+}
+
+/// Log an info message
+///
+/// # Safety
+/// msg must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_log_info(msg: *const i8) {
+    if msg.is_null() {
+        eprintln!("[INFO] ");
+        return;
+    }
+    let len = crate::string::forge_cstring_len(msg) as usize;
+    let slice = std::slice::from_raw_parts(msg as *const u8, len);
+    if let Ok(s) = std::str::from_utf8(slice) {
+        eprintln!("[INFO] {}", s);
+    }
+}
+
+/// Log a warning message
+///
+/// # Safety
+/// msg must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_log_warn(msg: *const i8) {
+    if msg.is_null() {
+        eprintln!("[WARN] ");
+        return;
+    }
+    let len = crate::string::forge_cstring_len(msg) as usize;
+    let slice = std::slice::from_raw_parts(msg as *const u8, len);
+    if let Ok(s) = std::str::from_utf8(slice) {
+        eprintln!("[WARN] {}", s);
+    }
+}
+
+/// Log an error message
+///
+/// # Safety
+/// msg must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_log_error(msg: *const i8) {
+    if msg.is_null() {
+        eprintln!("[ERROR] ");
+        return;
+    }
+    let len = crate::string::forge_cstring_len(msg) as usize;
+    let slice = std::slice::from_raw_parts(msg as *const u8, len);
+    if let Ok(s) = std::str::from_utf8(slice) {
+        eprintln!("[ERROR] {}", s);
+    }
+}
+
+/// Get directory part of a path
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_path_dir(path: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        let raw_dir = std::path::Path::new(path_str)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(".");
+        // Return "." for empty parent (bare filename like "file.txt")
+        let dir = if raw_dir.is_empty() { "." } else { raw_dir };
+        let dir_bytes = dir.as_bytes();
+        let layout = Layout::from_size_align(dir_bytes.len() + 1, 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(dir_bytes.as_ptr(), ptr as *mut u8, dir_bytes.len());
+            *ptr.add(dir_bytes.len()) = 0;
+        }
+        ptr
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Get file name (basename) of a path
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_path_basename(path: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        let name = std::path::Path::new(path_str)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let name_bytes = name.as_bytes();
+        let layout = Layout::from_size_align(name_bytes.len() + 1, 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), ptr as *mut u8, name_bytes.len());
+            *ptr.add(name_bytes.len()) = 0;
+        }
+        ptr
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Stub: parse JSON — returns empty pointer (not yet implemented)
+#[no_mangle]
+pub unsafe extern "C" fn forge_json_parse(s: *const i8) -> i64 {
+    let result = json::forge_json_parse_real(s);
+    if result > 0 {
+        return result;
+    }
+    // Check if it looks like a URL (contains "://")
+    let input_len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, input_len);
+    if let Ok(str_val) = std::str::from_utf8(slice) {
+        if str_val.contains("://") {
+            return forge_strdup(s) as i64;
+        }
+        // Try TOML parse if it looks like TOML (contains key = value)
+        if str_val.contains('=') && !str_val.starts_with('{') && !str_val.starts_with('[') {
+            let toml_result = toml::forge_toml_parse(s);
+            if toml_result > 0 {
+                return -toml_result; // Negative = TOML handle
+            }
+        }
+    }
+    -1 // Use -1 as the "parse failed" sentinel (distinct from TOML handles which are <= -2)
+}
+
+/// Smart to_string for Unknown-typed values: if the value looks like a C string pointer,
+/// return it as a string. Otherwise convert as integer.
+#[no_mangle]
+pub unsafe extern "C" fn forge_smart_to_string(val: i64) -> *mut i8 {
+    // Negative values and small values (< 4096) are definitely integers
+    if val <= 0 || val < 4096 {
+        return forge_int_to_cstr(val);
+    }
+    // Check if it looks like a valid C string pointer
+    let ptr = val as *const u8;
+    // Try to read the first byte — if accessible and ASCII, assume it's a string
+    // This is a heuristic; in practice, JSON handles are small and string pointers are large
+    let first_byte = *ptr;
+    if first_byte > 0 && first_byte < 128 {
+        // Looks like a valid ASCII C string — return as-is
+        forge_strdup(val as *const i8)
+    } else {
+        forge_int_to_cstr(val)
+    }
+}
+
+/// Smart encode: if arg is a JSON handle (small positive int), use JSON encode.
+/// Otherwise treat as a C string and do URL percent-encoding.
+#[no_mangle]
+pub unsafe extern "C" fn forge_smart_encode(val: i64) -> *mut i8 {
+    // JSON arena handles are small positive integers (1-based index)
+    // C string pointers are large positive integers (heap addresses)
+    // Heuristic: if val < 100000, it's likely a JSON handle
+    if val > 0 && val < 100000 {
+        json::forge_json_encode(val)
+    } else {
+        forge_url_encode(val as *const i8)
+    }
+}
+
+// TOML parse moved to toml.rs module
+
+/// Stub: parse URL — returns empty pointer (not yet implemented)
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_parse(s: *const i8) -> *mut i8 {
+    // URL "parse" just stores the URL string — accessors extract parts
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+    forge_strdup(s)
+}
+
+/// Identity function — returns its argument unchanged
+#[no_mangle]
+pub extern "C" fn forge_identity(x: i64) -> i64 {
+    x
+}
+
+/// Spawn a child process — stub, returns 0
+///
+/// # Safety
+/// cmd must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_process_spawn(cmd: *const i8) -> i64 {
+    if cmd.is_null() {
+        return -1;
+    }
+    let len = crate::string::forge_cstring_len(cmd) as usize;
+    let slice = std::slice::from_raw_parts(cmd as *const u8, len);
+    if let Ok(cmd_str) = std::str::from_utf8(slice) {
+        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+        if parts.is_empty() {
+            return -1;
+        }
+        match std::process::Command::new(parts[0])
+            .args(&parts[1..])
+            .spawn()
+        {
+            Ok(_child) => 0,
+            Err(_) => -1,
+        }
+    } else {
+        -1
+    }
+}
+
+/// Execute command and capture output — returns stdout as C string
+///
+/// # Safety
+/// cmd must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_exec_output(cmd: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if cmd.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(cmd) as usize;
+    let slice = std::slice::from_raw_parts(cmd as *const u8, len);
+    if let Ok(cmd_str) = std::str::from_utf8(slice) {
+        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+        if parts.is_empty() {
+            return std::ptr::null_mut();
+        }
+        match std::process::Command::new(parts[0])
+            .args(&parts[1..])
+            .output()
+        {
+            Ok(output) => {
+                let stdout = &output.stdout;
+                let layout = Layout::from_size_align(stdout.len() + 1, 1).unwrap();
+                let ptr = alloc(layout) as *mut i8;
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(stdout.as_ptr(), ptr as *mut u8, stdout.len());
+                    *ptr.add(stdout.len()) = 0;
+                }
+                ptr
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Base64 decode
+///
+/// # Safety
+/// s must be a valid null-terminated base64-encoded C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_b64_decode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+
+    // Standard base64 decoding
+    const DECODE: [u8; 256] = {
+        let mut t = [255u8; 256];
+        let mut i = 0u8;
+        while i < 26 { t[(b'A' + i) as usize] = i; i += 1; }
+        i = 0;
+        while i < 26 { t[(b'a' + i) as usize] = i + 26; i += 1; }
+        i = 0;
+        while i < 10 { t[(b'0' + i) as usize] = i + 52; i += 1; }
+        t[b'+' as usize] = 62;
+        t[b'/' as usize] = 63;
+        t
+    };
+
+    // Calculate output size (strip padding)
+    let mut in_len = len;
+    while in_len > 0 && input[in_len - 1] == b'=' {
+        in_len -= 1;
+    }
+    let out_len = in_len * 3 / 4;
+    let layout = Layout::from_size_align(out_len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let mut si = 0;
+    let mut di = 0;
+    while si + 3 < in_len {
+        let a = DECODE[input[si] as usize] as u32;
+        let b = DECODE[input[si + 1] as usize] as u32;
+        let c = DECODE[input[si + 2] as usize] as u32;
+        let d = DECODE[input[si + 3] as usize] as u32;
+        let n = (a << 18) | (b << 12) | (c << 6) | d;
+        if di < out_len { *ptr.add(di) = (n >> 16) as u8; di += 1; }
+        if di < out_len { *ptr.add(di) = (n >> 8) as u8; di += 1; }
+        if di < out_len { *ptr.add(di) = n as u8; di += 1; }
+        si += 4;
+    }
+    // Handle remaining 2 or 3 chars
+    if si + 1 < in_len {
+        let a = DECODE[input[si] as usize] as u32;
+        let b = DECODE[input[si + 1] as usize] as u32;
+        let n = (a << 18) | (b << 12);
+        if di < out_len { *ptr.add(di) = (n >> 16) as u8; di += 1; }
+        if si + 2 < in_len {
+            let c = DECODE[input[si + 2] as usize] as u32;
+            let n2 = (a << 18) | (b << 12) | (c << 6);
+            // Recalculate second byte with c included
+            if di < out_len { *ptr.add(di) = ((n2 >> 8) & 0xff) as u8; di += 1; }
+        }
+    }
+    *ptr.add(di.min(out_len)) = 0;
+
+    ptr as *mut i8
+}
+
+/// FNV-1a hash — returns hash as i64
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_fnv1a(s: *const i8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let bytes = std::slice::from_raw_parts(s as *const u8, len);
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash as i64
+}
+
+/// Find first occurrence of needle in haystack, return index or -1
+///
+/// # Safety
+/// Both must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_index_of(haystack: *const i8, needle: *const i8) -> i64 {
+    if haystack.is_null() || needle.is_null() {
+        return -1;
+    }
+    let h_len = crate::string::forge_cstring_len(haystack) as usize;
+    let n_len = crate::string::forge_cstring_len(needle) as usize;
+    if n_len == 0 {
+        return 0;
+    }
+    let h_bytes = std::slice::from_raw_parts(haystack as *const u8, h_len);
+    let n_bytes = std::slice::from_raw_parts(needle as *const u8, n_len);
+    for i in 0..=(h_len.saturating_sub(n_len)) {
+        if &h_bytes[i..i + n_len] == n_bytes {
+            return i as i64;
+        }
+    }
+    -1
+}
+
+/// Check if haystack string contains needle string
+///
+/// # Safety
+/// Both must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_contains(haystack: *const i8, needle: *const i8) -> i64 {
+    if haystack.is_null() || needle.is_null() {
+        return 0;
+    }
+    let h_len = crate::string::forge_cstring_len(haystack) as usize;
+    let n_len = crate::string::forge_cstring_len(needle) as usize;
+    if n_len == 0 {
+        return 1; // empty needle is always contained
+    }
+    if n_len > h_len {
+        return 0;
+    }
+    let h_bytes = std::slice::from_raw_parts(haystack as *const u8, h_len);
+    let n_bytes = std::slice::from_raw_parts(needle as *const u8, n_len);
+    for i in 0..=(h_len - n_len) {
+        if &h_bytes[i..i + n_len] == n_bytes {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Check if string starts with prefix
+///
+/// # Safety
+/// Both must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_starts_with(s: *const i8, prefix: *const i8) -> i64 {
+    if s.is_null() || prefix.is_null() {
+        return 0;
+    }
+    let s_len = crate::string::forge_cstring_len(s) as usize;
+    let p_len = crate::string::forge_cstring_len(prefix) as usize;
+    if p_len > s_len {
+        return 0;
+    }
+    let s_bytes = std::slice::from_raw_parts(s as *const u8, p_len);
+    let p_bytes = std::slice::from_raw_parts(prefix as *const u8, p_len);
+    if s_bytes == p_bytes {
+        1
+    } else {
+        0
+    }
+}
+
+/// Check if string ends with suffix
+///
+/// # Safety
+/// Both must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_ends_with(s: *const i8, suffix: *const i8) -> i64 {
+    if s.is_null() || suffix.is_null() {
+        return 0;
+    }
+    let s_len = crate::string::forge_cstring_len(s) as usize;
+    let x_len = crate::string::forge_cstring_len(suffix) as usize;
+    if x_len > s_len {
+        return 0;
+    }
+    let s_bytes = std::slice::from_raw_parts(s as *const u8, s_len);
+    let x_bytes = std::slice::from_raw_parts(suffix as *const u8, x_len);
+    if &s_bytes[s_len - x_len..] == x_bytes {
+        1
+    } else {
+        0
+    }
+}
+
+/// Pad string on the left to given width
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_pad_left(
+    s: *const i8,
+    width: i64,
+    fill: *const i8,
+) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let w = width as usize;
+    if len >= w {
+        return forge_strdup(s);
+    }
+    // Use first char of fill string, default to space
+    let fill_char = if !fill.is_null() && *fill != 0 {
+        *fill
+    } else {
+        b' ' as i8
+    };
+    let pad = w - len;
+    let total = w + 1;
+    let layout = Layout::from_size_align(total, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        for i in 0..pad {
+            *ptr.add(i) = fill_char;
+        }
+        std::ptr::copy_nonoverlapping(s, ptr.add(pad), len);
+        *ptr.add(w) = 0;
+    }
+    ptr
+}
+
+/// Pad string on the right to given width
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_pad_right(
+    s: *const i8,
+    width: i64,
+    fill: *const i8,
+) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let w = width as usize;
+    if len >= w {
+        return forge_strdup(s);
+    }
+    // Use first char of fill string, default to space
+    let fill_char = if !fill.is_null() && *fill != 0 {
+        *fill
+    } else {
+        b' ' as i8
+    };
+    let total = w + 1;
+    let layout = Layout::from_size_align(total, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(s, ptr, len);
+        for i in len..w {
+            *ptr.add(i) = fill_char;
+        }
+        *ptr.add(w) = 0;
+    }
+    ptr
+}
+
+/// Repeat a string n times
+///
+/// # Safety
+/// s must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_repeat(s: *const i8, n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() || n <= 0 {
+        return forge_cstring_empty();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let total = len * n as usize + 1;
+    let layout = Layout::from_size_align(total, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        for i in 0..n as usize {
+            std::ptr::copy_nonoverlapping(s, ptr.add(i * len), len);
+        }
+        *ptr.add(len * n as usize) = 0;
+    }
+    ptr
+}
+
+unsafe fn forge_cstring_empty() -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let layout = Layout::from_size_align(1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        *ptr = 0;
+    }
+    ptr
+}
+
+/// Split string into a list of single-character strings (chars)
+/// Get path extension
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_path_ext(path: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        let raw_ext = std::path::Path::new(path_str)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        // Prepend dot to match expected behavior: "txt" -> ".txt"
+        let ext = if raw_ext.is_empty() {
+            String::new()
+        } else {
+            format!(".{}", raw_ext)
+        };
+        let ext_bytes = ext.as_bytes();
+        let layout = Layout::from_size_align(ext_bytes.len() + 1, 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(ext_bytes.as_ptr(), ptr as *mut u8, ext_bytes.len());
+            *ptr.add(ext_bytes.len()) = 0;
+        }
+        ptr
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Get path stem (filename without extension)
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_path_stem(path: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        let stem = std::path::Path::new(path_str)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let bytes = stem.as_bytes();
+        let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
+        let ptr = alloc(layout) as *mut i8;
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+            *ptr.add(bytes.len()) = 0;
+        }
+        ptr
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Join two path components
+///
+/// # Safety
+/// Both must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_path_join(base: *const i8, component: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if base.is_null() {
+        return forge_strdup(component);
+    }
+    if component.is_null() {
+        return forge_strdup(base);
+    }
+    let base_len = crate::string::forge_cstring_len(base) as usize;
+    let comp_len = crate::string::forge_cstring_len(component) as usize;
+    let base_s =
+        std::str::from_utf8(std::slice::from_raw_parts(base as *const u8, base_len)).unwrap_or("");
+    let comp_s = std::str::from_utf8(std::slice::from_raw_parts(component as *const u8, comp_len))
+        .unwrap_or("");
+    let joined = std::path::Path::new(base_s).join(comp_s);
+    let s = joined.to_str().unwrap_or("").to_string();
+    let bytes = s.as_bytes();
+    let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Return type of a value as string (stub — returns "any")
+#[no_mangle]
+pub extern "C" fn forge_type_of(_val: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let s = b"any\0";
+    let layout = Layout::from_size_align(s.len(), 1).unwrap();
+    let ptr = unsafe { alloc(layout) as *mut i8 };
+    if !ptr.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, s.len());
+        }
+    }
+    ptr
+}
+
+/// Generic second(a, b) — returns second argument
+#[no_mangle]
+pub extern "C" fn forge_second(_a: i64, b: i64) -> i64 {
+    b
+}
+
+/// Check if a path (file or dir) exists
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_path_exists(path: *const i8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if std::path::Path::new(path_str).exists() {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+/// Read contents of a process's stdout — stub
+///
+/// # Safety
+/// handle must be a valid process handle
+#[no_mangle]
+pub unsafe extern "C" fn forge_process_read(_handle: i64) -> *mut i8 {
+    forge_cstring_empty()
+}
+
+/// TCP listen — stub (returns 0)
+#[no_mangle]
+pub extern "C" fn forge_tcp_listen(_addr: *const i8, _port: i64) -> i64 {
+    0
+}
+
+/// TCP connect — stub (returns 0)
+#[no_mangle]
+pub extern "C" fn forge_tcp_connect(_addr: *const i8, _port: i64) -> i64 {
+    0
+}
+
+/// TCP accept — stub (returns 0)
+#[no_mangle]
+pub extern "C" fn forge_tcp_accept(_server: i64) -> i64 {
+    0
+}
+
+/// TCP read — stub (returns empty string)
+#[no_mangle]
+pub extern "C" fn forge_tcp_read(_conn: i64) -> *mut i8 {
+    unsafe { forge_cstring_empty() }
+}
+
+/// TCP write — stub (returns 0)
+#[no_mangle]
+pub extern "C" fn forge_tcp_write(_conn: i64, _data: *const i8) -> i64 {
+    0
+}
+
+/// TCP close — stub
+#[no_mangle]
+pub extern "C" fn forge_tcp_close(_conn: i64) {}
+
+/// Channel new — stub (returns handle)
+#[no_mangle]
+pub extern "C" fn forge_channel_new(_capacity: i64) -> i64 {
+    0
+}
+
+/// Channel send — stub
+#[no_mangle]
+pub extern "C" fn forge_channel_send(_ch: i64, _val: i64) {}
+
+/// Channel recv — stub (returns 0)
+#[no_mangle]
+pub extern "C" fn forge_channel_recv(_ch: i64) -> i64 {
+    0
+}
+
+/// Format a float with fixed decimal places: forge_float_fixed(value, decimals)
+///
+/// # Safety
+/// Returns a heap-allocated null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_float_fixed(value: f64, decimals: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let s = format!("{:.prec$}", value, prec = decimals as usize);
+    let bytes = s.as_bytes();
+    let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Check if a path is a directory
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_is_dir(path: i64) -> i64 {
+    let path_ptr = path as *const i8;
+    if path_ptr.is_null() {
+        return 0;
+    }
+    let len = crate::string::forge_cstring_len(path_ptr) as usize;
+    let slice = std::slice::from_raw_parts(path_ptr as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if std::path::Path::new(path_str).is_dir() {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+/// Find last index of needle in haystack, returns -1 if not found
+///
+/// # Safety
+/// Both arguments must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_last_index_of(
+    haystack: *const i8,
+    needle: *const i8,
+) -> i64 {
+    if haystack.is_null() || needle.is_null() {
+        return -1;
+    }
+    let h_len = crate::string::forge_cstring_len(haystack) as usize;
+    let n_len = crate::string::forge_cstring_len(needle) as usize;
+    let h_slice = std::slice::from_raw_parts(haystack as *const u8, h_len);
+    let n_slice = std::slice::from_raw_parts(needle as *const u8, n_len);
+    if let (Ok(h), Ok(n)) = (std::str::from_utf8(h_slice), std::str::from_utf8(n_slice)) {
+        match h.rfind(n) {
+            Some(idx) => idx as i64,
+            None => -1,
+        }
+    } else {
+        -1
+    }
+}
+
+/// Wait for a spawned process to finish, returns exit code
+#[no_mangle]
+pub extern "C" fn forge_process_wait(_handle: i64) -> i64 {
+    0
+}
+
+/// Get the scheme component of a URL string
+///
+/// # Safety
+/// url must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_scheme(url: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let url_ptr = url as *const i8;
+    if url_ptr.is_null() {
+        return forge_cstring_empty();
+    }
+    let len = crate::string::forge_cstring_len(url_ptr) as usize;
+    let slice = std::slice::from_raw_parts(url_ptr as *const u8, len);
+    let s = std::str::from_utf8(slice).unwrap_or("");
+    // Extract scheme: everything before "://"
+    let scheme = if let Some(idx) = s.find("://") {
+        &s[..idx]
+    } else {
+        ""
+    };
+    let bytes = scheme.as_bytes();
+    let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Extract host from a parsed URL (stored as C string)
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_host(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let host = url_extract_host(s);
+    alloc_cstr(host)
+}
+
+/// Extract port from a parsed URL. Returns -1 if no port specified.
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_port(url: i64) -> i64 {
+    let s = url_as_str(url);
+    // After scheme://, find host:port
+    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
+    let authority = after_scheme.split('/').next().unwrap_or("");
+    let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(colon) = auth_no_at.rfind(':') {
+        auth_no_at[colon + 1..].parse::<i64>().unwrap_or(-1)
+    } else {
+        -1
+    }
+}
+
+/// Extract path from a parsed URL
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_path(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
+    let after_authority = after_scheme.find('/').map(|i| &after_scheme[i..]).unwrap_or("/");
+    let path = after_authority.split('?').next().unwrap_or(after_authority);
+    let path = path.split('#').next().unwrap_or(path);
+    alloc_cstr(path)
+}
+
+/// Extract query string from a parsed URL (without '?')
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_query(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let query = if let Some(q_idx) = s.find('?') {
+        let after_q = &s[q_idx + 1..];
+        after_q.split('#').next().unwrap_or("")
+    } else {
+        ""
+    };
+    alloc_cstr(query)
+}
+
+/// Extract fragment from a parsed URL (without '#')
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_fragment(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let fragment = if let Some(f_idx) = s.find('#') {
+        &s[f_idx + 1..]
+    } else {
+        ""
+    };
+    alloc_cstr(fragment)
+}
+
+/// Reconstruct URL string (identity since we store the raw URL)
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_to_string(url: i64) -> *mut i8 {
+    if url == 0 {
+        return forge_cstring_empty();
+    }
+    forge_strdup(url as *const i8)
+}
+
+/// Percent-encode a string
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_encode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() {
+        return forge_cstring_empty();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+    // Worst case: every byte becomes %XX (3x expansion)
+    let layout = Layout::from_size_align(len * 3 + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut di = 0;
+    for &b in input {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            *ptr.add(di) = b;
+            di += 1;
+        } else {
+            const HEX: &[u8] = b"0123456789ABCDEF";
+            *ptr.add(di) = b'%';
+            *ptr.add(di + 1) = HEX[(b >> 4) as usize];
+            *ptr.add(di + 2) = HEX[(b & 0xf) as usize];
+            di += 3;
+        }
+    }
+    *ptr.add(di) = 0;
+    ptr as *mut i8
+}
+
+/// Percent-decode a string
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_decode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() {
+        return forge_cstring_empty();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut si = 0;
+    let mut di = 0;
+    while si < len {
+        if input[si] == b'%' && si + 2 < len {
+            let hi = hex_digit(input[si + 1]);
+            let lo = hex_digit(input[si + 2]);
+            *ptr.add(di) = (hi << 4) | lo;
+            si += 3;
+        } else if input[si] == b'+' {
+            *ptr.add(di) = b' ';
+            si += 1;
+        } else {
+            *ptr.add(di) = input[si];
+            si += 1;
+        }
+        di += 1;
+    }
+    *ptr.add(di) = 0;
+    ptr as *mut i8
+}
+
+// Helper: get URL string from handle
+unsafe fn url_as_str(url: i64) -> &'static str {
+    let ptr = url as *const i8;
+    if ptr.is_null() {
+        return "";
+    }
+    let len = crate::string::forge_cstring_len(ptr) as usize;
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    std::str::from_utf8(slice).unwrap_or("")
+}
+
+// Helper: extract host from URL string
+fn url_extract_host(s: &str) -> &str {
+    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
+    let authority = after_scheme.split('/').next().unwrap_or("");
+    let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
+    auth_no_at.split(':').next().unwrap_or("")
+}
+
+// Helper: allocate a C string from a Rust &str
+unsafe fn alloc_cstr(s: &str) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let bytes = s.as_bytes();
+    let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// TCP read with max-bytes argument — stub (returns empty string)
+#[no_mangle]
+pub extern "C" fn forge_tcp_read2(_conn: i64, _max_bytes: i64) -> *mut i8 {
+    unsafe { forge_cstring_empty() }
+}
+
+/// Allocate a zeroed block of `num_fields * 8` bytes for struct storage.
+/// Returns the pointer as i64.
+///
+/// # Safety
+/// Caller must ensure the returned pointer is eventually freed.
+#[no_mangle]
+pub unsafe extern "C" fn forge_struct_alloc(num_fields: i64) -> i64 {
+    use std::alloc::{alloc_zeroed, Layout};
+
+    let size = (num_fields.max(0) as usize) * 8;
+    if size == 0 {
+        return 0;
+    }
+
+    let layout = Layout::from_size_align(size, 8).unwrap();
+    let ptr = alloc_zeroed(layout);
+    if ptr.is_null() {
+        return 0;
+    }
+    ptr as i64
+}
+
+/// Build a ForgeList of C-string pointers from `std::env::args()` and return
+/// the list pointer as i64.
+///
+/// # Safety
+/// Caller receives ownership of the list and its string allocations.
+#[no_mangle]
+pub unsafe extern "C" fn forge_args_to_list() -> i64 {
+    use crate::collections::list::{forge_list_new, forge_list_push_value};
+    use std::alloc::{alloc, Layout};
+
+    let list = forge_list_new(8, 0); // primitive list of i64 (cstring pointers)
+
+    for arg in std::env::args() {
+        let arg_len = arg.len();
+        let arg_layout = Layout::from_size_align(arg_len + 1, 1).unwrap();
+        let arg_ptr = alloc(arg_layout) as *mut i8;
+
+        if !arg_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(arg.as_ptr(), arg_ptr as *mut u8, arg_len);
+            *arg_ptr.add(arg_len) = 0;
+            forge_list_push_value(list, arg_ptr as i64);
+        }
+    }
+
+    list.ptr as i64
+}
+
+// Re-export concurrency primitive FFI functions
+pub use concurrency::{
+    forge_mutex_free, forge_mutex_lock, forge_mutex_new, forge_mutex_unlock,
+    forge_semaphore_acquire, forge_semaphore_free, forge_semaphore_new, forge_semaphore_release,
+    forge_waitgroup_add, forge_waitgroup_done, forge_waitgroup_free, forge_waitgroup_new,
+    forge_waitgroup_wait,
+};

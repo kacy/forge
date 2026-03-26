@@ -2271,7 +2271,7 @@ fn emit_call(node_idx: Int):
         emit_code(")")
         return
     if name == "args":
-        emit_code("forge_get_args()")
+        emit_code("forge_args()")
         return
     if name == "exit":
         emit_code("exit((int)")
