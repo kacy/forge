@@ -1,0 +1,93 @@
+# matrix math — 2D matrix operations using flat lists
+# exercises: index arithmetic, nested loops, function composition
+
+fn mat_get(data: List[Int], cols: Int, r: Int, c: Int) -> Int:
+    return data[r * cols + c]
+
+fn mat_add(a: List[Int], b: List[Int], rows: Int, cols: Int) -> List[Int]:
+    mut result: List[Int] := []
+    mut i := 0
+    while i < rows * cols:
+        result.push(a[i] + b[i])
+        i = i + 1
+    return result
+
+fn mat_mul(a: List[Int], b: List[Int], ar: Int, ac: Int, bc: Int) -> List[Int]:
+    mut result: List[Int] := []
+    mut r := 0
+    while r < ar:
+        mut c := 0
+        while c < bc:
+            mut sum := 0
+            mut k := 0
+            while k < ac:
+                sum = sum + mat_get(a, ac, r, k) * mat_get(b, bc, k, c)
+                k = k + 1
+            result.push(sum)
+            c = c + 1
+        r = r + 1
+    return result
+
+fn mat_transpose(data: List[Int], rows: Int, cols: Int) -> List[Int]:
+    mut result: List[Int] := []
+    mut c := 0
+    while c < cols:
+        mut r := 0
+        while r < rows:
+            result.push(mat_get(data, cols, r, c))
+            r = r + 1
+        c = c + 1
+    return result
+
+fn mat_to_string(data: List[Int], rows: Int, cols: Int) -> String:
+    mut row_strs: List[String] := []
+    mut r := 0
+    while r < rows:
+        mut vals: List[String] := []
+        mut c := 0
+        while c < cols:
+            vals.push(mat_get(data, cols, r, c).to_string())
+            c = c + 1
+        row_strs.push(vals.join(" "))
+        r = r + 1
+    return row_strs.join("; ")
+
+fn mat_trace(data: List[Int], n: Int) -> Int:
+    mut sum := 0
+    mut i := 0
+    while i < n:
+        sum = sum + mat_get(data, n, i, i)
+        i = i + 1
+    return sum
+
+fn main():
+    a := [1, 2, 3, 4]
+    b := [5, 6, 7, 8]
+
+    print("A = " + mat_to_string(a, 2, 2))
+    print("B = " + mat_to_string(b, 2, 2))
+
+    sum := mat_add(a, b, 2, 2)
+    print("A+B = " + mat_to_string(sum, 2, 2))
+
+    prod := mat_mul(a, b, 2, 2, 2)
+    print("A*B = " + mat_to_string(prod, 2, 2))
+
+    at := mat_transpose(a, 2, 2)
+    print("A^T = " + mat_to_string(at, 2, 2))
+
+    print("trace(A) = " + mat_trace(a, 2).to_string())
+    print("trace(A*B) = " + mat_trace(prod, 2).to_string())
+
+    # 3x3 identity
+    id := [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    print("I3 = " + mat_to_string(id, 3, 3))
+    print("trace(I3) = " + mat_trace(id, 3).to_string())
+
+    # 3x2 * 2x3
+    c := [1, 2, 3, 4, 5, 6]
+    d := [7, 8, 9, 10, 11, 12]
+    cd := mat_mul(c, d, 3, 2, 3)
+    print("C*D = " + mat_to_string(cd, 3, 3))
+
+    print("matrix works")

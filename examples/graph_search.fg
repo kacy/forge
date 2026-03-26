@@ -1,0 +1,56 @@
+# graph search — BFS on a small graph using adjacency map
+# exercises: maps, lists, while loops, string operations
+
+fn main():
+    # build adjacency as separate neighbor lists
+    mut a_neighbors: List[String] := ["B", "C"]
+    mut b_neighbors: List[String] := ["A", "D"]
+    mut c_neighbors: List[String] := ["A", "D", "F"]
+    mut d_neighbors: List[String] := ["B", "C", "E"]
+    mut e_neighbors: List[String] := ["D"]
+    mut f_neighbors: List[String] := ["C"]
+
+    # map node -> neighbors (stored as joined string for simplicity)
+    mut adj: Map[String, String] := {}
+    adj.insert("A", "B,C")
+    adj.insert("B", "A,D")
+    adj.insert("C", "A,D,F")
+    adj.insert("D", "B,C,E")
+    adj.insert("E", "D")
+    adj.insert("F", "C")
+
+    # BFS from A
+    mut visited: Map[String, Bool] := {}
+    mut queue: List[String] := []
+    mut order: List[String] := []
+
+    queue.push("A")
+    visited.insert("A", true)
+
+    while queue.len() > 0:
+        node := queue[0]
+        queue.remove(0)
+        order.push(node)
+
+        node_key := node
+        if adj.contains_key(node_key):
+            neighbor_str := adj[node_key]
+            neighbors := neighbor_str.split(",")
+            mut i := 0
+            while i < neighbors.len():
+                n := neighbors[i]
+                n_key := n
+                if not visited.contains_key(n_key):
+                    visited.insert(n, true)
+                    queue.push(n)
+                i = i + 1
+
+    print("bfs: " + order.join(" -> "))
+    print("visited: " + order.len().to_string())
+
+    # check connectivity
+    print("A visited: " + visited.contains_key("A").to_string())
+    print("E visited: " + visited.contains_key("E").to_string())
+    print("F visited: " + visited.contains_key("F").to_string())
+
+    print("graph works")

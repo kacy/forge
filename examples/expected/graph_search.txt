@@ -1,0 +1,6 @@
+bfs: A -> B -> C -> D -> F -> E
+visited: 6
+A visited: true
+E visited: true
+F visited: true
+graph works

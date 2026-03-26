@@ -1,0 +1,12 @@
+'the' appears: 3
+'fox' appears: 2
+'quick' appears: 1
+word count: 11
+char count: 41
+longest: quick
+has 'fox': true
+has 'cat': false
+replaced: the quick brown cat jumps over the lazy dog the cat
+poem lines: 4
+'are' in poem: 3
+text processing works
