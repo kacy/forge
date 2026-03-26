@@ -412,7 +412,7 @@ fn infer_value_kind(node: &AstNode, variables: &HashMap<String, LocalVar>) -> Va
             }
             _ => ValueKind::Unknown,
         },
-        AstNode::Call { func, .. } => match func.as_str() {
+        AstNode::Call { func, args } => match func.as_str() {
             "substring"
             | "trim"
             | "trim_left"
@@ -445,8 +445,16 @@ fn infer_value_kind(node: &AstNode, variables: &HashMap<String, LocalVar>) -> Va
             | "path_ext"
             | "path_stem" => ValueKind::String,
             "fnv1a" => ValueKind::Int,
-            "split" | "args" | "keys" | "values" | "list_dir" | "chars" | "sort" | "slice" => {
+            "split" | "args" | "keys" | "values" | "list_dir" | "chars" => {
                 ValueKind::ListString
+            }
+            "sort" | "slice" => {
+                // Preserve element type from the source list
+                if let Some(first_arg) = args.first() {
+                    infer_value_kind(first_arg, variables)
+                } else {
+                    ValueKind::ListUnknown
+                }
             }
             "len" | "time" | "random_int" | "ord" | "index_of" | "last_index_of" => ValueKind::Int,
             "contains" | "contains_key" | "starts_with" | "ends_with" | "string_starts_with"
@@ -4250,7 +4258,7 @@ fn compile_expr(
 
             // Check for list method calls (includes fallback for variables)
             let list_methods = [
-                "push", "pop", "get", "set", "join", "remove", "is_empty", "clear", "reverse",
+                "push", "pop", "get", "set", "join", "remove", "is_empty", "clear", "reverse", "slice", "sort",
             ];
             // Only dispatch to list methods if the first arg is actually a list.
             // String args (e.g. join("/home", "docs") from std.os.path) must NOT
@@ -4426,6 +4434,37 @@ fn compile_expr(
                     let reverse_ref = module.declare_func_in_func(*reverse_id, builder.func);
                     builder.ins().call(reverse_ref, &[list_val]);
                     return Ok(builder.ins().iconst(types::I64, 0));
+                }
+
+                if func == "slice" && args.len() >= 3 {
+                    let start = compile_expr(
+                        builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                        module, &args[1], func_signatures, lambda_funcs, global_data_ids,
+                    )?;
+                    let end = compile_expr(
+                        builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                        module, &args[2], func_signatures, lambda_funcs, global_data_ids,
+                    )?;
+                    if let Some(&slice_id) = runtime_funcs.get("forge_list_slice") {
+                        let slice_ref = module.declare_func_in_func(slice_id, builder.func);
+                        let call = builder.ins().call(slice_ref, &[list_val, start, end]);
+                        return Ok(builder.func.dfg.first_result(call));
+                    }
+                }
+
+                if func == "sort" {
+                    // Determine if string list to use string sort
+                    let list_kind = infer_value_kind(&args[0], variables);
+                    let sort_name = if matches!(list_kind, ValueKind::ListString) {
+                        "forge_list_sort_strings"
+                    } else {
+                        "forge_list_sort"
+                    };
+                    if let Some(&sort_id) = runtime_funcs.get(sort_name) {
+                        let sort_ref = module.declare_func_in_func(sort_id, builder.func);
+                        builder.ins().call(sort_ref, &[list_val]);
+                    }
+                    return Ok(list_val);
                 }
 
                 let runtime_func_name = format!("forge_list_{}", func);

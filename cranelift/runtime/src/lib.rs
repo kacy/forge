@@ -2378,7 +2378,7 @@ pub unsafe extern "C" fn forge_cstring_ends_with(s: *const i8, suffix: *const i8
 pub unsafe extern "C" fn forge_cstring_pad_left(
     s: *const i8,
     width: i64,
-    _fill: *const i8,
+    fill: *const i8,
 ) -> *mut i8 {
     use std::alloc::{alloc, Layout};
     if s.is_null() {
@@ -2389,13 +2389,19 @@ pub unsafe extern "C" fn forge_cstring_pad_left(
     if len >= w {
         return forge_strdup(s);
     }
+    // Use first char of fill string, default to space
+    let fill_char = if !fill.is_null() && *fill != 0 {
+        *fill
+    } else {
+        b' ' as i8
+    };
     let pad = w - len;
     let total = w + 1;
     let layout = Layout::from_size_align(total, 1).unwrap();
     let ptr = alloc(layout) as *mut i8;
     if !ptr.is_null() {
         for i in 0..pad {
-            *ptr.add(i) = b' ' as i8;
+            *ptr.add(i) = fill_char;
         }
         std::ptr::copy_nonoverlapping(s, ptr.add(pad), len);
         *ptr.add(w) = 0;
@@ -2411,7 +2417,7 @@ pub unsafe extern "C" fn forge_cstring_pad_left(
 pub unsafe extern "C" fn forge_cstring_pad_right(
     s: *const i8,
     width: i64,
-    _fill: *const i8,
+    fill: *const i8,
 ) -> *mut i8 {
     use std::alloc::{alloc, Layout};
     if s.is_null() {
@@ -2422,13 +2428,19 @@ pub unsafe extern "C" fn forge_cstring_pad_right(
     if len >= w {
         return forge_strdup(s);
     }
+    // Use first char of fill string, default to space
+    let fill_char = if !fill.is_null() && *fill != 0 {
+        *fill
+    } else {
+        b' ' as i8
+    };
     let total = w + 1;
     let layout = Layout::from_size_align(total, 1).unwrap();
     let ptr = alloc(layout) as *mut i8;
     if !ptr.is_null() {
         std::ptr::copy_nonoverlapping(s, ptr, len);
         for i in len..w {
-            *ptr.add(i) = b' ' as i8;
+            *ptr.add(i) = fill_char;
         }
         *ptr.add(w) = 0;
     }
