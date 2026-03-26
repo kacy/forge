@@ -16,6 +16,7 @@ pub mod collections;
 pub mod concurrency;
 pub mod json;
 pub mod string;
+pub mod toml;
 
 use crate::collections::list::ForgeList;
 use std::sync::atomic::AtomicUsize;
@@ -2201,16 +2202,21 @@ pub unsafe extern "C" fn forge_json_parse(s: *const i8) -> i64 {
         return result;
     }
     // Check if it looks like a URL (contains "://")
-    let input = crate::string::forge_cstring_len(s) as usize;
-    let slice = std::slice::from_raw_parts(s as *const u8, input);
+    let input_len = crate::string::forge_cstring_len(s) as usize;
+    let slice = std::slice::from_raw_parts(s as *const u8, input_len);
     if let Ok(str_val) = std::str::from_utf8(slice) {
         if str_val.contains("://") {
-            // URL — return strdup'd string as handle for URL accessor functions
             return forge_strdup(s) as i64;
         }
+        // Try TOML parse if it looks like TOML (contains key = value)
+        if str_val.contains('=') && !str_val.starts_with('{') && !str_val.starts_with('[') {
+            let toml_result = toml::forge_toml_parse(s);
+            if toml_result > 0 {
+                return -toml_result; // Negative = TOML handle
+            }
+        }
     }
-    // Invalid JSON and not a URL — return -1
-    -1
+    -1 // Use -1 as the "parse failed" sentinel (distinct from TOML handles which are <= -2)
 }
 
 /// Smart to_string for Unknown-typed values: if the value looks like a C string pointer,
@@ -2248,11 +2254,7 @@ pub unsafe extern "C" fn forge_smart_encode(val: i64) -> *mut i8 {
     }
 }
 
-/// Stub: parse TOML — returns empty pointer (not yet implemented)
-#[no_mangle]
-pub extern "C" fn forge_toml_parse(_s: *const i8) -> *mut i8 {
-    std::ptr::null_mut()
-}
+// TOML parse moved to toml.rs module
 
 /// Stub: parse URL — returns empty pointer (not yet implemented)
 #[no_mangle]

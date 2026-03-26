@@ -468,7 +468,7 @@ fn infer_value_kind(node: &AstNode, variables: &HashMap<String, LocalVar>) -> Va
             "len" | "time" | "random_int" | "ord" | "index_of" | "last_index_of"
             | "get_int" | "array_len" => ValueKind::Int,
             "contains" | "contains_key" | "starts_with" | "ends_with" | "string_starts_with"
-            | "dir_exists" | "file_exists" | "is_empty" | "object_has" | "get_bool" => ValueKind::Bool,
+            | "dir_exists" | "file_exists" | "is_empty" | "object_has" | "get_bool" | "has" => ValueKind::Bool,
             _ => {
                 // Check registered function return types
                 if let Some(ret_type) = crate::get_func_return_type(func) {
@@ -4946,9 +4946,16 @@ fn compile_expr(
                 }
             } else {
                 // Original logic for other functions
-                let fname = match func.as_str() {
-                    "print" => "forge_print_cstr",
-                    "print_int" => "forge_print_int",
+                // Dispatch TOML vs JSON based on arg count for shared names
+                let fname = match (func.as_str(), args.len()) {
+                    ("print", _) => "forge_print_cstr",
+                    ("print_int", _) => "forge_print_int",
+                    // TOML 2-arg variants (handle, key) — only TOML uses these with 2 args
+                    ("get_string", 2) => "toml_get_string",
+                    ("get_int", 2) => "toml_get_int",
+                    ("get_float", 2) => "toml_get_float",
+                    ("get_bool", 2) => "toml_get_bool",
+                    ("keys", 1) => "toml_keys",
                     _ => func,
                 };
 

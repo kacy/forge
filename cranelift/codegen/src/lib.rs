@@ -1636,6 +1636,43 @@ pub fn declare_runtime_functions(
     let json_encode = declare_runtime_function(module, "forge_json_encode", &[types::I64], &[types::I64])?;
     funcs.insert("forge_json_encode".to_string(), json_encode);
 
+    // TOML functions (2-arg variants: handle + key)
+    let toml_parse = declare_runtime_function(module, "forge_toml_parse", &[types::I64], &[types::I64])?;
+    funcs.insert("toml_parse".to_string(), toml_parse);
+
+    let toml_type_of = declare_runtime_function(module, "forge_toml_type_of", &[types::I64], &[types::I64])?;
+    funcs.insert("toml_type_of".to_string(), toml_type_of);
+
+    let toml_get_string = declare_runtime_function(module, "forge_toml_get_string", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("toml_get_string".to_string(), toml_get_string);
+
+    let toml_get_int = declare_runtime_function(module, "forge_toml_get_int", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("toml_get_int".to_string(), toml_get_int);
+
+    let toml_get_float = declare_runtime_function(module, "forge_toml_get_float", &[types::I64, types::I64], &[types::F64])?;
+    funcs.insert("toml_get_float".to_string(), toml_get_float);
+
+    let toml_get_bool = declare_runtime_function(module, "forge_toml_get_bool", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("toml_get_bool".to_string(), toml_get_bool);
+
+    let toml_has = declare_runtime_function(module, "forge_toml_has", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("has".to_string(), toml_has);
+
+    let toml_get_array = declare_runtime_function(module, "forge_toml_get_array", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("get_array".to_string(), toml_get_array);
+
+    let toml_array_len = declare_runtime_function(module, "forge_toml_array_len", &[types::I64], &[types::I64])?;
+    funcs.insert("toml_array_len".to_string(), toml_array_len);
+
+    let toml_array_get = declare_runtime_function(module, "forge_toml_array_get", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("toml_array_get".to_string(), toml_array_get);
+
+    let toml_get_table = declare_runtime_function(module, "forge_toml_get_table", &[types::I64, types::I64], &[types::I64])?;
+    funcs.insert("get_table".to_string(), toml_get_table);
+
+    let toml_keys = declare_runtime_function(module, "forge_toml_keys", &[types::I64], &[types::I64])?;
+    funcs.insert("toml_keys".to_string(), toml_keys);
+
     // Smart to_string for Unknown-typed values
     let smart_to_string = declare_runtime_function(module, "forge_smart_to_string", &[types::I64], &[types::I64])?;
     funcs.insert("forge_smart_to_string".to_string(), smart_to_string);

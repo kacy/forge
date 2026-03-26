@@ -268,6 +268,10 @@ pub unsafe extern "C" fn forge_json_parse_real(s: *const i8) -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_type_of(handle: i64) -> *mut i8 {
+    // Negative handles are TOML
+    if handle < -1 {
+        return crate::toml::forge_toml_type_of(-handle);
+    }
     let ty = match get_node(handle) {
         Some(JsonValue::Null) => "null",
         Some(JsonValue::Bool(_)) => "bool",
@@ -317,6 +321,10 @@ pub unsafe extern "C" fn forge_json_get_bool(handle: i64) -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_array_len(handle: i64) -> i64 {
+    // Negative handles are TOML
+    if handle < -1 {
+        return crate::toml::forge_toml_array_len(handle);
+    }
     match get_node(handle) {
         Some(JsonValue::Array(items)) => items.len() as i64,
         _ => 0,
@@ -325,6 +333,10 @@ pub unsafe extern "C" fn forge_json_array_len(handle: i64) -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_array_get(handle: i64, index: i64) -> i64 {
+    // Negative handles are TOML
+    if handle < -1 {
+        return crate::toml::forge_toml_array_get(handle, index);
+    }
     match get_node(handle) {
         Some(JsonValue::Array(items)) => {
             items.get(index as usize).copied().unwrap_or(-1)
