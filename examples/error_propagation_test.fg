@@ -1,0 +1,38 @@
+# error propagation — tests the ! operator and fail statements
+# exercises: result types (T!), fail, try propagation
+
+fn parse_num(s: String) -> Int!:
+    if s.len() == 0:
+        fail "empty"
+    mut result := 0
+    mut i := 0
+    while i < s.len():
+        c := ord(s[i])
+        if c < 48 or c > 57:
+            fail "not a number"
+        result = result * 10 + (c - 48)
+        i = i + 1
+    return result
+
+fn double_it(s: String) -> Int!:
+    n := parse_num(s)!
+    return n * 2
+
+fn add_them(a: String, b: String) -> Int!:
+    x := parse_num(a)!
+    y := parse_num(b)!
+    return x + y
+
+fn run() -> String!:
+    # successful cases
+    r1 := double_it("21")!
+    print("double 21: " + r1.to_string())
+
+    r2 := add_them("10", "20")!
+    print("add 10+20: " + r2.to_string())
+
+    return "ok"
+
+fn main():
+    result := run()
+    print("error propagation works")

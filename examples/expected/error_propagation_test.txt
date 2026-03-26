@@ -1,0 +1,3 @@
+double 21: 42
+add 10+20: 30
+error propagation works
