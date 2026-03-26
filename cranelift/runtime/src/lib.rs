@@ -2206,8 +2206,12 @@ pub extern "C" fn forge_toml_parse(_s: *const i8) -> *mut i8 {
 
 /// Stub: parse URL — returns empty pointer (not yet implemented)
 #[no_mangle]
-pub extern "C" fn forge_url_parse(_s: *const i8) -> *mut i8 {
-    std::ptr::null_mut()
+pub unsafe extern "C" fn forge_url_parse(s: *const i8) -> *mut i8 {
+    // URL "parse" just stores the URL string — accessors extract parts
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+    forge_strdup(s)
 }
 
 /// Identity function — returns its argument unchanged
@@ -2877,6 +2881,173 @@ pub unsafe extern "C" fn forge_url_scheme(url: i64) -> *mut i8 {
     };
     let bytes = scheme.as_bytes();
     let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+    }
+    ptr
+}
+
+/// Extract host from a parsed URL (stored as C string)
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_host(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let host = url_extract_host(s);
+    alloc_cstr(host)
+}
+
+/// Extract port from a parsed URL. Returns -1 if no port specified.
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_port(url: i64) -> i64 {
+    let s = url_as_str(url);
+    // After scheme://, find host:port
+    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
+    let authority = after_scheme.split('/').next().unwrap_or("");
+    let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(colon) = auth_no_at.rfind(':') {
+        auth_no_at[colon + 1..].parse::<i64>().unwrap_or(-1)
+    } else {
+        -1
+    }
+}
+
+/// Extract path from a parsed URL
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_path(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
+    let after_authority = after_scheme.find('/').map(|i| &after_scheme[i..]).unwrap_or("/");
+    let path = after_authority.split('?').next().unwrap_or(after_authority);
+    let path = path.split('#').next().unwrap_or(path);
+    alloc_cstr(path)
+}
+
+/// Extract query string from a parsed URL (without '?')
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_query(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let query = if let Some(q_idx) = s.find('?') {
+        let after_q = &s[q_idx + 1..];
+        after_q.split('#').next().unwrap_or("")
+    } else {
+        ""
+    };
+    alloc_cstr(query)
+}
+
+/// Extract fragment from a parsed URL (without '#')
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_fragment(url: i64) -> *mut i8 {
+    let s = url_as_str(url);
+    let fragment = if let Some(f_idx) = s.find('#') {
+        &s[f_idx + 1..]
+    } else {
+        ""
+    };
+    alloc_cstr(fragment)
+}
+
+/// Reconstruct URL string (identity since we store the raw URL)
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_to_string(url: i64) -> *mut i8 {
+    if url == 0 {
+        return forge_cstring_empty();
+    }
+    forge_strdup(url as *const i8)
+}
+
+/// Percent-encode a string
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_encode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() {
+        return forge_cstring_empty();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+    // Worst case: every byte becomes %XX (3x expansion)
+    let layout = Layout::from_size_align(len * 3 + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut di = 0;
+    for &b in input {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            *ptr.add(di) = b;
+            di += 1;
+        } else {
+            const HEX: &[u8] = b"0123456789ABCDEF";
+            *ptr.add(di) = b'%';
+            *ptr.add(di + 1) = HEX[(b >> 4) as usize];
+            *ptr.add(di + 2) = HEX[(b & 0xf) as usize];
+            di += 3;
+        }
+    }
+    *ptr.add(di) = 0;
+    ptr as *mut i8
+}
+
+/// Percent-decode a string
+#[no_mangle]
+pub unsafe extern "C" fn forge_url_decode(s: *const i8) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    if s.is_null() {
+        return forge_cstring_empty();
+    }
+    let len = crate::string::forge_cstring_len(s) as usize;
+    let input = std::slice::from_raw_parts(s as *const u8, len);
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut u8;
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut si = 0;
+    let mut di = 0;
+    while si < len {
+        if input[si] == b'%' && si + 2 < len {
+            let hi = hex_digit(input[si + 1]);
+            let lo = hex_digit(input[si + 2]);
+            *ptr.add(di) = (hi << 4) | lo;
+            si += 3;
+        } else if input[si] == b'+' {
+            *ptr.add(di) = b' ';
+            si += 1;
+        } else {
+            *ptr.add(di) = input[si];
+            si += 1;
+        }
+        di += 1;
+    }
+    *ptr.add(di) = 0;
+    ptr as *mut i8
+}
+
+// Helper: get URL string from handle
+unsafe fn url_as_str(url: i64) -> &'static str {
+    let ptr = url as *const i8;
+    if ptr.is_null() {
+        return "";
+    }
+    let len = crate::string::forge_cstring_len(ptr) as usize;
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    std::str::from_utf8(slice).unwrap_or("")
+}
+
+// Helper: extract host from URL string
+fn url_extract_host(s: &str) -> &str {
+    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
+    let authority = after_scheme.split('/').next().unwrap_or("");
+    let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
+    auth_no_at.split(':').next().unwrap_or("")
+}
+
+// Helper: allocate a C string from a Rust &str
+unsafe fn alloc_cstr(s: &str) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+    let bytes = s.as_bytes();
+    let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
     let ptr = alloc(layout) as *mut i8;
     if !ptr.is_null() {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());

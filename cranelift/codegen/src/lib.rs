@@ -1580,7 +1580,7 @@ pub fn declare_runtime_functions(
         &[types::I64], // str
         &[types::I64], // parsed (ptr)
     )?;
-    funcs.insert("parse".to_string(), json_parse);
+    funcs.insert("json_parse".to_string(), json_parse);
     funcs.insert("forge_json_parse".to_string(), json_parse);
 
     // Identity function
@@ -1872,12 +1872,44 @@ pub fn declare_runtime_functions(
     let url_scheme =
         declare_runtime_function(module, "forge_url_scheme", &[types::I64], &[types::I64])?;
     funcs.insert("scheme".to_string(), url_scheme);
-    funcs.insert("host".to_string(), url_scheme);
-    funcs.insert("path".to_string(), url_scheme);
-    funcs.insert("query".to_string(), url_scheme);
-    funcs.insert("fragment".to_string(), url_scheme);
-    funcs.insert("encode".to_string(), url_scheme);
-    funcs.insert("decode".to_string(), url_scheme);
+
+    let url_host =
+        declare_runtime_function(module, "forge_url_host", &[types::I64], &[types::I64])?;
+    funcs.insert("host".to_string(), url_host);
+
+    let url_port =
+        declare_runtime_function(module, "forge_url_port", &[types::I64], &[types::I64])?;
+    funcs.insert("port".to_string(), url_port);
+
+    let url_path =
+        declare_runtime_function(module, "forge_url_path", &[types::I64], &[types::I64])?;
+    funcs.insert("path".to_string(), url_path);
+
+    let url_query =
+        declare_runtime_function(module, "forge_url_query", &[types::I64], &[types::I64])?;
+    funcs.insert("query".to_string(), url_query);
+
+    let url_fragment =
+        declare_runtime_function(module, "forge_url_fragment", &[types::I64], &[types::I64])?;
+    funcs.insert("fragment".to_string(), url_fragment);
+
+    let url_encode =
+        declare_runtime_function(module, "forge_url_encode", &[types::I64], &[types::I64])?;
+    funcs.insert("encode".to_string(), url_encode);
+
+    let url_decode =
+        declare_runtime_function(module, "forge_url_decode", &[types::I64], &[types::I64])?;
+    funcs.insert("decode".to_string(), url_decode);
+
+    // URL parse (maps the generic "parse" name to URL parse)
+    let url_parse =
+        declare_runtime_function(module, "forge_url_parse", &[types::I64], &[types::I64])?;
+    funcs.insert("parse".to_string(), url_parse);
+
+    // URL to_string
+    let url_to_string =
+        declare_runtime_function(module, "forge_url_to_string", &[types::I64], &[types::I64])?;
+    funcs.insert("url_to_string".to_string(), url_to_string);
 
     // channel close
     let ch_close = declare_runtime_function(module, "forge_tcp_close", &[types::I64], &[])?;

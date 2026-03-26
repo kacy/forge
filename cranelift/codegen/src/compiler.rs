@@ -443,7 +443,15 @@ fn infer_value_kind(node: &AstNode, variables: &HashMap<String, LocalVar>) -> Va
             | "path_dir"
             | "path_base"
             | "path_ext"
-            | "path_stem" => ValueKind::String,
+            | "path_stem"
+            | "parse"
+            | "scheme"
+            | "host"
+            | "query"
+            | "fragment"
+            | "encode"
+            | "decode" => ValueKind::String,
+            "port" => ValueKind::Int,
             "fnv1a" => ValueKind::Int,
             "split" | "args" | "keys" | "values" | "list_dir" | "chars" => {
                 ValueKind::ListString
