@@ -3357,6 +3357,12 @@ fn compile_expr(
                 Ok(val)
             }
             None => {
+                // Check if this is a declared user function (for passing as a value)
+                if let Some(&func_id) = declared_funcs.get(name) {
+                    let func_ref = module.declare_func_in_func(func_id, builder.func);
+                    let addr = builder.ins().func_addr(types::I64, func_ref);
+                    return Ok(addr);
+                }
                 // Check if this is a global variable
                 if let Some(data_id) = global_data_ids.get(name) {
                     let gv = module.declare_data_in_func(*data_id, builder.func);
@@ -3371,6 +3377,8 @@ fn compile_expr(
                         name,
                         variables.keys().collect::<Vec<_>>()
                     );
+                    // Print a backtrace-like message
+                    eprintln!("DEBUG: Backtrace for unknown var '{}' lookup", name);
                     Err(CompileError::UnknownVariable(name.clone()))
                 }
             }

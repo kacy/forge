@@ -1824,17 +1824,22 @@ impl TextAstParser {
                 break;
             }
             if param_line.kind == "param" {
-                // Parse "name: Type" format
-                let param_str = param_line.value.clone();
-                let parts: Vec<&str> = param_str.split(':').collect();
-                let param_name = parts[0].trim().to_string();
-                let param_type = if parts.len() > 1 {
-                    parts[1].trim().to_string()
+                let param_name = param_line.value.clone();
+                let param_indent = param_line.indent;
+                self.advance();
+                // Check for type child node
+                let param_type = if let Some(type_line) = self.current() {
+                    if type_line.kind == "type" && type_line.indent > param_indent {
+                        let ty = type_line.value.clone();
+                        self.advance();
+                        ty
+                    } else {
+                        "Int".to_string()
+                    }
                 } else {
-                    "Int".to_string() // Default type
+                    "Int".to_string()
                 };
                 params.push((param_name, param_type));
-                self.advance();
             } else {
                 break;
             }
@@ -1855,6 +1860,12 @@ impl TextAstParser {
         }
 
         // Parse body expression (indented under lambda)
+        // Skip "body" wrapper node if present
+        if let Some(body_line) = self.current() {
+            if body_line.kind == "body" && body_line.indent > lambda_indent {
+                self.advance();
+            }
+        }
         let body = if let Some(body_line) = self.current() {
             if body_line.indent > lambda_indent {
                 self.parse_expression()?
