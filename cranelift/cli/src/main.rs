@@ -162,7 +162,7 @@ fn build_file(path: &str) {
     use forge_codegen::linker::build_executable;
     use forge_codegen::CompileError;
 
-    println!("Building {} with Cranelift backend...", path);
+    eprintln!("Building {} with Cranelift backend...", path);
 
     // First, get AST from self-hosted compiler
     let ast_text = match get_ast_from_compiler(path) {
@@ -191,7 +191,7 @@ fn build_file(path: &str) {
                 &get_ast_callback,
             ) {
                 Ok(funcs) => {
-                    println!("Compiled {} functions", funcs.len());
+                    eprintln!("Compiled {} functions", funcs.len());
 
                     // Finalize and write object file
                     match finalize_module(codegen.module) {
@@ -199,13 +199,13 @@ fn build_file(path: &str) {
                             let obj_path = path.replace(".fg", ".o");
                             match fs::write(&obj_path, &bytes) {
                                 Ok(_) => {
-                                    println!("Written {} ({} bytes)", obj_path, bytes.len());
+                                    eprintln!("Written {} ({} bytes)", obj_path, bytes.len());
 
                                     // Link to create executable
                                     let exe_path = path.replace(".fg", "");
                                     match build_executable(&obj_path, &exe_path) {
                                         Ok(_) => {
-                                            println!("Created executable: {}", exe_path)
+                                            eprintln!("Created executable: {}", exe_path)
                                         }
                                         Err(e) => eprintln!("Error linking: {}", e),
                                     }
@@ -229,7 +229,7 @@ fn run_file(path: &str) {
     use forge_codegen::finalize_module;
     use forge_codegen::linker::build_executable;
 
-    println!("Running {} with Cranelift backend...", path);
+    eprintln!("Running {} with Cranelift backend...", path);
 
     // Get AST from self-hosted compiler
     let ast_text = match get_ast_from_compiler(path) {
@@ -290,8 +290,8 @@ fn run_file(path: &str) {
 
 fn test_file(path: &str) {
     // For now, same as run but with test mode
-    println!("Test mode not yet implemented for Cranelift backend");
-    println!("Use 'forge run' for now, or the C transpilation backend for full test support");
+    eprintln!("Test mode not yet implemented for Cranelift backend");
+    eprintln!("Use 'forge run' for now, or the C transpilation backend for full test support");
 }
 
 fn check_file(path: &str) {

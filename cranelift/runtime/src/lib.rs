@@ -2101,10 +2101,12 @@ pub unsafe extern "C" fn forge_path_dir(path: *const i8) -> *mut i8 {
     let len = crate::string::forge_cstring_len(path) as usize;
     let slice = std::slice::from_raw_parts(path as *const u8, len);
     if let Ok(path_str) = std::str::from_utf8(slice) {
-        let dir = std::path::Path::new(path_str)
+        let raw_dir = std::path::Path::new(path_str)
             .parent()
             .and_then(|p| p.to_str())
             .unwrap_or(".");
+        // Return "." for empty parent (bare filename like "file.txt")
+        let dir = if raw_dir.is_empty() { "." } else { raw_dir };
         let dir_bytes = dir.as_bytes();
         let layout = Layout::from_size_align(dir_bytes.len() + 1, 1).unwrap();
         let ptr = alloc(layout) as *mut i8;
@@ -2480,10 +2482,16 @@ pub unsafe extern "C" fn forge_path_ext(path: *const i8) -> *mut i8 {
     let len = crate::string::forge_cstring_len(path) as usize;
     let slice = std::slice::from_raw_parts(path as *const u8, len);
     if let Ok(path_str) = std::str::from_utf8(slice) {
-        let ext = std::path::Path::new(path_str)
+        let raw_ext = std::path::Path::new(path_str)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
+        // Prepend dot to match expected behavior: "txt" -> ".txt"
+        let ext = if raw_ext.is_empty() {
+            String::new()
+        } else {
+            format!(".{}", raw_ext)
+        };
         let ext_bytes = ext.as_bytes();
         let layout = Layout::from_size_align(ext_bytes.len() + 1, 1).unwrap();
         let ptr = alloc(layout) as *mut i8;

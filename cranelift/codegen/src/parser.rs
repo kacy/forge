@@ -544,16 +544,22 @@ impl TextAstParser {
         let alias_indent = line.indent;
         self.advance();
 
-        // Skip children (type alias body)
+        // Extract target type from child "type" node
+        let mut target = String::new();
         while let Some(l) = self.current() {
             if l.indent <= alias_indent {
                 break;
             }
+            if l.kind == "type" {
+                target = l.value.clone();
+            }
             self.advance();
         }
 
-        // Represent as a no-op block — type aliases don't generate code
-        Ok(AstNode::Block(vec![]))
+        Ok(AstNode::TypeAlias {
+            name: alias_name,
+            target,
+        })
     }
 
     /// Parse a test declaration: test "name": body
@@ -986,6 +992,7 @@ impl TextAstParser {
             "string_interp" => self.parse_string_interp(),
             "list" => self.parse_list_literal(),
             "map" => self.parse_map_literal(),
+            "set" => self.parse_set_literal(),
             "struct_init" => self.parse_struct_init(),
             "field" => self.parse_field_access(),
             "index" => self.parse_index(),
@@ -1247,17 +1254,62 @@ impl TextAstParser {
         let mut entries = Vec::new();
 
         // Parse each entry until we hit a lower indentation
-        // Format: key <value> (value is indented more)
+        // Format: either direct key/value pairs or "entry" wrapper nodes
         while let Some(line) = self.current() {
             if line.indent <= start_indent {
                 break;
             }
 
-            // Extract all data from line first to avoid borrow issues
+            // Handle "entry" wrapper nodes from the self-hosted AST printer
+            if line.kind == "entry" {
+                let entry_indent = line.indent;
+                self.advance();
+
+                // Parse key (first child of entry)
+                let key = if let Some(key_line) = self.current() {
+                    if key_line.indent > entry_indent {
+                        if key_line.kind == "string" {
+                            let val = key_line.value.clone();
+                            let val = if val.len() >= 2 && val.starts_with('"') && val.ends_with('"') {
+                                val[1..val.len() - 1].to_string()
+                            } else {
+                                val
+                            };
+                            self.advance();
+                            AstNode::StringLiteral(val)
+                        } else if key_line.kind == "int" || key_line.kind == "integer" {
+                            let val = key_line.value.parse().unwrap_or(0);
+                            self.advance();
+                            AstNode::IntLiteral(val)
+                        } else {
+                            self.parse_expression()?
+                        }
+                    } else {
+                        continue;
+                    }
+                } else {
+                    break;
+                };
+
+                // Parse value (second child of entry)
+                let value = if let Some(val_line) = self.current() {
+                    if val_line.indent > entry_indent {
+                        self.parse_expression()?
+                    } else {
+                        AstNode::IntLiteral(0)
+                    }
+                } else {
+                    AstNode::IntLiteral(0)
+                };
+
+                entries.push((key, value));
+                continue;
+            }
+
+            // Direct key-value pairs (legacy format)
             let line_indent = line.indent;
             let key = if line.kind == "string" {
                 let val = line.value.clone();
-                // Strip surrounding quotes from string literals
                 let val = if val.len() >= 2 && val.starts_with('"') && val.ends_with('"') {
                     val[1..val.len() - 1].to_string()
                 } else {
@@ -1274,7 +1326,6 @@ impl TextAstParser {
                 self.advance();
                 AstNode::Identifier(val)
             } else {
-                // Parse as expression
                 self.parse_expression()?
             };
 
@@ -1283,7 +1334,7 @@ impl TextAstParser {
                 if val_line.indent > line_indent {
                     self.parse_expression()?
                 } else {
-                    AstNode::IntLiteral(0) // Default/no value
+                    AstNode::IntLiteral(0)
                 }
             } else {
                 AstNode::IntLiteral(0)
@@ -1296,6 +1347,43 @@ impl TextAstParser {
             entries,
             key_type: None,
             val_type: None,
+        })
+    }
+
+    /// Parse set literal: set (N items) followed by elements
+    fn parse_set_literal(&mut self) -> Result<AstNode, CompileError> {
+        let set_line = self.current().unwrap();
+        let start_indent = set_line.indent;
+        self.advance();
+
+        let mut elements = Vec::new();
+
+        while let Some(line) = self.current() {
+            if line.indent <= start_indent {
+                break;
+            }
+
+            if line.kind == "string" {
+                let val = line.value.clone();
+                let val = if val.len() >= 2 && val.starts_with('"') && val.ends_with('"') {
+                    val[1..val.len() - 1].to_string()
+                } else {
+                    val
+                };
+                self.advance();
+                elements.push(AstNode::StringLiteral(val));
+            } else if line.kind == "int" || line.kind == "integer" {
+                let val = line.value.parse().unwrap_or(0);
+                self.advance();
+                elements.push(AstNode::IntLiteral(val));
+            } else {
+                elements.push(self.parse_expression()?);
+            }
+        }
+
+        Ok(AstNode::SetLiteral {
+            elements,
+            elem_type: None,
         })
     }
 

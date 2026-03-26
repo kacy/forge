@@ -82,6 +82,16 @@ pub enum AstNode {
         key_type: Option<String>,
         val_type: Option<String>,
     },
+    /// Set literal: {"a", "b", "c"}
+    SetLiteral {
+        elements: Vec<AstNode>,
+        elem_type: Option<String>,
+    },
+    /// Type alias: type Name = Target
+    TypeAlias {
+        name: String,
+        target: String,
+    },
     /// Try expression: expr? (error propagation)
     Try { expr: Box<AstNode> },
     /// Fail statement: fail error

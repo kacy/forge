@@ -123,7 +123,6 @@ pub unsafe extern "C" fn forge_map_new(
 
     let map_impl = MapImpl::new(ktype, val_size as usize, val_is_heap != 0);
     let boxed = Box::new(map_impl);
-
     ForgeMap {
         ptr: Box::into_raw(boxed) as *mut (),
     }
@@ -786,6 +785,61 @@ pub unsafe extern "C" fn forge_map_keys_cstr(map_handle: i64) -> i64 {
                 *ptr.add(len) = 0;
                 forge_list_push_value(list, ptr as i64);
             }
+        }
+    }
+
+    list.ptr as i64
+}
+
+/// Clear all entries from map (handle-based API).
+///
+/// # Safety
+/// * `map_handle` must be a valid `MapImpl` pointer cast to i64.
+#[no_mangle]
+pub unsafe extern "C" fn forge_map_clear_handle(map_handle: i64) {
+    if map_handle == 0 {
+        return;
+    }
+
+    let impl_ref = &mut *(map_handle as *mut MapImpl);
+    impl_ref.clear();
+}
+
+/// Check if map is empty (handle-based API). Returns 1 if empty, 0 otherwise.
+///
+/// # Safety
+/// * `map_handle` must be a valid `MapImpl` pointer cast to i64.
+#[no_mangle]
+pub unsafe extern "C" fn forge_map_is_empty_handle(map_handle: i64) -> i64 {
+    if map_handle == 0 {
+        return 1;
+    }
+
+    let impl_ref = &*(map_handle as *const MapImpl);
+    if impl_ref.len() == 0 { 1 } else { 0 }
+}
+
+/// Return all values as a ForgeList (handle-based API). The ForgeList pointer
+/// is returned as i64.
+///
+/// # Safety
+/// * `map_handle` must be a valid `MapImpl` pointer cast to i64.
+#[no_mangle]
+pub unsafe extern "C" fn forge_map_values_handle(map_handle: i64) -> i64 {
+    use crate::collections::list::{forge_list_new, forge_list_push_value};
+
+    if map_handle == 0 {
+        let empty = forge_list_new(8, 0);
+        return empty.ptr as i64;
+    }
+
+    let impl_ref = &*(map_handle as *const MapImpl);
+    let list = forge_list_new(8, 0);
+
+    for val in impl_ref.values() {
+        if val.len() >= 8 {
+            let v = i64::from_le_bytes(val[..8].try_into().unwrap_or([0u8; 8]));
+            forge_list_push_value(list, v);
         }
     }
 

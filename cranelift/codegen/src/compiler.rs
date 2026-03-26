@@ -255,6 +255,7 @@ fn infer_kind_from_type_name(ty: &str) -> ValueKind {
         _ if ty.starts_with("List[") => ValueKind::ListUnknown,
         _ if ty.starts_with("Map[Int,") || ty.starts_with("Map[Int]") => ValueKind::MapIntKey,
         _ if ty.starts_with("Map[") => ValueKind::Map,
+        _ if ty.starts_with("Set[") => ValueKind::Set,
         _ if crate::get_struct_layout(ty).is_some() => ValueKind::Struct,
         _ if ty
             .chars()
@@ -321,6 +322,7 @@ fn infer_value_kind(node: &AstNode, variables: &HashMap<String, LocalVar>) -> Va
             }
         }
         AstNode::MapLiteral { .. } => ValueKind::Map,
+        AstNode::SetLiteral { .. } => ValueKind::Set,
         AstNode::StructInit { .. } => ValueKind::Struct,
         AstNode::Identifier(name) => variables.get(name).map(|v| v.kind).unwrap_or_else(|| {
             // Check if it's a global variable with a known type
@@ -431,7 +433,18 @@ fn infer_value_kind(node: &AstNode, variables: &HashMap<String, LocalVar>) -> Va
             | "pad_left"
             | "pad_right"
             | "to_string"
-            | "char_at" => ValueKind::String,
+            | "char_at"
+            | "sha256"
+            | "hex_encode"
+            | "hex_decode"
+            | "base64_encode"
+            | "base64_decode"
+            | "path_join"
+            | "path_dir"
+            | "path_base"
+            | "path_ext"
+            | "path_stem" => ValueKind::String,
+            "fnv1a" => ValueKind::Int,
             "split" | "args" | "keys" | "values" | "list_dir" | "chars" | "sort" | "slice" => {
                 ValueKind::ListString
             }
@@ -548,8 +561,20 @@ fn collect_strings(node: &AstNode, strings: &mut Vec<String>) {
                 collect_strings(e, strings);
             }
         }
-        AstNode::For { body, .. } => {
+        AstNode::For { iterable, body, .. } => {
+            collect_strings(iterable, strings);
             collect_strings(body, strings);
+        }
+        AstNode::MapLiteral { entries, .. } => {
+            for (key, value) in entries {
+                collect_strings(key, strings);
+                collect_strings(value, strings);
+            }
+        }
+        AstNode::SetLiteral { elements, .. } => {
+            for elem in elements {
+                collect_strings(elem, strings);
+            }
         }
         AstNode::Assign { value, .. } => {
             collect_strings(value, strings);
@@ -851,6 +876,16 @@ pub fn compile_module(
         if let AstNode::StructDecl { name, fields, .. } = node {
             crate::register_struct_layout(name, fields);
             eprintln!("Registered struct '{}' with {} fields", name, fields.len());
+        }
+    }
+
+    // Pass 0.1: Register type aliases
+    for node in &ast_nodes {
+        if let AstNode::TypeAlias { name, target } = node {
+            // If the target is a struct, register the alias as pointing to the same layout
+            if crate::get_struct_layout(target).is_some() {
+                crate::register_struct_alias(name, target);
+            }
         }
     }
 
@@ -2169,6 +2204,10 @@ fn compile_stmt(
         } => {
             // Simplified for loop using index-based iteration
 
+            // Determine iterable kind before compiling
+            let iter_kind_pre = infer_value_kind(iterable, variables);
+            let is_string_iter = matches!(iter_kind_pre, ValueKind::String);
+
             // Compile the iterable and get length
             let list_val = compile_expr(
                 builder,
@@ -2183,10 +2222,11 @@ fn compile_stmt(
                 global_data_ids,
             )?;
 
-            // Get list length
+            // Get length — dispatch based on iterable type
+            let len_func_name = if is_string_iter { "forge_cstring_len" } else { "forge_list_len" };
             let len_func_id = runtime_funcs
-                .get("forge_list_len")
-                .ok_or_else(|| CompileError::UnknownFunction("forge_list_len".to_string()))?;
+                .get(len_func_name)
+                .ok_or_else(|| CompileError::UnknownFunction(len_func_name.to_string()))?;
             let len_func_ref = module.declare_func_in_func(*len_func_id, builder.func);
             let len_call = builder.ins().call(len_func_ref, &[list_val]);
             let len_val = builder.func.dfg.first_result(len_call);
@@ -2226,13 +2266,24 @@ fn compile_stmt(
             // Get the current index
             let cur_idx = builder.use_var(idx_var);
 
-            // Get the element at current index from the list
-            let get_func_id = runtime_funcs
-                .get("forge_list_get_value")
-                .ok_or_else(|| CompileError::UnknownFunction("forge_list_get_value".to_string()))?;
-            let get_func_ref = module.declare_func_in_func(*get_func_id, builder.func);
-            let get_call = builder.ins().call(get_func_ref, &[list_val, cur_idx]);
-            let element_val = builder.func.dfg.first_result(get_call);
+            // Get the element at current index
+            let element_val = if is_string_iter {
+                // String iteration: get char at index
+                let char_at_id = runtime_funcs
+                    .get("forge_cstring_char_at")
+                    .ok_or_else(|| CompileError::UnknownFunction("forge_cstring_char_at".to_string()))?;
+                let char_at_ref = module.declare_func_in_func(*char_at_id, builder.func);
+                let get_call = builder.ins().call(char_at_ref, &[list_val, cur_idx]);
+                builder.func.dfg.first_result(get_call)
+            } else {
+                // List iteration: get element by index
+                let get_func_id = runtime_funcs
+                    .get("forge_list_get_value")
+                    .ok_or_else(|| CompileError::UnknownFunction("forge_list_get_value".to_string()))?;
+                let get_func_ref = module.declare_func_in_func(*get_func_id, builder.func);
+                let get_call = builder.ins().call(get_func_ref, &[list_val, cur_idx]);
+                builder.func.dfg.first_result(get_call)
+            };
 
             // Create loop variable with the element value
             let loop_var = next_variable();
@@ -2242,6 +2293,7 @@ fn compile_stmt(
             // Infer loop variable kind from iterable type
             let iter_kind = infer_value_kind(iterable, variables);
             let elem_kind = match iter_kind {
+                ValueKind::String => ValueKind::String,
                 ValueKind::ListString => ValueKind::String,
                 ValueKind::ListUnknown => {
                     // Check if the iterable variable has a List[StructName] annotation
@@ -2853,7 +2905,8 @@ fn compile_expr(
             for (key, value) in entries {
                 let key_val = match key {
                     AstNode::StringLiteral(s) => {
-                        if let Some(&str_func_id) = string_funcs.get(s.as_str()) {
+                        let stripped = strip_string_quotes(s);
+                        if let Some(&str_func_id) = string_funcs.get(stripped.as_str()) {
                             let str_func_ref =
                                 module.declare_func_in_func(str_func_id, builder.func);
                             let call = builder.ins().call(str_func_ref, &[]);
@@ -2890,6 +2943,44 @@ fn compile_expr(
             }
 
             Ok(map_val)
+        }
+
+        AstNode::SetLiteral { elements, .. } => {
+            // Determine element type from first element
+            let is_int_elem = elements
+                .first()
+                .map(|e| matches!(e, AstNode::IntLiteral(_)))
+                .unwrap_or(false);
+            let elem_type = if is_int_elem { 0i32 } else { 1i32 };
+
+            // Call forge_set_new_handle(elem_type) -> i64
+            let set_new_func = runtime_funcs
+                .get("forge_set_new_handle")
+                .ok_or_else(|| CompileError::UnknownFunction("forge_set_new_handle".to_string()))?;
+            let set_new_ref = module.declare_func_in_func(*set_new_func, builder.func);
+            let elem_type_val = builder.ins().iconst(types::I32, elem_type as i64);
+            let new_call = builder.ins().call(set_new_ref, &[elem_type_val]);
+            let set_val = builder.func.dfg.first_result(new_call);
+
+            // Insert each element
+            let add_func_name = if is_int_elem {
+                "forge_set_add_ikey"
+            } else {
+                "forge_set_add_cstr"
+            };
+            // For now we only have cstr variant; int sets would need forge_set_add_ikey
+            if let Some(&add_id) = runtime_funcs.get(add_func_name) {
+                let add_ref = module.declare_func_in_func(add_id, builder.func);
+                for elem in elements {
+                    let elem_val = compile_expr(
+                        builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                        module, elem, func_signatures, lambda_funcs, global_data_ids,
+                    )?;
+                    builder.ins().call(add_ref, &[set_val, elem_val]);
+                }
+            }
+
+            Ok(set_val)
         }
 
         AstNode::Try { expr } => {
@@ -3212,6 +3303,15 @@ fn compile_expr(
                             }
                             ValueKind::Map | ValueKind::MapIntKey => {
                                 if let Some(&len_id) = runtime_funcs.get("forge_map_len_handle") {
+                                    let len_ref = module.declare_func_in_func(len_id, builder.func);
+                                    let call = builder.ins().call(len_ref, &[obj_val]);
+                                    Ok(builder.func.dfg.first_result(call))
+                                } else {
+                                    Ok(builder.ins().iconst(types::I64, 0))
+                                }
+                            }
+                            ValueKind::Set => {
+                                if let Some(&len_id) = runtime_funcs.get("forge_set_len_handle") {
                                     let len_ref = module.declare_func_in_func(len_id, builder.func);
                                     let call = builder.ins().call(len_ref, &[obj_val]);
                                     Ok(builder.func.dfg.first_result(call))
@@ -3877,6 +3977,7 @@ fn compile_expr(
                 let len_func_name = match arg_kind {
                     ValueKind::String => "forge_cstring_len",
                     ValueKind::Map | ValueKind::MapIntKey => "forge_map_len_handle",
+                    ValueKind::Set => "forge_set_len_handle",
                     _ => "forge_list_len",
                 };
                 if let Some(&len_id) = runtime_funcs.get(len_func_name) {
@@ -3919,6 +4020,22 @@ fn compile_expr(
                         if let Some(&cid) = runtime_funcs.get("forge_cstring_contains") {
                             let cref = module.declare_func_in_func(cid, builder.func);
                             let call = builder.ins().call(cref, &[haystack, needle]);
+                            return Ok(builder.func.dfg.first_result(call));
+                        }
+                    }
+                    ValueKind::Set => {
+                        // Set contains: forge_set_contains_cstr(set, elem)
+                        let set_val = compile_expr(
+                            builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                            module, &args[0], func_signatures, lambda_funcs, global_data_ids,
+                        )?;
+                        let elem_val = compile_expr(
+                            builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                            module, &args[1], func_signatures, lambda_funcs, global_data_ids,
+                        )?;
+                        if let Some(&cid) = runtime_funcs.get("forge_set_contains_cstr") {
+                            let cref = module.declare_func_in_func(cid, builder.func);
+                            let call = builder.ins().call(cref, &[set_val, elem_val]);
                             return Ok(builder.func.dfg.first_result(call));
                         }
                     }
@@ -4342,7 +4459,7 @@ fn compile_expr(
             }
 
             // Check for map method calls
-            let map_methods = ["contains_key", "keys", "values", "insert", "remove", "get"];
+            let map_methods = ["contains_key", "keys", "values", "insert", "remove", "get", "clear", "is_empty"];
             // Only dispatch to map methods if the first arg is actually a map.
             let first_arg_map_kind = args
                 .first()
@@ -4504,7 +4621,12 @@ fn compile_expr(
                 }
 
                 if func == "values" {
-                    // For now, return empty list (values is rarely used in self-host)
+                    if let Some(&values_id) = runtime_funcs.get("forge_map_values_handle") {
+                        let values_ref = module.declare_func_in_func(values_id, builder.func);
+                        let call = builder.ins().call(values_ref, &[map_val]);
+                        return Ok(builder.func.dfg.first_result(call));
+                    }
+                    // Fallback: return empty list
                     let list_new_id = runtime_funcs.get("forge_list_new").ok_or_else(|| {
                         CompileError::UnknownFunction("forge_list_new".to_string())
                     })?;
@@ -4513,6 +4635,23 @@ fn compile_expr(
                     let type_tag = builder.ins().iconst(types::I32, 0);
                     let call = builder.ins().call(list_new_ref, &[elem_size, type_tag]);
                     return Ok(builder.func.dfg.first_result(call));
+                }
+
+                if func == "clear" {
+                    if let Some(&clear_id) = runtime_funcs.get("forge_map_clear_handle") {
+                        let clear_ref = module.declare_func_in_func(clear_id, builder.func);
+                        builder.ins().call(clear_ref, &[map_val]);
+                    }
+                    return Ok(builder.ins().iconst(types::I64, 0));
+                }
+
+                if func == "is_empty" {
+                    if let Some(&is_empty_id) = runtime_funcs.get("forge_map_is_empty_handle") {
+                        let is_empty_ref = module.declare_func_in_func(is_empty_id, builder.func);
+                        let call = builder.ins().call(is_empty_ref, &[map_val]);
+                        return Ok(builder.func.dfg.first_result(call));
+                    }
+                    return Ok(builder.ins().iconst(types::I64, 0));
                 }
 
                 let runtime_func_name = format!("forge_map_{}", func);
@@ -4540,6 +4679,67 @@ fn compile_expr(
                         Ok(builder.ins().iconst(types::I64, 0))
                     };
                 }
+            }
+
+            // Check for set method calls
+            let set_methods = ["contains", "add", "remove", "len", "clear", "is_empty"];
+            let first_arg_set_kind = args
+                .first()
+                .map(|a| infer_value_kind(a, variables))
+                .unwrap_or(ValueKind::Unknown);
+            if set_methods.contains(&func.as_str()) && !args.is_empty() && matches!(first_arg_set_kind, ValueKind::Set) {
+                let set_val = compile_expr(
+                    builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                    module, &args[0], func_signatures, lambda_funcs, global_data_ids,
+                )?;
+
+                if func == "len" {
+                    if let Some(&len_id) = runtime_funcs.get("forge_set_len_handle") {
+                        let len_ref = module.declare_func_in_func(len_id, builder.func);
+                        let call = builder.ins().call(len_ref, &[set_val]);
+                        return Ok(builder.func.dfg.first_result(call));
+                    }
+                }
+
+                if (func == "contains" || func == "add" || func == "remove") && args.len() >= 2 {
+                    let elem_val = compile_expr(
+                        builder, variables, runtime_funcs, declared_funcs, string_funcs,
+                        module, &args[1], func_signatures, lambda_funcs, global_data_ids,
+                    )?;
+                    let rt_name = match func.as_str() {
+                        "contains" => "forge_set_contains_cstr",
+                        "add" => "forge_set_add_cstr",
+                        "remove" => "forge_set_remove_cstr",
+                        _ => unreachable!(),
+                    };
+                    if let Some(&func_id) = runtime_funcs.get(rt_name) {
+                        let func_ref = module.declare_func_in_func(func_id, builder.func);
+                        let call = builder.ins().call(func_ref, &[set_val, elem_val]);
+                        return if !builder.func.dfg.inst_results(call).is_empty() {
+                            Ok(builder.func.dfg.first_result(call))
+                        } else {
+                            Ok(builder.ins().iconst(types::I64, 0))
+                        };
+                    }
+                }
+
+                if func == "clear" {
+                    if let Some(&clear_id) = runtime_funcs.get("forge_set_clear_handle") {
+                        let clear_ref = module.declare_func_in_func(clear_id, builder.func);
+                        builder.ins().call(clear_ref, &[set_val]);
+                    }
+                    return Ok(builder.ins().iconst(types::I64, 0));
+                }
+
+                if func == "is_empty" {
+                    if let Some(&ie_id) = runtime_funcs.get("forge_set_is_empty_handle") {
+                        let ie_ref = module.declare_func_in_func(ie_id, builder.func);
+                        let call = builder.ins().call(ie_ref, &[set_val]);
+                        return Ok(builder.func.dfg.first_result(call));
+                    }
+                }
+
+                return Ok(builder.ins().iconst(types::I64, 0));
             }
 
             // Handle to_string type-aware dispatch

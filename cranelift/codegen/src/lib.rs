@@ -131,6 +131,28 @@ pub fn get_struct_layout(name: &str) -> Option<Vec<(String, usize)>> {
         .and_then(|map| map.get(name).cloned())
 }
 
+/// Register a type alias: copy the struct layout and field types from target to alias name
+pub fn register_struct_alias(alias: &str, target: &str) {
+    let layouts = STRUCT_LAYOUTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let ftypes = STRUCT_FIELD_TYPES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = layouts.lock() {
+        if let Some(layout) = map.get(target).cloned() {
+            drop(map);
+            if let Ok(mut map) = layouts.lock() {
+                map.insert(alias.to_string(), layout);
+            }
+        }
+    }
+    if let Ok(map) = ftypes.lock() {
+        if let Some(types) = map.get(target).cloned() {
+            drop(map);
+            if let Ok(mut map) = ftypes.lock() {
+                map.insert(alias.to_string(), types);
+            }
+        }
+    }
+}
+
 pub fn get_struct_field_offset(struct_name: &str, field_name: &str) -> Option<usize> {
     get_struct_layout(struct_name).and_then(|fields| {
         fields
@@ -1958,6 +1980,90 @@ pub fn declare_runtime_functions(
         &[types::I64], // returns length
     )?;
     funcs.insert("forge_map_len_handle".to_string(), map_len_handle);
+
+    // Map clear via handle
+    let map_clear_handle = declare_runtime_function(
+        module,
+        "forge_map_clear_handle",
+        &[types::I64], // map_handle
+        &[],           // void
+    )?;
+    funcs.insert("forge_map_clear_handle".to_string(), map_clear_handle);
+
+    // Map is_empty via handle
+    let map_is_empty_handle = declare_runtime_function(
+        module,
+        "forge_map_is_empty_handle",
+        &[types::I64], // map_handle
+        &[types::I64], // returns 1 if empty, 0 otherwise
+    )?;
+    funcs.insert("forge_map_is_empty_handle".to_string(), map_is_empty_handle);
+
+    // Map values via handle
+    let map_values_handle = declare_runtime_function(
+        module,
+        "forge_map_values_handle",
+        &[types::I64], // map_handle
+        &[types::I64], // returns ForgeList as i64
+    )?;
+    funcs.insert("forge_map_values_handle".to_string(), map_values_handle);
+
+    // Set functions (handle-based)
+    let set_new_handle = declare_runtime_function(
+        module,
+        "forge_set_new_handle",
+        &[types::I32], // elem_type
+        &[types::I64], // returns SetImpl ptr as i64
+    )?;
+    funcs.insert("forge_set_new_handle".to_string(), set_new_handle);
+
+    let set_len_handle = declare_runtime_function(
+        module,
+        "forge_set_len_handle",
+        &[types::I64], // set_handle
+        &[types::I64], // returns length
+    )?;
+    funcs.insert("forge_set_len_handle".to_string(), set_len_handle);
+
+    let set_add_cstr = declare_runtime_function(
+        module,
+        "forge_set_add_cstr",
+        &[types::I64, types::I64], // set_handle, elem (cstr ptr)
+        &[types::I64],             // returns 1 if new, 0 if existed
+    )?;
+    funcs.insert("forge_set_add_cstr".to_string(), set_add_cstr);
+
+    let set_contains_cstr = declare_runtime_function(
+        module,
+        "forge_set_contains_cstr",
+        &[types::I64, types::I64], // set_handle, elem (cstr ptr)
+        &[types::I64],             // returns 1 if present, 0 otherwise
+    )?;
+    funcs.insert("forge_set_contains_cstr".to_string(), set_contains_cstr);
+
+    let set_remove_cstr = declare_runtime_function(
+        module,
+        "forge_set_remove_cstr",
+        &[types::I64, types::I64], // set_handle, elem (cstr ptr)
+        &[],                       // void
+    )?;
+    funcs.insert("forge_set_remove_cstr".to_string(), set_remove_cstr);
+
+    let set_clear_handle = declare_runtime_function(
+        module,
+        "forge_set_clear_handle",
+        &[types::I64], // set_handle
+        &[],           // void
+    )?;
+    funcs.insert("forge_set_clear_handle".to_string(), set_clear_handle);
+
+    let set_is_empty_handle = declare_runtime_function(
+        module,
+        "forge_set_is_empty_handle",
+        &[types::I64], // set_handle
+        &[types::I64], // returns 1 if empty, 0 otherwise
+    )?;
+    funcs.insert("forge_set_is_empty_handle".to_string(), set_is_empty_handle);
 
     // args() returning a List (ForgeList)
     let args_to_list = declare_runtime_function(

@@ -399,6 +399,96 @@ pub unsafe extern "C" fn forge_set_to_list_string(
     list
 }
 
+// ---------------------------------------------------------------------------
+// Handle-based C-string variants for Cranelift codegen
+// ---------------------------------------------------------------------------
+
+unsafe fn cstr_to_set_element(s: *const i8) -> SetElement {
+    let mut len = 0usize;
+    let mut p = s;
+    while *p != 0 {
+        len += 1;
+        p = p.add(1);
+    }
+    let bytes = std::slice::from_raw_parts(s as *const u8, len);
+    SetElement::String(bytes.to_vec())
+}
+
+/// Create a new string set (handle-based). Returns SetImpl pointer as i64.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_new_handle(elem_type: i32) -> i64 {
+    let etype = match elem_type {
+        1 => ElemType::String,
+        _ => ElemType::Int,
+    };
+    let set_impl = SetImpl::new(etype, 8, false);
+    let boxed = Box::new(set_impl);
+    Box::into_raw(boxed) as i64
+}
+
+/// Get set length (handle-based).
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_len_handle(set_handle: i64) -> i64 {
+    if set_handle == 0 {
+        return 0;
+    }
+    let impl_ref = &*(set_handle as *const SetImpl);
+    impl_ref.len() as i64
+}
+
+/// Insert a C-string element into the set. Returns 1 if newly inserted, 0 if already present.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_add_cstr(set_handle: i64, elem: *const i8) -> i64 {
+    if set_handle == 0 || elem.is_null() {
+        return 0;
+    }
+    let impl_ref = &mut *(set_handle as *mut SetImpl);
+    let set_elem = cstr_to_set_element(elem);
+    if impl_ref.insert(set_elem) { 1 } else { 0 }
+}
+
+/// Check if a C-string element exists in the set. Returns 1 if present, 0 otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_contains_cstr(set_handle: i64, elem: *const i8) -> i64 {
+    if set_handle == 0 || elem.is_null() {
+        return 0;
+    }
+    let impl_ref = &*(set_handle as *const SetImpl);
+    let set_elem = cstr_to_set_element(elem);
+    if impl_ref.contains(&set_elem) { 1 } else { 0 }
+}
+
+/// Remove a C-string element from the set.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_remove_cstr(set_handle: i64, elem: *const i8) {
+    if set_handle == 0 || elem.is_null() {
+        return;
+    }
+    let impl_ref = &mut *(set_handle as *mut SetImpl);
+    let set_elem = cstr_to_set_element(elem);
+    impl_ref.remove(&set_elem);
+}
+
+/// Clear all elements from set (handle-based).
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_clear_handle(set_handle: i64) {
+    if set_handle == 0 {
+        return;
+    }
+    let impl_ref = &mut *(set_handle as *mut SetImpl);
+    impl_ref.clear();
+}
+
+/// Check if set is empty (handle-based). Returns 1 if empty, 0 otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_is_empty_handle(set_handle: i64) -> i64 {
+    if set_handle == 0 {
+        return 1;
+    }
+    let impl_ref = &*(set_handle as *const SetImpl);
+    if impl_ref.len() == 0 { 1 } else { 0 }
+}
+
 /// Destructor for set elements in collections
 ///
 /// Called by cycle collector when freeing cyclic set objects
