@@ -611,6 +611,33 @@ fn collect_strings(node: &AstNode, strings: &mut Vec<String>) {
             collect_strings(expr, strings);
             collect_strings(index, strings);
         }
+        AstNode::Match { expr, arms } => {
+            collect_strings(expr, strings);
+            for arm in arms {
+                collect_strings(&arm.expr, strings);
+            }
+        }
+        AstNode::StructInit { fields, .. } => {
+            for (_, value) in fields {
+                collect_strings(value, strings);
+            }
+        }
+        AstNode::EnumVariantConstruct { args, .. } => {
+            for arg in args {
+                collect_strings(arg, strings);
+            }
+        }
+        AstNode::FieldAccess { obj, .. } => {
+            collect_strings(obj, strings);
+        }
+        AstNode::Lambda { body, .. } => {
+            collect_strings(body, strings);
+        }
+        AstNode::ImplBlock { methods, .. } => {
+            for method in methods {
+                collect_strings(method, strings);
+            }
+        }
         _ => {}
     }
 }

@@ -224,10 +224,11 @@ fn build_file(path: &str) {
 }
 
 fn run_file(path: &str) {
-    use forge_codegen::compiler::compile_module_from_text;
+    use forge_codegen::compiler::compile_module_from_text_with_imports;
     use forge_codegen::create_codegen;
     use forge_codegen::finalize_module;
     use forge_codegen::linker::build_executable;
+    use forge_codegen::CompileError;
 
     eprintln!("Running {} with Cranelift backend...", path);
 
@@ -240,9 +241,16 @@ fn run_file(path: &str) {
         }
     };
 
+    // Create callback for import resolution
+    let get_ast_callback = |file_path: &str| -> Result<String, CompileError> {
+        get_ast_from_compiler(file_path).map_err(|e| {
+            CompileError::ModuleError(format!("Failed to get AST for {}: {}", file_path, e))
+        })
+    };
+
     match create_codegen() {
         Ok(mut codegen) => {
-            match compile_module_from_text(&mut codegen, &ast_text) {
+            match compile_module_from_text_with_imports(&mut codegen, &ast_text, path, &get_ast_callback) {
                 Ok(_funcs) => {
                     match finalize_module(codegen.module) {
                         Ok(bytes) => {

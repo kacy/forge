@@ -26,6 +26,7 @@ struct AstLine {
 pub struct TextAstParser {
     lines: Vec<AstLine>,
     pos: usize,
+    next_is_pub: bool,
 }
 
 impl TextAstParser {
@@ -67,7 +68,7 @@ impl TextAstParser {
             });
         }
 
-        Ok(TextAstParser { lines, pos: 0 })
+        Ok(TextAstParser { lines, pos: 0, next_is_pub: false })
     }
 
     /// Get current line
@@ -155,6 +156,7 @@ impl TextAstParser {
             "test" => self.parse_test(),
             "bind" => self.parse_top_level_bind(),
             "pub" => {
+                self.next_is_pub = true;
                 self.advance();
                 self.parse_top_level()
             }
@@ -175,6 +177,7 @@ impl TextAstParser {
 
     /// Parse a function declaration
     fn parse_function(&mut self) -> Result<AstNode, CompileError> {
+        self.next_is_pub = false; // consume pub flag (functions always exported)
         let line = self.current().unwrap();
         let name = line
             .value
@@ -272,7 +275,7 @@ impl TextAstParser {
         let line = self.current().unwrap();
         let name = line.value.clone();
         let _indent = line.indent;
-        let is_pub = false; // TODO: track pub status
+        let is_pub = std::mem::replace(&mut self.next_is_pub, false);
         self.advance();
 
         let mut fields = Vec::new();
@@ -323,7 +326,7 @@ impl TextAstParser {
         let line = self.current().unwrap();
         let name = line.value.clone();
         let enum_indent = line.indent;
-        let is_pub = false; // TODO: track pub status
+        let is_pub = std::mem::replace(&mut self.next_is_pub, false);
         self.advance();
 
         let mut variants = Vec::new();
@@ -375,7 +378,7 @@ impl TextAstParser {
         let line = self.current().unwrap();
         let name = line.value.clone();
         let interface_indent = line.indent;
-        let is_pub = false;
+        let is_pub = std::mem::replace(&mut self.next_is_pub, false);
         self.advance();
 
         let mut methods = Vec::new();
@@ -596,6 +599,7 @@ impl TextAstParser {
     /// Parse a top-level bind (global variable declaration)
     /// e.g., mut d_count: Int := 0
     fn parse_top_level_bind(&mut self) -> Result<AstNode, CompileError> {
+        self.next_is_pub = false; // consume pub flag (globals: TODO use for linkage)
         let line = self.current().unwrap();
         let name = line
             .value
