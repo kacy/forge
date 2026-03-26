@@ -339,6 +339,103 @@ impl Monomorphizer {
     }
 }
 
+/// Try to infer the concrete type of an AST expression for monomorphization (with variable context)
+pub fn infer_arg_type_from_node(
+    node: &AstNode,
+    variables: &std::collections::HashMap<String, crate::compiler::LocalVar>,
+) -> Option<String> {
+    match node {
+        AstNode::Identifier(name) => {
+            if let Some(var_info) = variables.get(name) {
+                if matches!(var_info.kind, crate::compiler::ValueKind::Struct) {
+                    return crate::get_var_struct_type(name);
+                }
+            }
+            if let Some(stype) = crate::get_var_struct_type(name) {
+                return Some(stype);
+            }
+            infer_arg_type(node)
+        }
+        _ => infer_arg_type(node),
+    }
+}
+
+/// Try to infer the concrete type of an AST expression for monomorphization
+fn infer_arg_type(node: &AstNode) -> Option<String> {
+    match node {
+        AstNode::IntLiteral(_) => Some("Int".to_string()),
+        AstNode::FloatLiteral(_) => Some("Float".to_string()),
+        AstNode::BoolLiteral(_) => Some("Bool".to_string()),
+        AstNode::StringLiteral(_) | AstNode::StringInterp { .. } => Some("String".to_string()),
+        AstNode::Identifier(name) => {
+            // Check variable type from struct type tracking and type annotations
+            if let Some(stype) = crate::get_var_struct_type(name) {
+                Some(stype)
+            } else if crate::get_struct_layout(name).is_some() {
+                // The identifier itself is a struct type name
+                Some(name.clone())
+            } else {
+                None
+            }
+        }
+        AstNode::StructInit { name, .. } => Some(name.clone()),
+        AstNode::Call { func, .. } => {
+            // If calling a struct constructor
+            if crate::get_struct_layout(func).is_some() {
+                Some(func.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Pre-scan function bodies to build variable-to-type mappings for monomorphization
+pub fn prescan_variable_types(ast_nodes: &[AstNode]) {
+    for node in ast_nodes {
+        if let AstNode::Function { body, .. } = node {
+            prescan_types_in_node(body);
+        }
+    }
+}
+
+fn prescan_types_in_node(node: &AstNode) {
+    match node {
+        AstNode::Let { name, value, type_annotation, .. } => {
+            // If the value is a struct constructor, record the type
+            if let AstNode::Call { func, .. } = value.as_ref() {
+                if crate::get_struct_layout(func).is_some() {
+                    crate::set_var_struct_type(name, func);
+                }
+            }
+            if let AstNode::StructInit { name: sname, .. } = value.as_ref() {
+                crate::set_var_struct_type(name, sname);
+            }
+            // Check type annotation
+            if let Some(ann) = type_annotation {
+                if crate::get_struct_layout(ann).is_some() {
+                    crate::set_var_struct_type(name, ann);
+                }
+            }
+            prescan_types_in_node(value);
+        }
+        AstNode::Block(stmts) => {
+            for s in stmts {
+                prescan_types_in_node(s);
+            }
+        }
+        AstNode::If { cond, then_branch, else_branch } => {
+            prescan_types_in_node(cond);
+            prescan_types_in_node(then_branch);
+            if let Some(e) = else_branch {
+                prescan_types_in_node(e);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Pre-scan AST to collect all generic function instantiations
 /// This should be called after registering generic declarations
 pub fn collect_generic_instantiations(
@@ -367,6 +464,20 @@ fn collect_instantiations_in_node(
                 if let Some((base_name, type_args)) = mono.parse_generic_call(func) {
                     let inst_name = mono.mangle_instantiation(&base_name, &type_args);
                     instantiations.push((inst_name, base_name, type_args));
+                }
+            }
+            // Check if calling a generic function by base name (type inferred from args)
+            // e.g., show(pt) where show is generic and pt is a Point
+            if mono.generic_decls.contains_key(func) {
+                // Try to infer type from first argument
+                if let Some(first_arg) = args.first() {
+                    if let Some(type_name) = infer_arg_type(first_arg) {
+                        let type_args = vec![type_name];
+                        let inst_name = mono.mangle_instantiation(func, &type_args);
+                        if !instantiations.iter().any(|(n, _, _)| n == &inst_name) {
+                            instantiations.push((inst_name, func.clone(), type_args));
+                        }
+                    }
                 }
             }
             // Recurse into arguments

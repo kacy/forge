@@ -938,6 +938,9 @@ pub fn compile_module(
         }
     }
 
+    // Pre-scan variable types for monomorphization inference
+    crate::monomorphize::prescan_variable_types(&all_nodes);
+
     // Collect all generic instantiations from the AST
     let instantiations =
         crate::monomorphize::collect_generic_instantiations(&all_nodes, &monomorphizer);
@@ -4955,9 +4958,26 @@ fn compile_expr(
             };
 
             // User-defined functions take priority over runtime aliases
+            // Also check for monomorphized generic functions (e.g., show -> show_Point)
             let Some(func_id) = declared_funcs
                 .get(func)
                 .copied()
+                .or_else(|| {
+                    // Try generic function resolution: infer type from first arg
+                    if !arg_values.is_empty() {
+                        let type_name = crate::monomorphize::infer_arg_type_from_node(
+                            args.first().unwrap(), variables,
+                        );
+                        if let Some(tn) = type_name {
+                            let mangled = format!("{}_{}", func, tn);
+                            declared_funcs.get(&mangled).copied()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
                 .or_else(|| runtime_funcs.get(func_name).copied())
                 .or_else(|| runtime_funcs.get(func).copied())
             else {
