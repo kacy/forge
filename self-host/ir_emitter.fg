@@ -252,6 +252,10 @@ fn ir_expr(idx: Int) -> Int:
             mname = "string_len"
         if mname == "contains" and obj_is_string:
             mname = "string_contains"
+        # track that these methods return bools
+        bool_methods := "contains,starts_with,ends_with,is_empty,string_contains"
+        if bool_methods.contains(mname):
+            ir_var_types.insert("__last_call", "bool")
 
         mut obj_r := 0 - 1
         mut arg_regs: List[Int] := []
@@ -285,6 +289,49 @@ fn ir_expr(idx: Int) -> Int:
                 ir_emit("strref " + part_r.to_string() + " " + si.to_string())
             else:
                 part_r = ir_expr(child)
+                # wrap non-string expressions in to_string for concat
+                # methods that return strings: trim, substring, split, join, etc.
+                string_methods := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at"
+                needs_convert := true
+                if cn.kind == "ident":
+                    # default: assume ident is a string (common in interp)
+                    # only convert if we know it's non-string
+                    needs_convert = false
+                    iname := cn.value
+                    if ir_var_types.contains_key(iname):
+                        vt := ir_var_types[iname]
+                        if vt == "int" or vt == "bool":
+                            needs_convert = true
+                elif cn.kind == "string_lit" or cn.kind == "string":
+                    needs_convert = false
+                elif cn.kind == "method_call":
+                    meth := cn.value
+                    if meth.starts_with("."):
+                        meth = meth.substring(1, meth.len())
+                    if string_methods.contains(meth):
+                        needs_convert = false
+                    elif meth == "to_string":
+                        needs_convert = false
+                    # bool-returning methods need bool_to_string
+                    bool_meths := "contains,starts_with,ends_with,is_empty"
+                    if bool_meths.contains(meth):
+                        needs_convert = true  # but use bool_to_string
+                        ts_r2 := ir_reg()
+                        ir_emit("call " + ts_r2.to_string() + " bool_to_string 1 " + part_r.to_string())
+                        part_r = ts_r2
+                        needs_convert = false
+                elif cn.kind == "call":
+                    # check if it's a known string-returning function
+                    if cn.children.len() > 0:
+                        call_fn := get_node(cn.children[0])
+                        if call_fn.kind == "ident":
+                            fname := call_fn.value
+                            if fname == "chr" or fname == "read_file" or fname == "env":
+                                needs_convert = false
+                if needs_convert:
+                    ts_r := ir_reg()
+                    ir_emit("call " + ts_r.to_string() + " to_string 1 " + part_r.to_string())
+                    part_r = ts_r
             if result_r < 0:
                 result_r = part_r
             else:
