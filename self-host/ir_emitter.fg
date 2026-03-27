@@ -324,6 +324,30 @@ fn ir_expr(idx: Int) -> Int:
             mname = "set_len"
         if mname == "contains" and obj_is_string:
             mname = "string_contains"
+        elif mname == "contains" and obj_is_set:
+            mname = "set_contains"
+        elif mname == "contains_key" and obj_is_map:
+            mname = "map_contains_key"
+        # list methods
+        mut obj_is_list := false
+        if node.children.len() > 0:
+            on2 := get_node(node.children[0])
+            if on2.kind == "ident" and ir_var_types.contains_key(on2.value):
+                ovt2 := ir_var_types[on2.value]
+                if ovt2 == "list" or ovt2 == "list_string":
+                    obj_is_list = true
+        if mname == "contains" and obj_is_list:
+            mname = "list_contains"
+        if mname == "remove" and obj_is_list:
+            mname = "list_remove"
+        if mname == "is_empty" and obj_is_list:
+            mname = "list_is_empty"
+        if mname == "is_empty" and obj_is_map:
+            mname = "map_is_empty"
+        if mname == "clear" and obj_is_list:
+            mname = "list_clear"
+        if mname == "reverse" and obj_is_list:
+            mname = "list_reverse"
         # track that these methods return bools
         bool_methods := "contains,starts_with,ends_with,is_empty,string_contains"
         if bool_methods.contains(mname):
