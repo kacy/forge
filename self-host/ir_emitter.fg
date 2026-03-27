@@ -40,6 +40,7 @@ mut ir_next_label := 0
 mut ir_strings: List[String] := []
 mut ir_var_regs: Map[String, Int] := {}
 mut ir_var_types: Map[String, String] := {}  # variable name -> type hint ("int", "bool", "string")
+mut ir_struct_names: Map[String, Int] := {}  # struct name -> field count
 
 pub fn ir_reset():
     ir_lines = []
@@ -147,7 +148,33 @@ fn ir_expr(idx: Int) -> Int:
         # detect string concatenation: if either operand is a string, use concat
         left_node := get_node(node.children[0])
         right_node := get_node(node.children[1])
-        is_str_op := left_node.kind == "string_lit" or left_node.kind == "string" or left_node.kind == "lit" or left_node.kind == "string_interp" or right_node.kind == "string_lit" or right_node.kind == "string" or right_node.kind == "lit" or right_node.kind == "string_interp"
+        mut is_str_op := left_node.kind == "string_lit" or left_node.kind == "string" or left_node.kind == "lit" or left_node.kind == "string_interp" or right_node.kind == "string_lit" or right_node.kind == "string" or right_node.kind == "lit" or right_node.kind == "string_interp"
+        # also check if either operand is a string variable
+        if not is_str_op and left_node.kind == "ident":
+            if ir_var_types.contains_key(left_node.value):
+                if ir_var_types[left_node.value] == "string":
+                    is_str_op = true
+        if not is_str_op and right_node.kind == "ident":
+            if ir_var_types.contains_key(right_node.value):
+                if ir_var_types[right_node.value] == "string":
+                    is_str_op = true
+        # method calls that return strings
+        if not is_str_op and (left_node.kind == "method_call" or right_node.kind == "method_call"):
+            # assume method_call in concat context returns string
+            # (to_string, trim, substring, join, etc.)
+            is_str_op = true
+        # call results that are known string functions
+        if not is_str_op and (left_node.kind == "call" or right_node.kind == "call"):
+            # check if the called function is known to return a string
+            mut check_call := left_node
+            if check_call.kind != "call":
+                check_call = right_node
+            if check_call.children.len() > 0:
+                cn := get_node(check_call.children[0])
+                if cn.kind == "ident":
+                    cfn := cn.value
+                    if cfn == "chr" or cfn == "read_file" or cfn == "env" or cfn == "to_string":
+                        is_str_op = true
         if op == "add" and is_str_op:
             ir_emit("concat " + r.to_string() + " " + left_r.to_string() + " " + right_r.to_string())
         elif op == "add" and not is_str_op:
@@ -202,6 +229,17 @@ fn ir_expr(idx: Int) -> Int:
                 if cn.children.len() > 0:
                     ar := ir_expr(cn.children[0])
                     arg_regs.push(ar)
+        # check if this is a struct constructor
+        if ir_struct_names.contains_key(fname):
+            r := ir_reg()
+            nf := ir_reg()
+            ir_emit("iconst " + nf.to_string() + " " + arg_regs.len().to_string())
+            ir_emit("call " + r.to_string() + " __struct_alloc 1 " + nf.to_string())
+            mut si := 0
+            while si < arg_regs.len():
+                ir_emit("sstore " + r.to_string() + " " + si.to_string() + " " + arg_regs[si].to_string())
+                si = si + 1
+            return r
         r := ir_reg()
         mut args_s := ""
         mut i := 0
@@ -247,9 +285,25 @@ fn ir_expr(idx: Int) -> Int:
             mname = "bool_to_string"
         if mname == "to_string" and obj_is_string:
             mname = "identity"
+        # detect object type for map/set/list dispatch
+        mut obj_is_map := false
+        mut obj_is_set := false
+        if node.children.len() > 0:
+            on := get_node(node.children[0])
+            if on.kind == "ident":
+                if ir_var_types.contains_key(on.value):
+                    ovt := ir_var_types[on.value]
+                    if ovt == "map":
+                        obj_is_map = true
+                    elif ovt == "set":
+                        obj_is_set = true
         # dispatch len/contains based on object type
         if mname == "len" and obj_is_string:
             mname = "string_len"
+        elif mname == "len" and obj_is_map:
+            mname = "map_len"
+        elif mname == "len" and obj_is_set:
+            mname = "set_len"
         if mname == "contains" and obj_is_string:
             mname = "string_contains"
         # track that these methods return bools
@@ -291,7 +345,7 @@ fn ir_expr(idx: Int) -> Int:
                 part_r = ir_expr(child)
                 # wrap non-string expressions in to_string for concat
                 # methods that return strings: trim, substring, split, join, etc.
-                string_methods := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at"
+                string_methods := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at,join,split,read_file,env,chr"
                 needs_convert := true
                 if cn.kind == "ident":
                     # default: assume ident is a string (common in interp)
@@ -320,6 +374,16 @@ fn ir_expr(idx: Int) -> Int:
                         ir_emit("call " + ts_r2.to_string() + " bool_to_string 1 " + part_r.to_string())
                         part_r = ts_r2
                         needs_convert = false
+                elif cn.kind == "index":
+                    # list/string index in interp — often returns a string (from List[String] or s[i])
+                    # check if the indexed object is a known string list
+                    if cn.children.len() > 0:
+                        idx_obj := get_node(cn.children[0])
+                        if idx_obj.kind == "ident":
+                            if ir_var_types.contains_key(idx_obj.value):
+                                otype := ir_var_types[idx_obj.value]
+                                if otype == "list_string" or otype == "string":
+                                    needs_convert = false
                 elif cn.kind == "call":
                     # check if it's a known string-returning function
                     if cn.children.len() > 0:
@@ -344,15 +408,24 @@ fn ir_expr(idx: Int) -> Int:
         return result_r
 
     if node.kind == "map":
-        # map literal: create empty map
+        # map literal: create map and insert entries
         map_r := ir_reg()
         ir_emit("call " + map_r.to_string() + " __map_new 0")
-        # TODO: insert entries
+        # insert each entry (children are entry nodes with key/value pairs)
+        for child in node.children:
+            entry := get_node(child)
+            if entry.kind == "entry" and entry.children.len() >= 2:
+                k_r := ir_expr(entry.children[0])
+                v_r := ir_expr(entry.children[1])
+                ir_emit("call " + ir_reg().to_string() + " insert 3 " + map_r.to_string() + " " + k_r.to_string() + " " + v_r.to_string())
         return map_r
 
     if node.kind == "set":
         set_r := ir_reg()
         ir_emit("call " + set_r.to_string() + " __set_new 0")
+        for child in node.children:
+            elem_r := ir_expr(child)
+            ir_emit("call " + ir_reg().to_string() + " add 2 " + set_r.to_string() + " " + elem_r.to_string())
         return set_r
 
     if node.kind == "list":
@@ -489,16 +562,18 @@ fn ir_stmt(idx: Int):
             cn := get_node(child)
             if cn.kind == "type":
                 type_ann = cn.value
+            elif cn.kind == "generic_type":
+                type_ann = cn.value  # "Map", "List", "Set", etc.
             else:
                 val_idx = child
         # track type from annotation
-        if type_ann.contains("Map[") or type_ann.contains("Map"):
+        if type_ann.contains("Map[") or type_ann == "Map":
             ir_var_types.insert(name, "map")
-        elif type_ann.contains("Set[") or type_ann.contains("Set"):
+        elif type_ann.contains("Set[") or type_ann == "Set":
             ir_var_types.insert(name, "set")
         elif type_ann.contains("List[String]"):
             ir_var_types.insert(name, "list_string")
-        elif type_ann.contains("List["):
+        elif type_ann.contains("List[") or type_ann == "List":
             ir_var_types.insert(name, "list")
         elif type_ann == "String":
             ir_var_types.insert(name, "string")
@@ -520,6 +595,14 @@ fn ir_stmt(idx: Int):
                 ir_var_types.insert(name, "string")
             elif vn.kind == "bool_lit":
                 ir_var_types.insert(name, "bool")
+            elif vn.kind == "method_call":
+                mv := vn.value
+                if mv.starts_with("."):
+                    mv = mv.substring(1, mv.len())
+                if mv == "split" or mv == "keys" or mv == "values" or mv == "chars":
+                    ir_var_types.insert(name, "list_string")
+                elif mv == "trim" or mv == "substring" or mv == "to_upper" or mv == "to_lower" or mv == "replace" or mv == "join" or mv == "reverse":
+                    ir_var_types.insert(name, "string")
             elif vn.kind == "map":
                 ir_var_types.insert(name, "map")
             elif vn.kind == "set":
@@ -749,7 +832,8 @@ pub fn emit_ir(root_idx: Int) -> String:
         ir_emit("string " + i.to_string() + " " + chr(34) + ir_strings[i] + chr(34))
         i = i + 1
 
-    # emit struct declarations
+    # emit struct declarations and register names
+    ir_struct_names = {}
     for child in root.children:
         cn := get_node(child)
         if cn.kind == "struct_decl":
@@ -758,6 +842,7 @@ pub fn emit_ir(root_idx: Int) -> String:
                 fn_node := get_node(fc)
                 if fn_node.kind == "field":
                     field_names.push(fn_node.value)
+            ir_struct_names.insert(cn.value, field_names.len())
             ir_emit("struct " + cn.value + " " + field_names.join(" "))
 
     # emit functions
