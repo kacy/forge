@@ -347,6 +347,25 @@ fn compile_ir_function(
                 regs.insert(reg, v);
             }
 
+            "fadd" | "fsub" | "fmul" | "fdiv" if parts.len() >= 4 => {
+                let reg: usize = parts[1].parse().unwrap_or(0);
+                let a = get_reg(&regs, parts[2]);
+                let b = get_reg(&regs, parts[3]);
+                // Bitcast i64 → f64
+                let fa = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), a);
+                let fb = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), b);
+                let fv = match parts[0] {
+                    "fadd" => builder.ins().fadd(fa, fb),
+                    "fsub" => builder.ins().fsub(fa, fb),
+                    "fmul" => builder.ins().fmul(fa, fb),
+                    "fdiv" => builder.ins().fdiv(fa, fb),
+                    _ => unreachable!(),
+                };
+                // Bitcast f64 → i64
+                let v = builder.ins().bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), fv);
+                regs.insert(reg, v);
+            }
+
             "add" | "sub" | "mul" | "div" | "mod" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let a = get_reg(&regs, parts[2]);

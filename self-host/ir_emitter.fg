@@ -186,6 +186,17 @@ fn ir_expr(idx: Int) -> Int:
                     cfn := cn.value
                     if cfn == "chr" or cfn == "read_file" or cfn == "env" or cfn == "to_string":
                         is_str_op = true
+        # detect float operations
+        mut is_float_op := left_node.kind == "float_lit" or left_node.kind == "float" or right_node.kind == "float_lit" or right_node.kind == "float"
+        if not is_float_op and left_node.kind == "ident" and ir_var_types.contains_key(left_node.value):
+            if ir_var_types[left_node.value] == "float":
+                is_float_op = true
+        if not is_float_op and right_node.kind == "ident" and ir_var_types.contains_key(right_node.value):
+            if ir_var_types[right_node.value] == "float":
+                is_float_op = true
+        if is_float_op and (op == "add" or op == "sub" or op == "mul" or op == "div"):
+            ir_emit("f" + op + " " + r.to_string() + " " + left_r.to_string() + " " + right_r.to_string())
+            return r
         if op == "add" and is_str_op:
             ir_emit("concat " + r.to_string() + " " + left_r.to_string() + " " + right_r.to_string())
         elif op == "add" and not is_str_op:
