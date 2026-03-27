@@ -43,6 +43,8 @@ mut ir_var_types: Map[String, String] := {}  # variable name -> type hint ("int"
 mut ir_struct_names: Map[String, Int] := {}  # struct name -> field count
 mut ir_type_aliases: Map[String, String] := {}  # alias name -> target type
 mut ir_func_returns: Map[String, String] := {}  # function name -> return type hint
+mut ir_lambda_count := 0
+mut ir_lambda_bodies: List[String] := []  # deferred lambda function IR
 
 pub fn ir_reset():
     ir_lines = []
@@ -557,6 +559,61 @@ fn ir_expr(idx: Int) -> Int:
         ir_emit("iconst " + r.to_string() + " 0")
         return r
 
+    if node.kind == "lambda":
+        # compile lambda body as a separate function
+        lambda_name := "__lambda_" + ir_lambda_count.to_string()
+        ir_lambda_count = ir_lambda_count + 1
+        # collect params
+        mut lparams: List[String] := []
+        mut lbody_idx := 0 - 1
+        for child in node.children:
+            cn := get_node(child)
+            if cn.kind == "param":
+                lparams.push(cn.value)
+            elif cn.kind == "body":
+                lbody_idx = child
+        # save current state and emit lambda to deferred buffer
+        saved_regs := ir_next_reg
+        saved_vars := ir_var_regs
+        saved_types := ir_var_types
+        saved_lines := ir_lines
+        ir_next_reg = 0
+        ir_var_regs = {}
+        ir_var_types = {}
+        ir_lines = []
+        ir_emit("func " + lambda_name + " " + lparams.len().to_string() + " i64")
+        mut lpi := 0
+        while lpi < lparams.len():
+            lr := ir_reg()
+            ir_var_regs.insert(lparams[lpi], lr)
+            ir_emit("param " + lparams[lpi])
+            lpi = lpi + 1
+        if lbody_idx >= 0:
+            body_node := get_node(lbody_idx)
+            if body_node.kind == "body" and body_node.children.len() > 0:
+                br := ir_expr(body_node.children[0])
+                ir_emit("ret " + br.to_string())
+            else:
+                br := ir_expr(lbody_idx)
+                ir_emit("ret " + br.to_string())
+        dr := ir_reg()
+        ir_emit("iconst " + dr.to_string() + " 0")
+        ir_emit("ret " + dr.to_string())
+        ir_emit("endfunc")
+        # save lambda IR and restore state
+        mut li := 0
+        while li < ir_lines.len():
+            ir_lambda_bodies.push(ir_lines[li])
+            li = li + 1
+        ir_lines = saved_lines
+        ir_next_reg = saved_regs
+        ir_var_regs = saved_vars
+        ir_var_types = saved_types
+        # return function reference
+        r := ir_reg()
+        ir_emit("funcref " + r.to_string() + " " + lambda_name)
+        return r
+
     if node.kind == "grouped":
         if node.children.len() > 0:
             return ir_expr(node.children[0])
@@ -1005,6 +1062,9 @@ pub fn emit_ir(root_idx: Int) -> String:
                     ir_struct_names.insert(aname, nfields)
                     ir_emit("struct_alias " + aname + " " + target)
 
+    ir_lambda_count = 0
+    ir_lambda_bodies = []
+
     # collect function return types
     ir_func_returns = {}
     for child in root.children:
@@ -1025,5 +1085,11 @@ pub fn emit_ir(root_idx: Int) -> String:
         cn := get_node(child)
         if cn.kind == "fn" or cn.kind == "fn_decl":
             ir_func(child)
+
+    # append deferred lambda function bodies
+    mut li := 0
+    while li < ir_lambda_bodies.len():
+        ir_lines.push(ir_lambda_bodies[li])
+        li = li + 1
 
     return ir_lines.join("\n")

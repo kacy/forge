@@ -396,6 +396,17 @@ fn compile_ir_function(
                     } else {
                         regs.insert(reg, builder.ins().iconst(types::I64, 0));
                     }
+                } else if let Some(&var) = named_vars.get(fname) {
+                    // Indirect call through function pointer variable
+                    let fn_ptr = builder.use_var(var);
+                    let mut sig = codegen.module.make_signature();
+                    for _ in &args {
+                        sig.params.push(AbiParam::new(types::I64));
+                    }
+                    sig.returns.push(AbiParam::new(types::I64));
+                    let sig_ref = builder.import_signature(sig);
+                    let call = builder.ins().call_indirect(sig_ref, fn_ptr, &args);
+                    regs.insert(reg, builder.func.dfg.first_result(call));
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));
                 }
@@ -450,6 +461,18 @@ fn compile_ir_function(
                     offset,
                 );
                 regs.insert(reg, v);
+            }
+
+            "funcref" if parts.len() >= 3 => {
+                let reg: usize = parts[1].parse().unwrap_or(0);
+                let fname = parts[2];
+                if let Some(&fid) = declared_funcs.get(fname) {
+                    let fref = codegen.module.declare_func_in_func(fid, builder.func);
+                    let addr = builder.ins().func_addr(types::I64, fref);
+                    regs.insert(reg, addr);
+                } else {
+                    regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                }
             }
 
             "sstore" if parts.len() >= 4 => {
