@@ -291,6 +291,15 @@ fn compile_ir_function(
                 regs.insert(reg, v);
             }
 
+            "fconst" if parts.len() >= 3 => {
+                let reg: usize = parts[1].parse().unwrap_or(0);
+                let fval: f64 = parts[2].parse().unwrap_or(0.0);
+                // Store float as i64 bits for uniform handling
+                let bits = fval.to_bits() as i64;
+                let v = builder.ins().iconst(types::I64, bits);
+                regs.insert(reg, v);
+            }
+
             "strref" if parts.len() >= 3 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let str_idx = parts[2].to_string();
@@ -688,6 +697,14 @@ fn resolve_func_name(name: &str) -> &str {
         "abs" => "forge_abs",
         "min" => "forge_min",
         "max" => "forge_max",
+        "clamp" => "forge_clamp",
+        "pow" => "forge_pow",
+        "sqrt" => "forge_sqrt",
+        "floor" => "forge_floor",
+        "ceil" => "forge_ceil",
+        "round" => "forge_round",
+        "to_float" => "forge_int_to_float",
+        "to_int" => "forge_float_to_int",
         "random_int" => "forge_random_int",
         "sha256" => "forge_sha256",
         "fnv1a" => "forge_fnv1a",

@@ -42,6 +42,7 @@ mut ir_var_regs: Map[String, Int] := {}
 mut ir_var_types: Map[String, String] := {}  # variable name -> type hint ("int", "bool", "string")
 mut ir_struct_names: Map[String, Int] := {}  # struct name -> field count
 mut ir_type_aliases: Map[String, String] := {}  # alias name -> target type
+mut ir_last_was_ret := false  # tracks if the last emitted instruction was a return
 mut ir_func_returns: Map[String, String] := {}  # function name -> return type hint
 mut ir_lambda_count := 0
 mut ir_lambda_bodies: List[String] := []  # deferred lambda function IR
@@ -112,6 +113,11 @@ fn ir_expr(idx: Int) -> Int:
         ir_emit("strref " + r.to_string() + " " + si.to_string())
         return r
 
+    if node.kind == "float_lit" or node.kind == "float":
+        r := ir_reg()
+        ir_emit("fconst " + r.to_string() + " " + node.value)
+        return r
+
     if node.kind == "bool" or node.kind == "bool_lit":
         r := ir_reg()
         if node.value == "true":
@@ -130,12 +136,12 @@ fn ir_expr(idx: Int) -> Int:
     if node.kind == "unary":
         operand_r := ir_expr(node.children[0])
         r := ir_reg()
-        if node.value == "not" or node.value == "!":
+        if node.value == "not" or node.value == "!" or node.value == "not_op":
             # boolean not: 1 - x (flips 0→1, 1→0)
             one := ir_reg()
             ir_emit("iconst " + one.to_string() + " 1")
             ir_emit("sub " + r.to_string() + " " + one.to_string() + " " + operand_r.to_string())
-        elif node.value == "neg" or node.value == "-":
+        elif node.value == "neg" or node.value == "-" or node.value == "negate":
             zero := ir_reg()
             ir_emit("iconst " + zero.to_string() + " 0")
             ir_emit("sub " + r.to_string() + " " + zero.to_string() + " " + operand_r.to_string())
@@ -326,6 +332,16 @@ fn ir_expr(idx: Int) -> Int:
                             obj_is_bool = true
                         elif frt == "String":
                             obj_is_string = true
+        mut obj_is_float := false
+        if node.children.len() > 0:
+            ofn := get_node(node.children[0])
+            if ofn.kind == "float_lit" or ofn.kind == "float":
+                obj_is_float = true
+            elif ofn.kind == "ident" and ir_var_types.contains_key(ofn.value):
+                if ir_var_types[ofn.value] == "float":
+                    obj_is_float = true
+        if mname == "to_string" and obj_is_float:
+            mname = "float_to_string"
         if mname == "to_string" and obj_is_bool:
             mname = "bool_to_string"
         if mname == "to_string" and obj_is_string:
@@ -781,6 +797,7 @@ fn ir_stmt(idx: Int):
             r := ir_reg()
             ir_emit("iconst " + r.to_string() + " 0")
             ir_emit("ret " + r.to_string())
+        ir_last_was_ret = true
 
     elif node.kind == "bind" or node.kind == "binding":
         mut name := node.value
@@ -838,6 +855,8 @@ fn ir_stmt(idx: Int):
                 ir_var_types.insert(name, "string")
             elif vn.kind == "bool_lit":
                 ir_var_types.insert(name, "bool")
+            elif vn.kind == "float_lit" or vn.kind == "float":
+                ir_var_types.insert(name, "float")
             elif vn.kind == "method_call":
                 mv := vn.value
                 if mv.starts_with("."):
@@ -846,6 +865,8 @@ fn ir_stmt(idx: Int):
                     ir_var_types.insert(name, "list_string")
                 elif mv == "trim" or mv == "substring" or mv == "to_upper" or mv == "to_lower" or mv == "replace" or mv == "join" or mv == "reverse" or mv == "to_string":
                     ir_var_types.insert(name, "string")
+                elif mv == "to_float":
+                    ir_var_types.insert(name, "float")
             elif vn.kind == "call":
                 # check if calling a known string-returning function
                 if vn.children.len() > 0:
@@ -938,9 +959,11 @@ fn ir_stmt(idx: Int):
             cr := ir_expr(cond_idx)
             ir_emit("brif " + cr.to_string() + " " + then_label + " " + next_label)
         ir_emit("label " + then_label)
+        ir_last_was_ret = false
         if then_idx >= 0:
             ir_block(then_idx)
-        ir_emit("jmp " + end_label)
+        if not ir_last_was_ret:
+            ir_emit("jmp " + end_label)
         ir_emit("label " + next_label)
 
         # elif chains
@@ -962,9 +985,11 @@ fn ir_stmt(idx: Int):
                 ecr := ir_expr(elif_cond)
                 ir_emit("brif " + ecr.to_string() + " " + elif_then + " " + elif_next)
             ir_emit("label " + elif_then)
+            ir_last_was_ret = false
             if elif_body >= 0:
                 ir_block(elif_body)
-            ir_emit("jmp " + end_label)
+            if not ir_last_was_ret:
+                ir_emit("jmp " + end_label)
             ir_emit("label " + elif_next)
             ei = ei + 1
 
@@ -1177,10 +1202,12 @@ pub fn emit_ir(root_idx: Int) -> String:
             if target.len() > 0:
                 ir_type_aliases.insert(cn.value, target)
 
-    # emit struct declarations and register names
+    # emit struct declarations and register names (unwrap pub)
     ir_struct_names = {}
     for child in root.children:
         cn := get_node(child)
+        if cn.kind == "pub" and cn.children.len() > 0:
+            cn = get_node(cn.children[0])
         if cn.kind == "struct_decl":
             mut field_names: List[String] := []
             for fc in cn.children:
@@ -1205,10 +1232,12 @@ pub fn emit_ir(root_idx: Int) -> String:
     ir_lambda_count = 0
     ir_lambda_bodies = []
 
-    # collect function return types
+    # collect function return types (unwrap pub wrappers)
     ir_func_returns = {}
     for child in root.children:
         cn := get_node(child)
+        if cn.kind == "pub" and cn.children.len() > 0:
+            cn = get_node(cn.children[0])
         if cn.kind == "fn" or cn.kind == "fn_decl":
             for fc in cn.children:
                 fcn := get_node(fc)
@@ -1220,9 +1249,11 @@ pub fn emit_ir(root_idx: Int) -> String:
                         elif rn.kind == "generic_type":
                             ir_func_returns.insert(cn.value, rn.value)
 
-    # emit global variables
+    # emit global variables (unwrap pub)
     for child in root.children:
         cn := get_node(child)
+        if cn.kind == "pub" and cn.children.len() > 0:
+            cn = get_node(cn.children[0])
         if cn.kind == "bind" or cn.kind == "binding":
             mut gname := cn.value
             if gname.contains(" mut"):
@@ -1251,12 +1282,17 @@ pub fn emit_ir(root_idx: Int) -> String:
                         init_val = "0"
             ir_emit("global " + gname + " " + init_val)
 
-    # emit functions
+    # emit functions (unwrap pub wrappers)
     for child in root.children:
         cn := get_node(child)
-        if cn.kind == "fn" or cn.kind == "fn_decl":
-            ir_func(child)
-        elif cn.kind == "impl_decl":
+        mut actual := child
+        mut actual_node := cn
+        if cn.kind == "pub" and cn.children.len() > 0:
+            actual = cn.children[0]
+            actual_node = get_node(actual)
+        if actual_node.kind == "fn" or actual_node.kind == "fn_decl":
+            ir_func(actual)
+        elif actual_node.kind == "impl_decl":
             # emit methods from impl blocks
             mut impl_type := ""
             for ic in cn.children:
