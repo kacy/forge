@@ -823,13 +823,32 @@ fn ir_stmt(idx: Int):
         ir_emit("label " + end_label)
 
     elif node.kind == "for" or node.kind == "for_stmt":
-        var_name := node.value
+        mut var_name := node.value
+        mut idx_var_name := ""
+        # handle "var, idx" syntax
+        if var_name.contains(","):
+            parts := var_name.split(",")
+            var_name = parts[0].trim()
+            if parts.len() > 1:
+                idx_var_name = parts[1].trim()
         # children: iterable, body
         if node.children.len() >= 2:
+            # detect string iteration
+            iter_node := get_node(node.children[0])
+            mut is_string_iter := false
+            if iter_node.kind == "string_lit" or iter_node.kind == "string":
+                is_string_iter = true
+            elif iter_node.kind == "ident" and ir_var_types.contains_key(iter_node.value):
+                if ir_var_types[iter_node.value] == "string":
+                    is_string_iter = true
+
             iter_r := ir_expr(node.children[0])
             # __len = len(iter)
             len_r := ir_reg()
-            ir_emit("call " + len_r.to_string() + " len 1 " + iter_r.to_string())
+            if is_string_iter:
+                ir_emit("call " + len_r.to_string() + " string_len 1 " + iter_r.to_string())
+            else:
+                ir_emit("call " + len_r.to_string() + " len 1 " + iter_r.to_string())
             # __i = 0
             idx_r := ir_reg()
             ir_emit("iconst " + idx_r.to_string() + " 0")
@@ -855,8 +874,18 @@ fn ir_stmt(idx: Int):
             idx2 := ir_reg()
             ir_emit("load " + idx2.to_string() + " __for_idx")
             elem_r := ir_reg()
-            ir_emit("call " + elem_r.to_string() + " __list_get 2 " + it_r.to_string() + " " + idx2.to_string())
+            if is_string_iter:
+                ir_emit("call " + elem_r.to_string() + " char_at 2 " + it_r.to_string() + " " + idx2.to_string())
+                ir_var_types.insert(var_name, "string")
+            else:
+                ir_emit("call " + elem_r.to_string() + " __list_get 2 " + it_r.to_string() + " " + idx2.to_string())
             ir_emit("store " + var_name + " " + elem_r.to_string())
+            # store index variable if present
+            if idx_var_name.len() > 0:
+                idx_val := ir_reg()
+                ir_emit("load " + idx_val.to_string() + " __for_idx")
+                ir_emit("store " + idx_var_name + " " + idx_val.to_string())
+                ir_var_types.insert(idx_var_name, "int")
             # body
             ir_block(node.children[1])
             # i = i + 1
