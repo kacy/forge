@@ -542,12 +542,19 @@ fn ir_expr(idx: Int) -> Int:
                                 if otype == "list_string" or otype == "string":
                                     needs_convert = false
                 elif cn.kind == "call":
-                    # check if it's a known string-returning function
+                    # check if it's a known string/bool-returning function
                     if cn.children.len() > 0:
                         call_fn := get_node(cn.children[0])
                         if call_fn.kind == "ident":
                             fname := call_fn.value
                             if fname == "chr" or fname == "read_file" or fname == "env":
+                                needs_convert = false
+                            # bool-returning functions need bool_to_string in interp
+                            bool_call_fns := "get_bool,object_has,has,file_exists,dir_exists"
+                            if bool_call_fns.contains(fname):
+                                br := ir_reg()
+                                ir_emit("call " + br.to_string() + " bool_to_string 1 " + part_r.to_string())
+                                part_r = br
                                 needs_convert = false
                 if needs_convert:
                     ts_r := ir_reg()
