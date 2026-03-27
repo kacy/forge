@@ -804,6 +804,7 @@ fn resolve_func_name(name: &str) -> &str {
         "acquire" => "forge_semaphore_acquire",
         "release" => "forge_semaphore_release",
         "identity" => "forge_identity",
+        "smart_to_string" => "forge_smart_to_string",
         "env" => "forge_env",
         "args" => "forge_args_to_list",
         _ => name,

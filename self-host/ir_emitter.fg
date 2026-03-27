@@ -276,6 +276,7 @@ fn ir_expr(idx: Int) -> Int:
         # dispatch to_string based on argument type
         if fname == "to_string" and arg_regs.len() == 1:
             # check first arg's node type
+            mut to_str_resolved := false
             first_arg_node := get_node(node.children[1])
             if first_arg_node.kind == "arg" and first_arg_node.children.len() > 0:
                 arg_n := get_node(first_arg_node.children[0])
@@ -283,8 +284,19 @@ fn ir_expr(idx: Int) -> Int:
                     avt := ir_var_types[arg_n.value]
                     if avt == "string":
                         fname = "identity"
+                        to_str_resolved = true
                     elif avt == "bool":
                         fname = "bool_to_string"
+                        to_str_resolved = true
+                    elif avt == "float":
+                        fname = "float_to_string"
+                        to_str_resolved = true
+                    elif avt == "int":
+                        to_str_resolved = true
+                elif arg_n.kind == "ident":
+                    # unknown type — use smart_to_string
+                    fname = "smart_to_string"
+                    to_str_resolved = true
         r := ir_reg()
         mut args_s := ""
         mut i := 0
@@ -348,7 +360,7 @@ fn ir_expr(idx: Int) -> Int:
                                 obj_is_string = true
                         # check known stdlib functions
                         known_float := "pow,sqrt,floor,ceil,round,to_float,get_float"
-                        known_bool := "file_exists,dir_exists"
+                        known_bool := "file_exists,dir_exists,get_bool,object_has,has"
                         if known_float.contains(cf_name):
                             obj_is_bool = false  # override any previous detection
                         elif known_bool.contains(cf_name):
@@ -379,6 +391,21 @@ fn ir_expr(idx: Int) -> Int:
             mname = "bool_to_string"
         if mname == "to_string" and obj_is_string:
             mname = "identity"
+        # for truly unknown types, use smart_to_string
+        if mname == "to_string" and not obj_is_bool and not obj_is_float and not obj_is_string:
+            if node.children.len() > 0:
+                obj_check := get_node(node.children[0])
+                if obj_check.kind == "ident" and not ir_var_types.contains_key(obj_check.value):
+                    # unknown variable — could be parse() result or any opaque handle
+                    mname = "smart_to_string"
+                # DON'T use smart_to_string for function calls — check return type first
+                elif obj_check.kind == "call" and obj_check.children.len() > 0:
+                    call_id := get_node(obj_check.children[0])
+                    if call_id.kind == "ident" and not ir_func_returns.contains_key(call_id.value):
+                        # unknown stdlib function — might return opaque handle
+                        known_int_call := "abs,min,max,clamp,len,fnv1a,ord,exec"
+                        if not known_int_call.contains(call_id.value):
+                            mname = "smart_to_string"
         # detect object type for map/set/list dispatch
         mut obj_is_map := false
         mut obj_is_set := false
@@ -913,7 +940,7 @@ fn ir_stmt(idx: Int):
                     cfn := get_node(vn.children[0])
                     if cfn.kind == "ident":
                         cf := cfn.value
-                        string_fns := "sha256,hex_encode,hex_decode,from_hex,to_hex,b64_encode,b64_decode,chr,read_file,env,path_join,path_dir,path_base,path_ext,path_stem,parse,scheme,host,query,fragment,encode,decode,exec_output,type_of,get_string"
+                        string_fns := "sha256,hex_encode,hex_decode,from_hex,to_hex,b64_encode,b64_decode,chr,read_file,env,path_join,path_dir,path_base,path_ext,path_stem,scheme,host,query,fragment,decode,exec_output,type_of,get_string"
                         int_fns := "fnv1a,ord,port,get_int,array_len,abs,min,max,clamp"
                         float_fns := "pow,sqrt,floor,ceil,round,to_float,get_float"
                         if string_fns.contains(cf):
