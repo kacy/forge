@@ -3936,6 +3936,22 @@ fn compile_expr(
                     return Ok(builder.ins().iconst(types::I64, 0));
                 }
 
+                if func == "set" && args.len() >= 3 {
+                    let set_id = cctx.runtime_funcs.get("forge_list_set_value").ok_or_else(|| {
+                        CompileError::UnknownFunction("forge_list_set_value".to_string())
+                    })?;
+                    let set_ref = module.declare_func_in_func(*set_id, builder.func);
+                    let idx_val = compile_expr(builder, variables, module, &args[1], cctx)?;
+                    let val_val = compile_expr(builder, variables, module, &args[2], cctx)?;
+                    let val_i64 = if builder.func.dfg.value_type(val_val) != types::I64 {
+                        builder.ins().uextend(types::I64, val_val)
+                    } else {
+                        val_val
+                    };
+                    builder.ins().call(set_ref, &[list_val, idx_val, val_i64]);
+                    return Ok(builder.ins().iconst(types::I64, 0));
+                }
+
                 if func == "remove" {
                     // Call forge_list_remove(list_ptr, index)
                     let remove_id = cctx.runtime_funcs.get("forge_list_remove").ok_or_else(|| {

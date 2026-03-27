@@ -825,6 +825,14 @@ pub fn declare_runtime_functions(
     )?;
     funcs.insert("forge_list_push_value".to_string(), list_push_value);
 
+    let list_set_value = declare_runtime_function(
+        module,
+        "forge_list_set_value",
+        &[types::I64, types::I64, types::I64], // list, index, value
+        &[],
+    )?;
+    funcs.insert("forge_list_set_value".to_string(), list_set_value);
+
     let list_join = declare_runtime_function(
         module,
         "forge_list_join",

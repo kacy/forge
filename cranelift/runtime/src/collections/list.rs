@@ -171,6 +171,22 @@ pub unsafe extern "C" fn forge_list_push_value(list: ForgeList, value: i64) {
     impl_ref.push(&bytes[..elem_len]);
 }
 
+/// Set element at index (value-based API, stores i64).
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_set_value(list: ForgeList, index: i64, value: i64) {
+    if list.ptr.is_null() {
+        return;
+    }
+    let impl_ref = &mut *(list.ptr as *mut ListImpl);
+    let idx = index as usize;
+    if idx >= impl_ref.elements.len() {
+        return;
+    }
+    let bytes = value.to_ne_bytes();
+    let elem_len = impl_ref.elem_size.min(bytes.len());
+    impl_ref.elements[idx] = bytes[..elem_len].to_vec();
+}
+
 /// Join a list of C string pointers with a separator.
 /// Returns a newly allocated C string.
 #[no_mangle]
