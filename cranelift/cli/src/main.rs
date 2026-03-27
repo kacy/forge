@@ -61,6 +61,20 @@ fn main() {
             }
             lex_file(&args[2]);
         }
+        "ir-build" => {
+            if args.len() < 3 {
+                eprintln!("Error: ir-build requires a file argument");
+                return;
+            }
+            ir_build_file(&args[2]);
+        }
+        "ir-run" => {
+            if args.len() < 3 {
+                eprintln!("Error: ir-run requires a file argument");
+                return;
+            }
+            ir_run_file(&args[2]);
+        }
         "version" => {
             println!("Forge Cranelift Compiler v0.1.0");
             println!("Using Cranelift backend for native code generation");
@@ -374,3 +388,152 @@ fn delegate_to_frontend(args: &[String]) {
         std::process::exit(status.code().unwrap_or(1));
     }
 }
+
+/// Build using Forge IR path: source → self-hosted parse+emit_ir → Rust IR consumer → native
+fn ir_build_file(path: &str) {
+    use forge_codegen::create_codegen;
+    use forge_codegen::finalize_module;
+    use forge_codegen::ir_consumer::compile_from_ir;
+    use forge_codegen::linker::build_executable;
+
+    eprintln!("IR-build {} (Forge IR path)...", path);
+
+    // Step 1: Get IR from self-hosted compiler (parse + ir_emitter)
+    let ir_text = match get_ir_from_compiler(path) {
+        Ok(ir) => ir,
+        Err(e) => {
+            eprintln!("Error getting IR: {}", e);
+            return;
+        }
+    };
+
+    // Step 2: Compile IR via Cranelift
+    match create_codegen() {
+        Ok(mut codegen) => {
+            let runtime_funcs = match forge_codegen::declare_runtime_functions(&mut codegen.module) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Error declaring runtime: {}", e);
+                    return;
+                }
+            };
+            match compile_from_ir(&mut codegen, &ir_text, &runtime_funcs) {
+                Ok(funcs) => {
+                    eprintln!("IR compiled {} functions", funcs.len());
+                    match finalize_module(codegen.module) {
+                        Ok(bytes) => {
+                            let obj_path = path.replace(".fg", ".o");
+                            let exe_path = path.replace(".fg", "");
+                            if let Err(e) = fs::write(&obj_path, &bytes) {
+                                eprintln!("Error writing object: {}", e);
+                                return;
+                            }
+                            match build_executable(&obj_path, &exe_path) {
+                                Ok(_) => eprintln!("Created: {}", exe_path),
+                                Err(e) => eprintln!("Error linking: {}", e),
+                            }
+                        }
+                        Err(e) => eprintln!("Error finalizing: {}", e),
+                    }
+                }
+                Err(e) => eprintln!("Error compiling IR: {}", e),
+            }
+        }
+        Err(e) => eprintln!("Error creating codegen: {}", e),
+    }
+}
+
+/// Run using Forge IR path
+fn ir_run_file(path: &str) {
+    use forge_codegen::create_codegen;
+    use forge_codegen::finalize_module;
+    use forge_codegen::ir_consumer::compile_from_ir;
+    use forge_codegen::linker::build_executable;
+
+    let ir_text = match get_ir_from_compiler(path) {
+        Ok(ir) => ir,
+        Err(e) => {
+            eprintln!("Error getting IR: {}", e);
+            return;
+        }
+    };
+
+    match create_codegen() {
+        Ok(mut codegen) => {
+            let runtime_funcs = match forge_codegen::declare_runtime_functions(&mut codegen.module) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return;
+                }
+            };
+            match compile_from_ir(&mut codegen, &ir_text, &runtime_funcs) {
+                Ok(_) => match finalize_module(codegen.module) {
+                    Ok(bytes) => {
+                        let obj_path = format!("/tmp/forge_ir_{}.o", std::process::id());
+                        let exe_path = format!("/tmp/forge_ir_{}", std::process::id());
+                        if fs::write(&obj_path, &bytes).is_ok() {
+                            if build_executable(&obj_path, &exe_path).is_ok() {
+                                let status = Command::new(&exe_path).status();
+                                let _ = fs::remove_file(&obj_path);
+                                let _ = fs::remove_file(&exe_path);
+                                if let Ok(s) = status {
+                                    if !s.success() {
+                                        std::process::exit(s.code().unwrap_or(1));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {}", e),
+                },
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+/// Get IR text from the self-hosted compiler's ir_emitter
+fn get_ir_from_compiler(path: &str) -> Result<String, String> {
+    let compiler = find_self_hosted_compiler()
+        .ok_or_else(|| "Self-hosted compiler not found".to_string())?;
+
+    // The self-hosted compiler needs an "emit-ir" command
+    // For now, we use a test driver that imports ir_emitter
+    let ir_driver = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".forge-build/ir_driver.fg");
+
+    // Generate a tiny driver that parses the file and emits IR
+    let driver_source = format!(
+        "from lexer import lex_all\nfrom parser import parse\nfrom ast import reset_arena\nfrom ir_emitter import emit_ir\n\nfn main():\n    source := read_file(\"{}\")\n    tokens := lex_all(source)\n    reset_arena()\n    root := parse(tokens)\n    ir := emit_ir(root)\n    print(ir)\n",
+        path
+    );
+
+    // Write the driver in self-host/ so imports resolve correctly
+    let driver_path = "self-host/_ir_driver.fg";
+    fs::write(driver_path, &driver_source)
+        .map_err(|e| format!("write driver: {}", e))?;
+
+    // Run the driver using the self-hosted compiler
+    // But the self-hosted compiler can't "run" anymore (we removed C codegen)
+    // So we need to use the Cranelift backend to run the driver
+    // This is circular — we need an already-compiled ir_driver binary
+
+    // Alternative: compile the ir_driver with the existing Cranelift path (AST-based)
+    // then run the resulting binary
+    let output = Command::new(env::current_exe().unwrap_or_default())
+        .args(["run", driver_path])
+        .output()
+        .map_err(|e| format!("run driver: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("IR driver failed: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
