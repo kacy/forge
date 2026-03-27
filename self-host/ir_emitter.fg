@@ -899,7 +899,16 @@ fn ir_stmt(idx: Int):
             elif vn.kind == "set":
                 ir_var_types.insert(name, "set")
             elif vn.kind == "list":
-                ir_var_types.insert(name, "list")
+                # check if elements are strings
+                mut is_str_list := false
+                if vn.children.len() > 0:
+                    first_elem := get_node(vn.children[0])
+                    if first_elem.kind == "string_lit" or first_elem.kind == "string":
+                        is_str_list = true
+                if is_str_list:
+                    ir_var_types.insert(name, "list_string")
+                else:
+                    ir_var_types.insert(name, "list")
 
     elif node.kind == "assign":
         name := node.value

@@ -592,7 +592,8 @@ fn compile_ir_function(
     Ok(())
 }
 
-/// Map Forge method/function names to runtime function names
+/// Map IR function names to runtime_funcs keys.
+/// Returns the key that exists in the runtime_funcs HashMap.
 fn resolve_func_name(name: &str) -> &str {
     match name {
         "print" => "forge_print_cstr",
@@ -613,7 +614,7 @@ fn resolve_func_name(name: &str) -> &str {
         "replace" => "forge_cstring_replace",
         "repeat" => "forge_cstring_repeat",
         "index_of" => "forge_cstring_index_of",
-        "last_index_of" => "forge_cstring_last_index_of",
+        "string_last_index_of" => "last_index_of",
         "pad_left" => "forge_cstring_pad_left",
         "pad_right" => "forge_cstring_pad_right",
         "char_at" => "forge_cstring_char_at",
@@ -713,10 +714,10 @@ fn resolve_func_name(name: &str) -> &str {
         "to_hex" => "forge_hex_encode",
         "from_hex" => "forge_from_hex",
         "path_join" | "join_path" => "forge_path_join",
-        "path_dir" => "forge_path_dir",
-        "path_base" => "forge_path_base",
-        "path_ext" => "forge_path_ext",
-        "path_stem" => "forge_path_stem",
+        "path_dir" | "dir" => "forge_path_dir",
+        "path_base" | "base" => "forge_path_base",
+        "path_ext" | "ext" => "forge_path_ext",
+        "path_stem" | "stem" => "forge_path_stem",
         "log_info" => "forge_log_info",
         "log_warn" => "forge_log_warn",
         "log_error" => "forge_log_error",
