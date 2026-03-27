@@ -162,18 +162,17 @@ fn compile_ir_function(
     // Map param names to block params
     let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
     let mut regs: HashMap<usize, Value> = HashMap::new();
-    let mut vars: HashMap<String, Value> = HashMap::new();
+    let mut named_vars: HashMap<String, Variable> = HashMap::new();
     let mut labels: HashMap<String, Block> = HashMap::new();
     let mut next_var_id: u32 = 0;
 
     for (i, name) in param_names.iter().enumerate() {
         if i < block_params.len() {
-            // Create a Variable for the parameter
             let var = Variable::from_u32(next_var_id);
             next_var_id += 1;
             builder.declare_var(var, types::I64);
             builder.def_var(var, block_params[i]);
-            vars.insert(name.clone(), block_params[i]);
+            named_vars.insert(name.clone(), var);
             regs.insert(i, block_params[i]);
         }
     }
@@ -317,13 +316,23 @@ fn compile_ir_function(
             "store" if parts.len() >= 3 => {
                 let name = parts[1].to_string();
                 let val = get_reg(&regs, parts[2]);
-                vars.insert(name, val);
+                let var = if let Some(&v) = named_vars.get(&name) {
+                    v
+                } else {
+                    let v = Variable::from_u32(next_var_id);
+                    next_var_id += 1;
+                    builder.declare_var(v, types::I64);
+                    named_vars.insert(name, v);
+                    v
+                };
+                builder.def_var(var, val);
             }
 
             "load" if parts.len() >= 3 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let name = parts[2];
-                if let Some(&val) = vars.get(name) {
+                if let Some(&var) = named_vars.get(name) {
+                    let val = builder.use_var(var);
                     regs.insert(reg, val);
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));

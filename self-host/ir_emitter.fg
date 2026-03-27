@@ -115,8 +115,7 @@ fn ir_expr(idx: Int) -> Int:
 
     if node.kind == "ident":
         name := node.value
-        if ir_var_regs.contains_key(name):
-            return ir_var_regs[name]
+        # always emit a load to get the current value (important for loops)
         r := ir_reg()
         ir_emit("load " + r.to_string() + " " + name)
         return r
@@ -253,7 +252,12 @@ fn ir_stmt(idx: Int):
             ir_emit("ret " + r.to_string())
 
     elif node.kind == "bind" or node.kind == "binding":
-        name := node.value
+        mut name := node.value
+        # strip " mut" suffix from binding names
+        if name.contains(" mut"):
+            name = name.substring(0, name.len() - 4)
+        elif name.contains(" "):
+            name = name.split(" ")[0]
         # skip type annotation children, find the value expression
         mut val_idx := 0 - 1
         for child in node.children:
@@ -269,6 +273,25 @@ fn ir_stmt(idx: Int):
         name := node.value
         if node.children.len() > 0:
             r := ir_expr(node.children[0])
+            ir_var_regs.insert(name, r)
+            ir_emit("store " + name + " " + r.to_string())
+
+    elif node.kind == "assign" or node.kind == "assignment":
+        # assignment: first child is target (ident), second is value
+        name := ""
+        mut val_idx := 0 - 1
+        if node.value == "=":
+            # children: ident (target), expr (value)
+            if node.children.len() >= 2:
+                tn := get_node(node.children[0])
+                name = tn.value
+                val_idx = node.children[1]
+        else:
+            name = node.value
+            if node.children.len() > 0:
+                val_idx = node.children[0]
+        if val_idx >= 0 and name.len() > 0:
+            r := ir_expr(val_idx)
             ir_var_regs.insert(name, r)
             ir_emit("store " + name + " " + r.to_string())
 
@@ -300,7 +323,7 @@ fn ir_stmt(idx: Int):
             ir_block(else_idx)
         ir_emit("label " + end_label)
 
-    elif node.kind == "while":
+    elif node.kind == "while" or node.kind == "while_stmt":
         head_label := ir_label()
         body_label := ir_label()
         end_label := ir_label()
