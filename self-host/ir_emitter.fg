@@ -315,6 +315,16 @@ fn ir_expr(idx: Int) -> Int:
                         obj_is_string = true
             elif obj_n.kind == "string_lit" or obj_n.kind == "string" or obj_n.kind == "string_interp":
                 obj_is_string = true
+            elif obj_n.kind == "call":
+                # check function return type
+                if obj_n.children.len() > 0:
+                    cfn := get_node(obj_n.children[0])
+                    if cfn.kind == "ident" and ir_func_returns.contains_key(cfn.value):
+                        frt := ir_func_returns[cfn.value]
+                        if frt == "Bool":
+                            obj_is_bool = true
+                        elif frt == "String":
+                            obj_is_string = true
         if mname == "to_string" and obj_is_bool:
             mname = "bool_to_string"
         if mname == "to_string" and obj_is_string:
@@ -986,10 +996,20 @@ fn ir_func(idx: Int):
     mut body_idx := 0 - 1
     mut ret_type := "i64"
 
+    mut param_types: List[String] := []
     for child in node.children:
         cn := get_node(child)
         if cn.kind == "param":
             params.push(cn.value)
+            # extract parameter type
+            mut pty := "Int"
+            for pc in cn.children:
+                ptn := get_node(pc)
+                if ptn.kind == "type":
+                    pty = ptn.value
+                elif ptn.kind == "generic_type":
+                    pty = ptn.value
+            param_types.push(pty)
         elif cn.kind == "body":
             body_idx = child
         elif cn.kind == "returns":
@@ -1008,6 +1028,28 @@ fn ir_func(idx: Int):
         r := ir_reg()
         ir_var_regs.insert(params[i], r)
         ir_emit("param " + params[i])
+        # track parameter types
+        if i < param_types.len():
+            pt := param_types[i]
+            if pt == "String":
+                ir_var_types.insert(params[i], "string")
+            elif pt == "Int":
+                ir_var_types.insert(params[i], "int")
+            elif pt == "Bool":
+                ir_var_types.insert(params[i], "bool")
+            elif pt == "Map" or pt.contains("Map"):
+                ir_var_types.insert(params[i], "map")
+            elif pt == "Set" or pt.contains("Set"):
+                ir_var_types.insert(params[i], "set")
+            elif pt == "List" or pt.contains("List"):
+                ir_var_types.insert(params[i], "list")
+            # resolve type aliases
+            elif ir_type_aliases.contains_key(pt):
+                resolved := ir_type_aliases[pt]
+                if resolved == "String":
+                    ir_var_types.insert(params[i], "string")
+                elif resolved == "Bool":
+                    ir_var_types.insert(params[i], "bool")
         i = i + 1
 
     if body_idx >= 0:
