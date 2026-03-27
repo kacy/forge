@@ -648,6 +648,77 @@ fn ir_expr(idx: Int) -> Int:
         ir_emit("funcref " + r.to_string() + " " + lambda_name)
         return r
 
+    if node.kind == "spawn":
+        # spawn func(args) — get function address and first arg, call forge_spawn
+        if node.children.len() > 0:
+            inner := get_node(node.children[0])
+            if inner.kind == "call":
+                mut spawn_fname := "unknown"
+                mut spawn_arg_r := 0 - 1
+                for sc in inner.children:
+                    scn := get_node(sc)
+                    if scn.kind == "ident" and spawn_fname == "unknown":
+                        spawn_fname = scn.value
+                    elif scn.kind == "arg" and spawn_arg_r < 0:
+                        if scn.children.len() > 0:
+                            spawn_arg_r = ir_expr(scn.children[0])
+                if spawn_arg_r < 0:
+                    spawn_arg_r = ir_reg()
+                    ir_emit("iconst " + spawn_arg_r.to_string() + " 0")
+                fn_r := ir_reg()
+                ir_emit("funcref " + fn_r.to_string() + " " + spawn_fname)
+                r := ir_reg()
+                ir_emit("call " + r.to_string() + " spawn 2 " + fn_r.to_string() + " " + spawn_arg_r.to_string())
+                return r
+        r := ir_reg()
+        ir_emit("iconst " + r.to_string() + " 0")
+        return r
+
+    if node.kind == "await":
+        if node.children.len() > 0:
+            task_r := ir_expr(node.children[0])
+            r := ir_reg()
+            ir_emit("call " + r.to_string() + " await 1 " + task_r.to_string())
+            return r
+        r := ir_reg()
+        ir_emit("iconst " + r.to_string() + " 0")
+        return r
+
+    if node.kind == "try" or node.kind == "try_expr":
+        # try expr! — evaluate and check for error
+        if node.children.len() > 0:
+            val_r := ir_expr(node.children[0])
+            # check if result is 0 (error sentinel)
+            ok_l := ir_label()
+            err_l := ir_label()
+            merge_l := ir_label()
+            ir_emit("brif " + val_r.to_string() + " " + ok_l + " " + err_l)
+            ir_emit("label " + ok_l)
+            ir_emit("jmp " + merge_l)
+            ir_emit("label " + err_l)
+            zero := ir_reg()
+            ir_emit("iconst " + zero.to_string() + " 0")
+            ir_emit("ret " + zero.to_string())
+            ir_emit("label " + merge_l)
+            return val_r
+        r := ir_reg()
+        ir_emit("iconst " + r.to_string() + " 0")
+        return r
+
+    if node.kind == "fail":
+        # fail "msg" — return 0 (error sentinel)
+        if node.children.len() > 0:
+            ir_expr(node.children[0])  # evaluate error msg (discard)
+        zero := ir_reg()
+        ir_emit("iconst " + zero.to_string() + " 0")
+        ir_emit("ret " + zero.to_string())
+        # unreachable block
+        ub := ir_label()
+        ir_emit("label " + ub)
+        r := ir_reg()
+        ir_emit("iconst " + r.to_string() + " 0")
+        return r
+
     if node.kind == "grouped":
         if node.children.len() > 0:
             return ir_expr(node.children[0])
@@ -1147,11 +1218,52 @@ pub fn emit_ir(root_idx: Int) -> String:
                         elif rn.kind == "generic_type":
                             ir_func_returns.insert(cn.value, rn.value)
 
+    # emit global variables
+    for child in root.children:
+        cn := get_node(child)
+        if cn.kind == "bind" or cn.kind == "binding":
+            mut gname := cn.value
+            if gname.contains(" mut"):
+                gname = gname.substring(0, gname.len() - 4)
+            elif gname.contains(" "):
+                gname = gname.split(" ")[0]
+            # find initial value
+            mut init_val := "0"
+            for gc in cn.children:
+                gcn := get_node(gc)
+                if gcn.kind == "int_lit":
+                    init_val = gcn.value
+                elif gcn.kind == "string_lit":
+                    si := ir_str(gcn.value)
+                    init_val = "str:" + si
+                elif gcn.kind == "list":
+                    init_val = "list"
+                elif gcn.kind == "map":
+                    init_val = "map"
+                elif gcn.kind == "set":
+                    init_val = "set"
+                elif gcn.kind == "bool_lit":
+                    if gcn.value == "true":
+                        init_val = "1"
+                    else:
+                        init_val = "0"
+            ir_emit("global " + gname + " " + init_val)
+
     # emit functions
     for child in root.children:
         cn := get_node(child)
         if cn.kind == "fn" or cn.kind == "fn_decl":
             ir_func(child)
+        elif cn.kind == "impl_decl":
+            # emit methods from impl blocks
+            mut impl_type := ""
+            for ic in cn.children:
+                icn := get_node(ic)
+                if icn.kind == "type":
+                    impl_type = icn.value
+                elif icn.kind == "fn_decl":
+                    # emit as TypeName_methodname with self param
+                    ir_func(ic)
 
     # append deferred lambda function bodies
     mut li := 0

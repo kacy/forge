@@ -44,6 +44,7 @@ pub fn compile_from_ir(
     let mut declared_funcs: HashMap<String, FuncId> = HashMap::new();
     let mut string_data: Vec<(String, String)> = Vec::new();
     let mut struct_layouts: HashMap<String, Vec<String>> = HashMap::new();
+    let mut global_data: HashMap<String, cranelift_module::DataId> = HashMap::new();
 
     // Pass 1: collect string data and declare functions
     for line in &lines {
@@ -88,6 +89,28 @@ pub fn compile_from_ir(
                     .collect();
                 crate::register_struct_layout(&name, &field_pairs);
                 struct_layouts.insert(name, fields);
+            }
+            "global" if parts.len() >= 3 => {
+                let gname = parts[1].to_string();
+                let init_kind = parts[2];
+                // Create a global data slot
+                use cranelift_module::DataDescription;
+                let data_id = codegen.module
+                    .declare_data(&gname, Linkage::Local, true, false)
+                    .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+                let mut desc = DataDescription::new();
+                // Initialize based on kind
+                let init_val: i64 = if init_kind == "list" || init_kind == "map" || init_kind == "set" {
+                    0 // will be initialized at runtime
+                } else if init_kind.starts_with("str:") {
+                    0 // string pointer, initialized at runtime
+                } else {
+                    init_kind.parse().unwrap_or(0)
+                };
+                desc.define(init_val.to_le_bytes().to_vec().into_boxed_slice());
+                codegen.module.define_data(data_id, &desc)
+                    .map_err(|e| CompileError::ModuleError(e.to_string()))?;
+                global_data.insert(gname, data_id);
             }
             "struct_alias" if parts.len() >= 3 => {
                 let alias = parts[1].to_string();
@@ -167,6 +190,7 @@ pub fn compile_from_ir(
                 &declared_funcs,
                 &string_funcs,
                 &struct_layouts,
+                &global_data,
             )?;
         }
     }
@@ -184,6 +208,7 @@ fn compile_ir_function(
     declared_funcs: &HashMap<String, FuncId>,
     string_funcs: &HashMap<String, FuncId>,
     struct_layouts: &HashMap<String, Vec<String>>,
+    global_data: &HashMap<String, cranelift_module::DataId>,
 ) -> Result<(), CompileError> {
     let mut ctx = codegen.module.make_context();
 
@@ -415,22 +440,35 @@ fn compile_ir_function(
             "store" if parts.len() >= 3 => {
                 let name = parts[1].to_string();
                 let val = get_reg(&regs, parts[2]);
-                let var = if let Some(&v) = named_vars.get(&name) {
-                    v
+                // Check if this is a global variable
+                if let Some(&data_id) = global_data.get(&name) {
+                    let gv = codegen.module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    builder.ins().store(cranelift::codegen::ir::MemFlags::new(), val, addr, 0);
                 } else {
-                    let v = Variable::from_u32(next_var_id);
-                    next_var_id += 1;
-                    builder.declare_var(v, types::I64);
-                    named_vars.insert(name, v);
-                    v
-                };
-                builder.def_var(var, val);
+                    let var = if let Some(&v) = named_vars.get(&name) {
+                        v
+                    } else {
+                        let v = Variable::from_u32(next_var_id);
+                        next_var_id += 1;
+                        builder.declare_var(v, types::I64);
+                        named_vars.insert(name, v);
+                        v
+                    };
+                    builder.def_var(var, val);
+                }
             }
 
             "load" if parts.len() >= 3 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let name = parts[2];
-                if let Some(&var) = named_vars.get(name) {
+                // Check if this is a global variable
+                if let Some(&data_id) = global_data.get(name) {
+                    let gv = codegen.module.declare_data_in_func(data_id, builder.func);
+                    let addr = builder.ins().global_value(types::I64, gv);
+                    let val = builder.ins().load(types::I64, cranelift::codegen::ir::MemFlags::new(), addr, 0);
+                    regs.insert(reg, val);
+                } else if let Some(&var) = named_vars.get(name) {
                     let val = builder.use_var(var);
                     regs.insert(reg, val);
                 } else {
