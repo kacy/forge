@@ -48,24 +48,22 @@ covering: structs, enums, match, generics, lambdas/closures, collections
 | Binary size | ~2.4 MB | ~4.9 MB |
 | Compile time | ~90 ms | ~270 ms |
 | Execution speed | ~3.5 ms | ~3.9 ms |
-| Self-hosts compiler | Yes | Not yet |
+| Self-hosts compiler | Yes | **Yes** |
 
 Binary size difference is due to static linking of the Rust runtime.
 Compile time difference is from the extra AST text parsing step.
 Execution speed is effectively identical (dominated by process startup).
 
-## Remaining Work for Self-Hosting
+## Self-Hosting Status: Complete
 
-The Cranelift backend cannot yet compile the self-hosted compiler (18 modules,
-13,800 lines). Key gaps:
+The Cranelift backend compiles the entire self-hosted compiler (14 modules,
+540 functions, 13,800 lines) into a working native binary.
 
-- **Tuple construction** — `(a, b)` syntax not yet parsed/compiled
-- **`pub` global linkage** — parsed but not applied (globals always Local)
-- **Nested map type inference** — `Map[String, Map[...]]` value kind not propagated
-
-All core self-hosting patterns (struct with List field, for-in over struct
-fields, integer-key maps, string methods, error propagation, recursive lookups)
-are verified working via `examples/self_host_patterns.fg`.
+**Verified:**
+- `forge version`, `lex`, `parse`, `check` — all work
+- `forge build` / `forge run` — compiles and executes all 43 examples
+- Fixed-point reached: C output is byte-for-byte identical whether the
+  compiler was compiled via C transpilation or Cranelift (837,451 bytes)
 
 ## Building
 

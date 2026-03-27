@@ -8,11 +8,12 @@ coding agents can read the errors, apply fixes, and iterate — fast.
 
 **status:** the compiler self-hosts — forge is written in forge. the
 self-hosted compiler compiles itself and produces identical output across
-stages (fixed-point verified). two backends: C transpilation (primary) and
-Cranelift native code generation (43/43 examples passing, identical output).
-the CLI handles build, run, test, check, fmt, lint, lex, parse, doc, and
-more. 16 standard library modules cover I/O, networking, encoding, hashing,
-JSON, TOML, process management, and more.
+stages (fixed-point verified). two backends: C transpilation and Cranelift
+native code generation — both compile all 43 examples identically, and both
+compile the compiler itself to a fixed point. the CLI handles build, run,
+test, check, fmt, lint, lex, parse, doc, and more. 16 standard library
+modules cover I/O, networking, encoding, hashing, JSON, TOML, process
+management, and more.
 
 ## quick start
 
