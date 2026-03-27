@@ -344,10 +344,24 @@ fn ir_expr(idx: Int) -> Int:
             mname = "list_is_empty"
         if mname == "is_empty" and obj_is_map:
             mname = "map_is_empty"
+        if mname == "is_empty" and obj_is_set:
+            mname = "set_is_empty"
         if mname == "clear" and obj_is_list:
             mname = "list_clear"
         if mname == "reverse" and obj_is_list:
             mname = "list_reverse"
+        if mname == "remove" and obj_is_map:
+            mname = "map_remove"
+        if mname == "keys" and obj_is_map:
+            mname = "map_keys"
+        if mname == "values" and obj_is_map:
+            mname = "map_values"
+        if mname == "clear" and obj_is_map:
+            mname = "map_clear"
+        if mname == "remove" and obj_is_set:
+            mname = "set_remove"
+        if mname == "clear" and obj_is_set:
+            mname = "set_clear"
         # track that these methods return bools
         bool_methods := "contains,starts_with,ends_with,is_empty,string_contains"
         if bool_methods.contains(mname):
@@ -409,7 +423,7 @@ fn ir_expr(idx: Int) -> Int:
                     elif meth == "to_string":
                         needs_convert = false
                     # bool-returning methods need bool_to_string
-                    bool_meths := "contains,starts_with,ends_with,is_empty"
+                    bool_meths := "contains,contains_key,starts_with,ends_with,is_empty,has"
                     if bool_meths.contains(meth):
                         needs_convert = true  # but use bool_to_string
                         ts_r2 := ir_reg()
