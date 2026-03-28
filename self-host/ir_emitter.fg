@@ -133,6 +133,122 @@ fn ir_collect_strings(idx: Int):
     for child in node.children:
         ir_collect_strings(child)
 
+# --- centralized type inference for AST nodes ---
+# Returns: "int", "float", "bool", "string", "list", "list_string",
+#          "map", "map_int", "set", or "" (unknown)
+fn ir_infer_type(idx: Int) -> String:
+    node := get_node(idx)
+    # literals
+    if node.kind == "int_lit" or node.kind == "int" or node.kind == "integer":
+        return "int"
+    if node.kind == "float_lit" or node.kind == "float":
+        return "float"
+    if node.kind == "bool_lit" or node.kind == "bool":
+        return "bool"
+    if node.kind == "string_lit" or node.kind == "string" or node.kind == "str_lit" or node.kind == "string_interp":
+        return "string"
+    if node.kind == "list":
+        if node.children.len() > 0:
+            first := get_node(node.children[0])
+            if first.kind == "string_lit" or first.kind == "string":
+                return "list_string"
+        return "list"
+    if node.kind == "map":
+        return "map"
+    if node.kind == "set":
+        return "set"
+    if node.kind == "tuple":
+        return "tuple"
+    # identifiers — look up tracked type
+    if node.kind == "ident":
+        if ir_var_types.contains_key(node.value):
+            return ir_var_types[node.value]
+        return ""
+    if node.kind == "self":
+        return "struct"
+    # grouped expression — infer inner
+    if node.kind == "grouped" and node.children.len() > 0:
+        return ir_infer_type(node.children[0])
+    # binary ops
+    if node.kind == "binary":
+        op := node.value
+        if op == "eq" or op == "neq" or op == "lt" or op == "gt" or op == "lte" or op == "gte" or op == "and" or op == "or":
+            return "bool"
+        if op == "add" or op == "sub" or op == "mul" or op == "div" or op == "mod":
+            # check if either operand is float
+            if node.children.len() >= 2:
+                lt := ir_infer_type(node.children[0])
+                rt := ir_infer_type(node.children[1])
+                if lt == "float" or rt == "float":
+                    return "float"
+                if lt == "string" or rt == "string":
+                    return "string"
+            return "int"
+        return "int"
+    # unary
+    if node.kind == "unary":
+        if node.value == "not" or node.value == "!" or node.value == "not_op":
+            return "bool"
+        return "int"
+    # function calls
+    if node.kind == "call" and node.children.len() > 0:
+        fn_node := get_node(node.children[0])
+        if fn_node.kind == "ident":
+            fname := fn_node.value
+            if FLOAT_RETURNING_FUNCS.contains(fname):
+                return "float"
+            if BOOL_RETURNING_FUNCS.contains(fname):
+                return "bool"
+            if INT_RETURNING_FUNCS.contains(fname):
+                return "int"
+            if STRING_RETURNING_FUNCS.contains(fname):
+                return "string"
+            if ir_func_returns.contains_key(fname):
+                frt := ir_func_returns[fname]
+                if frt == "String":
+                    return "string"
+                elif frt == "Int":
+                    return "int"
+                elif frt == "Bool":
+                    return "bool"
+                elif frt == "Float":
+                    return "float"
+                elif frt.contains("List"):
+                    return "list"
+                elif frt.contains("Map"):
+                    return "map"
+                elif frt.contains("Set"):
+                    return "set"
+        return ""
+    # method calls
+    if node.kind == "method_call":
+        meth := node.value
+        if meth.starts_with("."):
+            meth = meth.substring(1, meth.len())
+        if BOOL_RETURNING_METHODS.contains(meth):
+            return "bool"
+        if STRING_RETURNING_METHODS.contains(meth):
+            return "string"
+        if meth == "to_float":
+            return "float"
+        if meth == "len":
+            return "int"
+        if meth == "keys" or meth == "values" or meth == "split" or meth == "chars":
+            return "list_string"
+        return ""
+    # field access — unknown type without checker info
+    if node.kind == "field_access":
+        return ""
+    # index — depends on collection type
+    if node.kind == "index" and node.children.len() > 0:
+        coll_type := ir_infer_type(node.children[0])
+        if coll_type == "string":
+            return "string"
+        if coll_type == "list_string":
+            return "string"
+        return ""
+    return ""
+
 # --- method call dispatch (extracted from ir_expr) ---
 fn ir_emit_method_call(idx: Int) -> Int:
     node := get_node(idx)
@@ -141,111 +257,29 @@ fn ir_emit_method_call(idx: Int) -> Int:
     if mname.starts_with("."):
         mname = mname.substring(1, mname.len())
 
-    # detect object type for dispatch
-    mut obj_is_bool := false
-    mut obj_is_string := false
+    # infer receiver type using centralized type inference
+    mut obj_type := ""
     if node.children.len() > 0:
-        obj_n := get_node(node.children[0])
-        # direct comparison produces bool (may be wrapped in grouped node)
-        mut check_n := obj_n
-        if check_n.kind == "grouped" and check_n.children.len() > 0:
-            check_n = get_node(check_n.children[0])
-        if check_n.kind == "binary":
-            obj_op := check_n.value
-            if obj_op == "eq" or obj_op == "neq" or obj_op == "lt" or obj_op == "gt" or obj_op == "lte" or obj_op == "gte" or obj_op == "and" or obj_op == "or":
-                obj_is_bool = true
-        elif obj_n.kind == "bool_lit":
-            obj_is_bool = true
-        elif obj_n.kind == "method_call":
-            # method calls that return bools
-            mc_name := obj_n.value
-            if mc_name.starts_with("."):
-                mc_name = mc_name.substring(1, mc_name.len())
-            if mc_name == "contains" or mc_name == "contains_key" or mc_name == "starts_with" or mc_name == "ends_with" or mc_name == "is_empty" or mc_name == "has":
-                obj_is_bool = true
-        # variable type lookup
-        elif obj_n.kind == "ident":
-            vname := obj_n.value
-            if ir_var_types.contains_key(vname):
-                vtype := ir_var_types[vname]
-                if vtype == "bool":
-                    obj_is_bool = true
-                elif vtype == "string":
-                    obj_is_string = true
-        elif obj_n.kind == "string_lit" or obj_n.kind == "string" or obj_n.kind == "string_interp":
-            obj_is_string = true
-        elif obj_n.kind == "call":
-            # check function return type
-            if obj_n.children.len() > 0:
-                cfn := get_node(obj_n.children[0])
-                if cfn.kind == "ident":
-                    cf_name := cfn.value
-                    # check user function returns
-                    if ir_func_returns.contains_key(cf_name):
-                        frt := ir_func_returns[cf_name]
-                        if frt == "Bool":
-                            obj_is_bool = true
-                        elif frt == "String":
-                            obj_is_string = true
-                    # check known stdlib functions
-                    if FLOAT_RETURNING_FUNCS.contains(cf_name):
-                        obj_is_bool = false
-                    elif BOOL_RETURNING_FUNCS.contains(cf_name):
-                        obj_is_bool = true
-    mut obj_is_float := false
-    # check call return type for float
-    if node.children.len() > 0:
-        check_obj := get_node(node.children[0])
-        if check_obj.kind == "call" and check_obj.children.len() > 0:
-            check_fn := get_node(check_obj.children[0])
-            if check_fn.kind == "ident":
-                if FLOAT_RETURNING_FUNCS.contains(check_fn.value):
-                    obj_is_float = true
-                elif ir_func_returns.contains_key(check_fn.value):
-                    if ir_func_returns[check_fn.value] == "Float":
-                        obj_is_float = true
-    if node.children.len() > 0:
-        ofn := get_node(node.children[0])
-        if ofn.kind == "float_lit" or ofn.kind == "float":
-            obj_is_float = true
-        elif ofn.kind == "ident" and ir_var_types.contains_key(ofn.value):
-            if ir_var_types[ofn.value] == "float":
-                obj_is_float = true
-    if mname == "to_string" and obj_is_float:
-        mname = "float_to_string"
-    if mname == "to_string" and obj_is_bool:
-        mname = "bool_to_string"
-    if mname == "to_string" and obj_is_string:
-        mname = "identity"
-    # for truly unknown types, use smart_to_string
-    if mname == "to_string" and not obj_is_bool and not obj_is_float and not obj_is_string:
-        if node.children.len() > 0:
-            obj_check := get_node(node.children[0])
-            if obj_check.kind == "ident" and not ir_var_types.contains_key(obj_check.value):
-                # unknown variable — could be parse() result or any opaque handle
-                mname = "smart_to_string"
-            # DON'T use smart_to_string for function calls — check return type first
-            elif obj_check.kind == "call" and obj_check.children.len() > 0:
-                call_id := get_node(obj_check.children[0])
-                if call_id.kind == "ident" and not ir_func_returns.contains_key(call_id.value):
-                    if not INT_RETURNING_FUNCS.contains(call_id.value):
-                        mname = "smart_to_string"
-    # detect object type for map/set/list dispatch
-    mut obj_is_map := false
-    mut obj_is_map_int := false
-    mut obj_is_set := false
-    if node.children.len() > 0:
-        on := get_node(node.children[0])
-        if on.kind == "ident":
-            if ir_var_types.contains_key(on.value):
-                ovt := ir_var_types[on.value]
-                if ovt == "map":
-                    obj_is_map = true
-                elif ovt == "map_int":
-                    obj_is_map = true
-                    obj_is_map_int = true
-                elif ovt == "set":
-                    obj_is_set = true
+        obj_type = ir_infer_type(node.children[0])
+
+    obj_is_string := obj_type == "string"
+    obj_is_bool := obj_type == "bool"
+    obj_is_float := obj_type == "float"
+    obj_is_map := obj_type == "map" or obj_type == "map_int"
+    obj_is_map_int := obj_type == "map_int"
+    obj_is_set := obj_type == "set"
+
+    # to_string dispatch based on receiver type
+    if mname == "to_string":
+        if obj_is_float:
+            mname = "float_to_string"
+        elif obj_is_bool:
+            mname = "bool_to_string"
+        elif obj_is_string:
+            mname = "identity"
+        elif obj_type == "":
+            mname = "smart_to_string"
+
     # dispatch len/contains based on object type
     if mname == "len" and obj_is_string:
         mname = "string_len"
@@ -263,23 +297,9 @@ fn ir_emit_method_call(idx: Int) -> Int:
         else:
             mname = "map_contains_key"
     # list methods
-    mut obj_is_list := false
-    if node.children.len() > 0:
-        on2 := get_node(node.children[0])
-        if on2.kind == "ident" and ir_var_types.contains_key(on2.value):
-            ovt2 := ir_var_types[on2.value]
-            if ovt2 == "list" or ovt2 == "list_string":
-                obj_is_list = true
-    # sort is in-place but callers expect the list returned
+    obj_is_list := obj_type == "list" or obj_type == "list_string"
     if mname == "sort" and obj_is_list:
-        # detect string list for sort dispatch
-        mut sort_list_type := "list"
-        if node.children.len() > 0:
-            sn := get_node(node.children[0])
-            if sn.kind == "ident" and ir_var_types.contains_key(sn.value):
-                if ir_var_types[sn.value] == "list_string":
-                    sort_list_type = "list_string"
-        if sort_list_type == "list_string":
+        if obj_type == "list_string":
             mname = "sort_strings"
     if mname == "contains" and obj_is_list:
         mname = "list_contains"
