@@ -1,0 +1,23 @@
+# stdlib collection utilities via import
+from std.collections import range, sum, max_of, min_of, reversed
+
+fn main():
+    r := range(1, 6)
+    mut strs: List[String] := []
+    mut i := 0
+    while i < r.len():
+        strs.push(r[i].to_string())
+        i = i + 1
+    print("range: " + strs.join(", "))
+    print("sum: " + sum(r).to_string())
+    print("max: " + max_of(r).to_string())
+    print("min: " + min_of(r).to_string())
+
+    rev := reversed(r)
+    mut rev_strs: List[String] := []
+    i = 0
+    while i < rev.len():
+        rev_strs.push(rev[i].to_string())
+        i = i + 1
+    print("reversed: " + rev_strs.join(", "))
+    print("stdlib collections work")

@@ -154,61 +154,174 @@ fn get_tokens_from_compiler(path: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Get IR text from the self-hosted compiler's ir_emitter.
-/// Uses a pre-compiled IR driver binary if available, otherwise
-/// generates and compiles one on the fly.
-fn get_ir_from_compiler(path: &str) -> Result<String, String> {
-    // Check for pre-compiled IR driver
-    let driver_bin_candidates = [
-        "./self-host/ir_driver",
-        "../self-host/ir_driver",
-    ];
-
-    for candidate in &driver_bin_candidates {
+/// Find the pre-compiled IR driver binary
+fn find_ir_driver() -> Option<String> {
+    for candidate in &["./self-host/ir_driver", "../self-host/ir_driver"] {
         if Path::new(candidate).exists() {
-            let output = Command::new(candidate)
-                .arg(path)
-                .output()
-                .map_err(|e| format!("run ir_driver: {}", e))?;
-
-            if output.status.success() {
-                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
-            }
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("IR driver failed: {}", stderr));
+            return Some(candidate.to_string());
         }
     }
-
-    // No pre-compiled driver — generate and compile one on the fly
-    // This uses the AST path (parse → compile) for the driver itself
-    let driver_source = format!(
-        "from lexer import lex_all\nfrom parser import parse\nfrom ast import reset_arena\nfrom ir_emitter import emit_ir\n\nfn main():\n    source := read_file(\"{}\")\n    tokens := lex_all(source)\n    reset_arena()\n    root := parse(tokens)\n    ir := emit_ir(root)\n    print(ir)\n",
-        path
-    );
-
-    let driver_path = "self-host/_ir_driver.fg";
-    fs::write(driver_path, &driver_source)
-        .map_err(|e| format!("write driver: {}", e))?;
-
-    // Compile and run the driver using get_ast + compile pipeline
-    let ast_text = get_ast_from_compiler(driver_path)?;
-
-    let ir_text = compile_and_run_from_ast(&ast_text, driver_path)?;
-
-    let _ = fs::remove_file(driver_path);
-
-    Ok(ir_text)
+    None
 }
 
-/// Compile AST text via ir_consumer and run it, returning stdout
-fn compile_and_run_from_ast(ast_text: &str, _source_path: &str) -> Result<String, String> {
-    // The AST text IS the source of the driver — we need to compile it.
-    // But we deleted compiler.rs. So we need another approach.
-    // For bootstrapping: use the Forge self-hosted compiler to parse, then ir_emitter to emit IR.
-    // But that's circular.
-    //
-    // Solution: We need a pre-compiled ir_driver binary. If it doesn't exist, we can't compile.
-    Err("No pre-compiled IR driver found. Run 'make self-host' to build the IR driver.".to_string())
+/// Run the IR driver on a single file, returning its IR text.
+/// Renames string IDs to avoid collisions: m0sN → m{module_index}sN
+fn run_ir_driver(driver: &str, path: &str, module_index: usize) -> Result<String, String> {
+    let output = Command::new(driver)
+        .arg(path)
+        .output()
+        .map_err(|e| format!("run ir_driver: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("IR driver failed on {}: {}", path, stderr));
+    }
+    let ir = String::from_utf8_lossy(&output.stdout).to_string();
+    if module_index == 0 {
+        return Ok(ir);
+    }
+    // Rename m0sN → m{module_index}sN to avoid string ID collisions
+    let from = "m0s";
+    let to = format!("m{}s", module_index);
+    Ok(ir.replace(from, &to))
+}
+
+/// Find the stdlib root directory by walking up from the source file and CWD
+fn find_stdlib_root(source_path: &str) -> Option<String> {
+    let check = |dir: &Path| -> Option<String> {
+        if dir.join("std/math.fg").exists() {
+            let s = dir.to_string_lossy().to_string();
+            return Some(if s.is_empty() { ".".to_string() } else { s });
+        }
+        None
+    };
+    // Try from source file directory
+    let mut dir = Path::new(source_path).parent().unwrap_or(Path::new(".")).to_path_buf();
+    for _ in 0..10 {
+        if let Some(root) = check(&dir) { return Some(root); }
+        match dir.parent() {
+            Some(p) if p != dir => dir = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    // Try from current working directory
+    if let Ok(cwd) = env::current_dir() {
+        let mut dir = cwd;
+        for _ in 0..10 {
+            if let Some(root) = check(&dir) { return Some(root); }
+            match dir.parent() {
+                Some(p) if p != dir => dir = p.to_path_buf(),
+                _ => break,
+            }
+        }
+    }
+    None
+}
+
+/// Extract import module paths from a source file (simple text scan)
+fn extract_imports(source: &str) -> Vec<String> {
+    let mut imports = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("from ") && trimmed.contains(" import ") {
+            // "from std.csv import parse, encode" → "std.csv"
+            if let Some(rest) = trimmed.strip_prefix("from ") {
+                if let Some(mod_path) = rest.split_whitespace().next() {
+                    imports.push(mod_path.to_string());
+                }
+            }
+        }
+    }
+    imports
+}
+
+/// Resolve a module path to a file path
+fn resolve_module_path(mod_path: &str, source_dir: &str, stdlib_root: Option<&str>) -> Option<String> {
+    let rel_path = mod_path.replace('.', "/") + ".fg";
+    if mod_path.starts_with("std.") {
+        if let Some(root) = stdlib_root {
+            let path = format!("{}/{}", root, rel_path);
+            if Path::new(&path).exists() {
+                return Some(path);
+            }
+        }
+    }
+    let path = if source_dir == "." { rel_path.clone() } else { format!("{}/{}", source_dir, rel_path) };
+    if Path::new(&path).exists() {
+        return Some(path);
+    }
+    None
+}
+
+/// Get IR text for a file and all its imports (recursive)
+fn get_ir_from_compiler(path: &str) -> Result<String, String> {
+    let driver = find_ir_driver()
+        .ok_or("No IR driver found. Ensure ./self-host/ir_driver exists.")?;
+
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("read {}: {}", path, e))?;
+
+    let source_dir = Path::new(path).parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let stdlib_root = find_stdlib_root(path);
+
+    // Collect all imported modules (DFS, dependency order)
+    let mut visited = std::collections::HashSet::new();
+    let mut module_files = Vec::new();
+    visited.insert(path.to_string());
+    collect_imports_recursive(
+        &source, &source_dir, stdlib_root.as_deref(), &mut visited, &mut module_files
+    );
+
+    // Generate IR: imported modules first, then main file
+    let mut all_ir = String::new();
+    for (i, mod_file) in module_files.iter().enumerate() {
+        let ir = run_ir_driver(&driver, mod_file, i)?;
+        if !ir.is_empty() {
+            all_ir.push_str(&ir);
+            all_ir.push('\n');
+        }
+    }
+    let main_ir = run_ir_driver(&driver, path, module_files.len())?;
+    all_ir.push_str(&main_ir);
+
+    Ok(all_ir)
+}
+
+/// Recursively collect imported module file paths in dependency order
+fn collect_imports_recursive(
+    source: &str,
+    source_dir: &str,
+    stdlib_root: Option<&str>,
+    visited: &mut std::collections::HashSet<String>,
+    module_files: &mut Vec<String>,
+) {
+    // Modules whose functions are handled as runtime builtins — skip importing
+    // their Forge implementations to avoid shadowing with incompatible versions
+    let builtin_modules = [
+        "std.json", "std.toml", "std.encoding", "std.hash", "std.math",
+        "std.fmt", "std.log", "std.fs", "std.net.tcp", "std.net.dns",
+        "std.net.url", "std.os.path", "std.os.process",
+    ];
+    for mod_path in extract_imports(source) {
+        if builtin_modules.contains(&mod_path.as_str()) {
+            continue; // handled as runtime builtins
+        }
+        if let Some(file_path) = resolve_module_path(&mod_path, source_dir, stdlib_root) {
+            if visited.contains(&file_path) {
+                continue;
+            }
+            visited.insert(file_path.clone());
+            // Recurse into this module's imports
+            if let Ok(mod_source) = fs::read_to_string(&file_path) {
+                let mod_dir = Path::new(&file_path).parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| ".".to_string());
+                collect_imports_recursive(&mod_source, &mod_dir, stdlib_root, visited, module_files);
+            }
+            module_files.push(file_path);
+        }
+    }
 }
 
 fn build_file(path: &str) {
