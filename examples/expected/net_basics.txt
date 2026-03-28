@@ -1,0 +1,4 @@
+listen fd: true
+bad connect: true
+localhost: ::1
+net basics work

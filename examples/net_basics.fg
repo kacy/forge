@@ -1,0 +1,17 @@
+# basic networking operations (non-concurrent)
+
+fn main():
+    # TCP listen and close
+    server := tcp_listen("127.0.0.1", 18438)
+    print("listen fd: " + (server > 0).to_string())
+    tcp_close(server)
+
+    # TCP connect to non-existent server
+    bad := tcp_connect("127.0.0.1", 18439)
+    print("bad connect: " + (bad < 0).to_string())
+
+    # DNS resolve
+    ip := dns_resolve("localhost")
+    print("localhost: " + ip)
+
+    print("net basics work")

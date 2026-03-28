@@ -220,6 +220,8 @@ fn compile_ir_function(
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    // Cache function references to avoid duplicate declarations
+    let mut func_ref_cache: HashMap<FuncId, cranelift::codegen::ir::FuncRef> = HashMap::new();
 
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -417,8 +419,9 @@ fn compile_ir_function(
                     "forge_string_concat"
                 };
                 if let Some(&concat_id) = runtime_funcs.get(concat_name) {
-                    let concat_ref =
-                        codegen.module.declare_func_in_func(concat_id, builder.func);
+                    let concat_ref = *func_ref_cache.entry(concat_id).or_insert_with(|| {
+                        codegen.module.declare_func_in_func(concat_id, builder.func)
+                    });
                     let call = builder.ins().call(concat_ref, &[a, b]);
                     if !builder.func.dfg.inst_results(call).is_empty() {
                         regs.insert(reg, builder.func.dfg.first_result(call));
@@ -450,7 +453,9 @@ fn compile_ir_function(
                     .copied();
 
                 if let Some(fid) = fid {
-                    let fref = codegen.module.declare_func_in_func(fid, builder.func);
+                    let fref = *func_ref_cache.entry(fid).or_insert_with(|| {
+                        codegen.module.declare_func_in_func(fid, builder.func)
+                    });
                     // Check function signature for f64 params and bitcast as needed
                     let sig_ref = builder.func.dfg.ext_funcs[fref].signature;
                     let sig = &builder.func.dfg.signatures[sig_ref];
@@ -561,7 +566,9 @@ fn compile_ir_function(
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let fname = parts[2];
                 if let Some(&fid) = declared_funcs.get(fname) {
-                    let fref = codegen.module.declare_func_in_func(fid, builder.func);
+                    let fref = *func_ref_cache.entry(fid).or_insert_with(|| {
+                        codegen.module.declare_func_in_func(fid, builder.func)
+                    });
                     let addr = builder.ins().func_addr(types::I64, fref);
                     regs.insert(reg, addr);
                 } else {
@@ -757,6 +764,7 @@ fn resolve_func_name(name: &str) -> &str {
         "exit" => "forge_exit",
         "env" => "forge_env",
         "args" => "forge_args_to_list",
+        "dns_resolve" => "forge_dns_resolve",
         // Crypto / encoding
         "sha256" => "forge_sha256",
         "fnv1a" => "forge_fnv1a",

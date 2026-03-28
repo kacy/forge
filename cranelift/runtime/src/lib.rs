@@ -2675,39 +2675,147 @@ pub unsafe extern "C" fn forge_process_read(_handle: i64) -> *mut i8 {
     forge_cstring_empty()
 }
 
-/// TCP listen — stub (returns 0)
+/// TCP listen — bind and listen on addr:port, return server fd
 #[no_mangle]
-pub extern "C" fn forge_tcp_listen(_addr: *const i8, _port: i64) -> i64 {
-    0
+pub unsafe extern "C" fn forge_tcp_listen(addr: *const i8, port: i64) -> i64 {
+    use std::net::TcpListener;
+    let host = if addr.is_null() { "0.0.0.0" } else { std::ffi::CStr::from_ptr(addr).to_str().unwrap_or("0.0.0.0") };
+    let bind_addr = format!("{}:{}", host, port);
+    match TcpListener::bind(&bind_addr) {
+        Ok(listener) => {
+            use std::os::unix::io::IntoRawFd;
+            listener.into_raw_fd() as i64
+        }
+        Err(_) => -1,
+    }
 }
 
-/// TCP connect — stub (returns 0)
+/// TCP connect — connect to addr:port, return connection fd
 #[no_mangle]
-pub extern "C" fn forge_tcp_connect(_addr: *const i8, _port: i64) -> i64 {
-    0
+pub unsafe extern "C" fn forge_tcp_connect(addr: *const i8, port: i64) -> i64 {
+    use std::net::TcpStream;
+    let host = if addr.is_null() { "127.0.0.1" } else { std::ffi::CStr::from_ptr(addr).to_str().unwrap_or("127.0.0.1") };
+    let connect_addr = format!("{}:{}", host, port);
+    match TcpStream::connect(&connect_addr) {
+        Ok(stream) => {
+            use std::os::unix::io::IntoRawFd;
+            stream.into_raw_fd() as i64
+        }
+        Err(_) => -1,
+    }
 }
 
-/// TCP accept — stub (returns 0)
+/// TCP accept — accept a connection on a server fd, return client fd
 #[no_mangle]
-pub extern "C" fn forge_tcp_accept(_server: i64) -> i64 {
-    0
+pub extern "C" fn forge_tcp_accept(server_fd: i64) -> i64 {
+    if server_fd < 0 { return -1; }
+    use std::net::TcpListener;
+    use std::os::unix::io::FromRawFd;
+    let listener = unsafe { TcpListener::from_raw_fd(server_fd as i32) };
+    let result = match listener.accept() {
+        Ok((stream, _addr)) => {
+            use std::os::unix::io::IntoRawFd;
+            stream.into_raw_fd() as i64
+        }
+        Err(_) => -1,
+    };
+    // Don't drop the listener — leak it back to keep the fd alive
+    use std::os::unix::io::IntoRawFd;
+    let _ = listener.into_raw_fd();
+    result
 }
 
-/// TCP read — stub (returns empty string)
+/// TCP read — read up to 4096 bytes from connection fd, return as C string
 #[no_mangle]
-pub extern "C" fn forge_tcp_read(_conn: i64) -> *mut i8 {
-    unsafe { forge_cstring_empty() }
+pub extern "C" fn forge_tcp_read(conn_fd: i64) -> *mut i8 {
+    use std::io::Read;
+    use std::net::TcpStream;
+    use std::os::unix::io::FromRawFd;
+    if conn_fd < 0 { return unsafe { forge_cstring_empty() }; }
+    let mut stream = unsafe { TcpStream::from_raw_fd(conn_fd as i32) };
+    let mut buf = vec![0u8; 4096];
+    let result = match stream.read(&mut buf) {
+        Ok(n) => {
+            buf.truncate(n);
+            let s = String::from_utf8_lossy(&buf).to_string();
+            unsafe { forge_strdup(s.as_ptr() as *const i8) }
+        }
+        Err(_) => unsafe { forge_cstring_empty() },
+    };
+    use std::os::unix::io::IntoRawFd;
+    let _ = stream.into_raw_fd();
+    result
 }
 
-/// TCP write — stub (returns 0)
+/// TCP read with max bytes limit
 #[no_mangle]
-pub extern "C" fn forge_tcp_write(_conn: i64, _data: *const i8) -> i64 {
-    0
+pub extern "C" fn forge_tcp_read2(conn_fd: i64, max_bytes: i64) -> *mut i8 {
+    use std::io::Read;
+    use std::net::TcpStream;
+    use std::os::unix::io::FromRawFd;
+    if conn_fd < 0 { return unsafe { forge_cstring_empty() }; }
+    let mut stream = unsafe { TcpStream::from_raw_fd(conn_fd as i32) };
+    let size = if max_bytes > 0 { max_bytes as usize } else { 4096 };
+    let mut buf = vec![0u8; size];
+    let result = match stream.read(&mut buf) {
+        Ok(n) => {
+            buf.truncate(n);
+            let s = String::from_utf8_lossy(&buf).to_string();
+            unsafe { forge_strdup(s.as_ptr() as *const i8) }
+        }
+        Err(_) => unsafe { forge_cstring_empty() },
+    };
+    use std::os::unix::io::IntoRawFd;
+    let _ = stream.into_raw_fd();
+    result
 }
 
-/// TCP close — stub
+/// TCP write — write data to connection fd, return bytes written
 #[no_mangle]
-pub extern "C" fn forge_tcp_close(_conn: i64) {}
+pub unsafe extern "C" fn forge_tcp_write(conn_fd: i64, data: *const i8) -> i64 {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::os::unix::io::FromRawFd;
+    if conn_fd < 0 { return -1; }
+    let mut stream = TcpStream::from_raw_fd(conn_fd as i32);
+    let s = std::ffi::CStr::from_ptr(data).to_str().unwrap_or("");
+    let result = match stream.write(s.as_bytes()) {
+        Ok(n) => n as i64,
+        Err(_) => -1,
+    };
+    let _ = stream.flush();
+    use std::os::unix::io::IntoRawFd;
+    let _ = stream.into_raw_fd();
+    result
+}
+
+/// TCP close — close the file descriptor
+#[no_mangle]
+pub extern "C" fn forge_tcp_close(fd: i64) {
+    if fd < 0 { return; }
+    use std::net::TcpStream;
+    use std::os::unix::io::FromRawFd;
+    drop(unsafe { TcpStream::from_raw_fd(fd as i32) });
+}
+
+/// DNS resolve — resolve hostname to IP address string
+#[no_mangle]
+pub unsafe extern "C" fn forge_dns_resolve(hostname: *const i8) -> *mut i8 {
+    use std::net::ToSocketAddrs;
+    let host = std::ffi::CStr::from_ptr(hostname).to_str().unwrap_or("");
+    let addr_str = format!("{}:0", host);
+    match addr_str.to_socket_addrs() {
+        Ok(mut addrs) => {
+            if let Some(addr) = addrs.next() {
+                let ip = format!("{}\0", addr.ip());
+                forge_strdup(ip.as_ptr() as *const i8)
+            } else {
+                forge_cstring_empty()
+            }
+        }
+        Err(_) => forge_cstring_empty(),
+    }
+}
 
 /// Channel new — stub (returns handle)
 #[no_mangle]
@@ -2974,12 +3082,6 @@ fn url_extract_host(s: &str) -> &str {
     let authority = after_scheme.split('/').next().unwrap_or("");
     let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
     auth_no_at.split(':').next().unwrap_or("")
-}
-
-/// TCP read with max-bytes argument — stub (returns empty string)
-#[no_mangle]
-pub extern "C" fn forge_tcp_read2(_conn: i64, _max_bytes: i64) -> *mut i8 {
-    unsafe { forge_cstring_empty() }
 }
 
 /// Allocate a zeroed block of `num_fields * 8` bytes for struct storage.
