@@ -49,7 +49,7 @@ common starting points:
 - add a token or keyword: `self-host/lexer.fg`
 - add syntax: `self-host/parser.fg`, `docs/grammar.ebnf`
 - add type rules: `self-host/checker.fg`
-- native code generation: `cranelift/codegen/src/compiler.rs`
+- native code generation: `cranelift/codegen/src/ir_consumer.rs`
 
 ## what it looks like
 
@@ -80,8 +80,8 @@ fn main():
 ## what works today
 
 the self-hosted compiler handles the full pipeline: lex → parse → check →
-codegen. 43 deterministic example programs compile and produce verified
-output via both C transpilation and Cranelift native backends.
+codegen. 53 deterministic example programs compile and produce verified
+output via the Cranelift native backend.
 
 **language features:**
 - function declarations, typed parameters, return types, calls
