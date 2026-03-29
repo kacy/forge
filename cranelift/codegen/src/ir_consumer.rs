@@ -463,7 +463,6 @@ fn compile_ir_function(
 
     // Compile instructions
     let mut terminated = false;
-    let _last_call_result: Option<(usize, usize)> = None;
     for line in body_lines {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.is_empty() || parts[0].starts_with(';') {
