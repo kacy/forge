@@ -1259,70 +1259,56 @@ fn ir_block(idx: Int):
     else:
         ir_stmt(idx)
 
-# --- emit function ---
-fn ir_func(idx: Int):
-    node := get_node(idx)
-    mut name := node.value
-    # strip generic parameters like show[T] -> show
-    if name.contains("["):
-        name = name.substring(0, name.index_of("["))
-    ir_var_regs = {}
+# --- helpers for function emission ---
 
-    mut params: List[String] := []
-    mut body_idx := 0 - 1
-    mut ret_type := "i64"
+fn ir_extract_param_type(param_idx: Int) -> String:
+    mut pty := "Int"
+    pn := get_node(param_idx)
+    pk := pn.children
+    mut pi := 0
+    while pi < pk.len():
+        tn := get_node(pk[pi])
+        if tn.kind == "type" or tn.kind == "generic_type":
+            pty = tn.value
+        pi = pi + 1
+    return pty
 
-    mut param_types: List[String] := []
-    mut _fi19 := 0
-    _kids19 := node.children
-    while _fi19 < _kids19.len():
-        child := _kids19[_fi19]
-        cn := get_node(child)
+fn ir_find_body(fn_idx: Int) -> Int:
+    node := get_node(fn_idx)
+    nk := node.children
+    mut i := 0
+    while i < nk.len():
+        cn := get_node(nk[i])
+        if cn.kind == "body":
+            return nk[i]
+        i = i + 1
+    return 0 - 1
+
+fn ir_collect_params(fn_idx: Int, params: List[String], param_types: List[String]):
+    node := get_node(fn_idx)
+    nk := node.children
+    mut i := 0
+    while i < nk.len():
+        cn := get_node(nk[i])
         if cn.kind == "param":
             params.push(cn.value)
-            # extract parameter type
-            mut pty := "Int"
-            mut _fi29 := 0
-            _kids29 := cn.children
-            while _fi29 < _kids29.len():
-                pc := _kids29[_fi29]
-                ptn := get_node(pc)
-                if ptn.kind == "type":
-                    pty = ptn.value
-                elif ptn.kind == "generic_type":
-                    pty = ptn.value
-                _fi29 = _fi29 + 1
-            param_types.push(pty)
-        elif cn.kind == "body":
-            body_idx = child
-        elif cn.kind == "returns":
-            # check for result type
-            mut _fi30 := 0
-            _kids30 := cn.children
-            while _fi30 < _kids30.len():
-                rc := _kids30[_fi30]
-                rcn := get_node(rc)
-                if rcn.kind == "type":
-                    ret_type = "i64"
+            param_types.push(ir_extract_param_type(nk[i]))
+        i = i + 1
 
-                _fi30 = _fi30 + 1
-        _fi19 = _fi19 + 1
-    ir_next_reg = 0
-    ir_var_regs = {}
-    ir_var_types = {}
-    ir_emit("func " + name + " " + params.len().to_string() + " " + ret_type)
+fn ir_emit_param_types(params: List[String], param_types: List[String]):
     mut i := 0
     while i < params.len():
         r := ir_reg()
         ir_var_regs.insert(params[i], r)
         ir_emit("param " + params[i])
-        # track parameter types
         if i < param_types.len():
             pt := param_types[i]
             if pt == "String":
                 ir_var_types.insert(params[i], "string")
             elif pt == "Int":
                 ir_var_types.insert(params[i], "int")
+            elif pt == "Float":
+                ir_var_types.insert(params[i], "float")
             elif pt == "Bool":
                 ir_var_types.insert(params[i], "bool")
             elif pt == "Map" or pt.contains("Map"):
@@ -1331,89 +1317,68 @@ fn ir_func(idx: Int):
                 ir_var_types.insert(params[i], "set")
             elif pt == "List" or pt.contains("List"):
                 ir_var_types.insert(params[i], "list")
-            # resolve type aliases
             elif ir_type_aliases.contains_key(pt):
                 resolved := ir_type_aliases[pt]
                 if resolved == "String":
                     ir_var_types.insert(params[i], "string")
                 elif resolved == "Bool":
                     ir_var_types.insert(params[i], "bool")
+                elif resolved == "Float":
+                    ir_var_types.insert(params[i], "float")
         i = i + 1
 
-    if body_idx >= 0:
-        ir_block(body_idx)
-
-    # default return
+fn ir_emit_default_return():
     dr := ir_reg()
     ir_emit("iconst " + dr.to_string() + " 0")
     ir_emit("ret " + dr.to_string())
     ir_emit("endfunc")
 
-# --- emit impl method (adds self as first param, prefixes name) ---
+# --- emit function ---
+fn ir_func(idx: Int):
+    node := get_node(idx)
+    mut name := node.value
+    if name.contains("["):
+        name = name.substring(0, name.index_of("["))
+
+    mut params: List[String] := []
+    mut param_types: List[String] := []
+    ir_collect_params(idx, params, param_types)
+    body_idx := ir_find_body(idx)
+
+    ir_next_reg = 0
+    ir_var_regs = {}
+    ir_var_types = {}
+    ir_emit("func " + name + " " + params.len().to_string() + " i64")
+    ir_emit_param_types(params, param_types)
+
+    if body_idx >= 0:
+        ir_block(body_idx)
+
+    ir_emit_default_return()
+
+# --- emit impl method ---
 fn ir_impl_func(idx: Int, impl_type: String):
     node := get_node(idx)
     orig_name := node.value
     full_name := impl_type + "_" + orig_name
     ir_impl_methods.insert(orig_name, full_name)
-    ir_var_regs = {}
+
     mut params: List[String] := ["self"]
-    mut body_idx := 0 - 1
-    mut ret_type := "i64"
     mut param_types: List[String] := ["struct"]
-    mut _fi20 := 0
-    _kids20 := node.children
-    while _fi20 < _kids20.len():
-        child := _kids20[_fi20]
-        cn := get_node(child)
-        if cn.kind == "param":
-            params.push(cn.value)
-            mut pty := "Int"
-            mut _fi31 := 0
-            _kids31 := cn.children
-            while _fi31 < _kids31.len():
-                pc := _kids31[_fi31]
-                ptn := get_node(pc)
-                if ptn.kind == "type":
-                    pty = ptn.value
-                elif ptn.kind == "generic_type":
-                    pty = ptn.value
-                _fi31 = _fi31 + 1
-            param_types.push(pty)
-        elif cn.kind == "body":
-            body_idx = child
-        elif cn.kind == "returns":
-            mut _fi32 := 0
-            _kids32 := cn.children
-            while _fi32 < _kids32.len():
-                rc := _kids32[_fi32]
-                rcn := get_node(rc)
-                if rcn.kind == "type":
-                    ret_type = "i64"
-                _fi32 = _fi32 + 1
-        _fi20 = _fi20 + 1
+    ir_collect_params(idx, params, param_types)
+    body_idx := ir_find_body(idx)
+
     ir_next_reg = 0
     ir_var_regs = {}
     ir_var_types = {}
-    ir_emit("func " + full_name + " " + params.len().to_string() + " " + ret_type)
-    mut pi := 0
-    while pi < params.len():
-        r := ir_reg()
-        ir_var_regs.insert(params[pi], r)
-        ir_emit("param " + params[pi])
-        if pi < param_types.len():
-            pt := param_types[pi]
-            if pt == "String":
-                ir_var_types.insert(params[pi], "string")
-            elif pt == "Bool":
-                ir_var_types.insert(params[pi], "bool")
-        pi = pi + 1
-    ir_func_returns.insert(full_name, ret_type)
+    ir_emit("func " + full_name + " " + params.len().to_string() + " i64")
+    ir_emit_param_types(params, param_types)
+    ir_func_returns.insert(full_name, "i64")
+
     if body_idx >= 0:
         ir_block(body_idx)
-    idr := ir_reg()
-    ir_emit("iconst " + idr.to_string() + " 0")
-    ir_emit("ret " + idr.to_string())
-    ir_emit("endfunc")
+
+    ir_emit_default_return()
 
 # --- collect import renames ---
 fn ir_collect_imports(root_idx: Int):
