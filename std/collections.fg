@@ -1,14 +1,16 @@
-## std.collections — collection utility functions
-##
-## Functions:
-##   range(start: Int, end: Int) -> List[Int]
-##   repeat_val(value: Int, count: Int) -> List[Int]
-##   sum(list: List[Int]) -> Int
-##   max_of(list: List[Int]) -> Int
-##   min_of(list: List[Int]) -> Int
-##   reversed(list: List[Int]) -> List[Int]
+# std.collections — list and map utilities
+#
+# Functional-style operations on lists: transform, filter, aggregate, query.
+# All functions return new lists — inputs are never modified.
+#
+#   from std.collections import range, sum, reversed, zip, enumerate
+#   from std.collections import any, all, find, take, drop, flatten
 
-## Create a list of integers from start (inclusive) to end (exclusive)
+# ===============================================================
+# Constructors
+# ===============================================================
+
+# Create a list of integers from start (inclusive) to end (exclusive)
 pub fn range(start: Int, end: Int) -> List[Int]:
     mut result: List[Int] := []
     mut i := start
@@ -17,7 +19,7 @@ pub fn range(start: Int, end: Int) -> List[Int]:
         i = i + 1
     return result
 
-## Create a list with the same value repeated count times
+# Create a list with value repeated count times
 pub fn repeat_val(value: Int, count: Int) -> List[Int]:
     mut result: List[Int] := []
     mut i := 0
@@ -26,44 +28,337 @@ pub fn repeat_val(value: Int, count: Int) -> List[Int]:
         i = i + 1
     return result
 
-## Sum all elements in an integer list
+# Create a list of n zeros
+pub fn zeros(n: Int) -> List[Int]:
+    return repeat_val(0, n)
+
+# ===============================================================
+# Aggregation
+# ===============================================================
+
 pub fn sum(list: List[Int]) -> Int:
     mut total := 0
+    n := list.len()
     mut i := 0
-    while i < list.len():
+    while i < n:
         total = total + list[i]
         i = i + 1
     return total
 
-## Find the maximum value in an integer list (returns 0 for empty list)
+pub fn product(list: List[Int]) -> Int:
+    if list.len() == 0:
+        return 1
+    mut result := 1
+    n := list.len()
+    mut i := 0
+    while i < n:
+        result = result * list[i]
+        i = i + 1
+    return result
+
 pub fn max_of(list: List[Int]) -> Int:
     if list.len() == 0:
         return 0
     mut result := list[0]
+    n := list.len()
     mut i := 1
-    while i < list.len():
+    while i < n:
         if list[i] > result:
             result = list[i]
         i = i + 1
     return result
 
-## Find the minimum value in an integer list (returns 0 for empty list)
 pub fn min_of(list: List[Int]) -> Int:
     if list.len() == 0:
         return 0
     mut result := list[0]
+    n := list.len()
     mut i := 1
-    while i < list.len():
+    while i < n:
         if list[i] < result:
             result = list[i]
         i = i + 1
     return result
 
-## Return a reversed copy of an integer list
+pub fn average(list: List[Int]) -> Int:
+    if list.len() == 0:
+        return 0
+    return sum(list) / list.len()
+
+# ===============================================================
+# Queries
+# ===============================================================
+
+# True if any element equals the value
+pub fn has(list: List[Int], value: Int) -> Bool:
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] == value:
+            return true
+        i = i + 1
+    return false
+
+# True if all elements are non-zero
+pub fn all_nonzero(list: List[Int]) -> Bool:
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] == 0:
+            return false
+        i = i + 1
+    return true
+
+# True if any element is non-zero
+pub fn any_nonzero(list: List[Int]) -> Bool:
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] != 0:
+            return true
+        i = i + 1
+    return false
+
+# Index of first occurrence of value, or -1
+pub fn index_of(list: List[Int], value: Int) -> Int:
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] == value:
+            return i
+        i = i + 1
+    return -1
+
+# Index of last occurrence of value, or -1
+pub fn last_index_of(list: List[Int], value: Int) -> Int:
+    mut result := -1
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] == value:
+            result = i
+        i = i + 1
+    return result
+
+# Count how many elements equal the value
+pub fn count(list: List[Int], value: Int) -> Int:
+    mut result := 0
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] == value:
+            result = result + 1
+        i = i + 1
+    return result
+
+# True if list is sorted ascending
+pub fn is_sorted(list: List[Int]) -> Bool:
+    n := list.len()
+    mut i := 1
+    while i < n:
+        if list[i] < list[i - 1]:
+            return false
+        i = i + 1
+    return true
+
+# ===============================================================
+# Transformations
+# ===============================================================
+
 pub fn reversed(list: List[Int]) -> List[Int]:
     mut result: List[Int] := []
     mut i := list.len() - 1
     while i >= 0:
         result.push(list[i])
         i = i - 1
+    return result
+
+# First n elements (or all if shorter)
+pub fn take(list: List[Int], n: Int) -> List[Int]:
+    mut result: List[Int] := []
+    mut count := n
+    if count > list.len():
+        count = list.len()
+    mut i := 0
+    while i < count:
+        result.push(list[i])
+        i = i + 1
+    return result
+
+# Everything after the first n elements
+pub fn drop(list: List[Int], n: Int) -> List[Int]:
+    mut result: List[Int] := []
+    mut start := n
+    if start < 0:
+        start = 0
+    len := list.len()
+    mut i := start
+    while i < len:
+        result.push(list[i])
+        i = i + 1
+    return result
+
+# Slice from start (inclusive) to end (exclusive)
+pub fn slice(list: List[Int], start: Int, end: Int) -> List[Int]:
+    mut result: List[Int] := []
+    n := list.len()
+    mut lo := start
+    if lo < 0:
+        lo = 0
+    mut hi := end
+    if hi > n:
+        hi = n
+    mut i := lo
+    while i < hi:
+        result.push(list[i])
+        i = i + 1
+    return result
+
+# Remove consecutive duplicates (sort first for full dedup)
+pub fn unique(list: List[Int]) -> List[Int]:
+    n := list.len()
+    if n == 0:
+        return []
+    mut result: List[Int] := []
+    result.push(list[0])
+    mut i := 1
+    while i < n:
+        if list[i] != list[i - 1]:
+            result.push(list[i])
+        i = i + 1
+    return result
+
+# Remove all occurrences of a value
+pub fn without(list: List[Int], value: Int) -> List[Int]:
+    mut result: List[Int] := []
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] != value:
+            result.push(list[i])
+        i = i + 1
+    return result
+
+# ===============================================================
+# Combining
+# ===============================================================
+
+# Pair elements from two lists as "a:b" strings
+pub fn zip(a: List[Int], b: List[Int]) -> List[String]:
+    mut result: List[String] := []
+    na := a.len()
+    nb := b.len()
+    mut len := na
+    if nb < len:
+        len = nb
+    mut i := 0
+    while i < len:
+        result.push(a[i].to_string() + ":" + b[i].to_string())
+        i = i + 1
+    return result
+
+# Create "index:value" pairs
+pub fn enumerate(list: List[Int]) -> List[String]:
+    mut result: List[String] := []
+    n := list.len()
+    mut i := 0
+    while i < n:
+        result.push(i.to_string() + ":" + list[i].to_string())
+        i = i + 1
+    return result
+
+# Flatten a list of lists into a single list
+pub fn flatten(lists: List[List[Int]]) -> List[Int]:
+    mut result: List[Int] := []
+    n := lists.len()
+    mut i := 0
+    while i < n:
+        inner := lists[i]
+        ni := inner.len()
+        mut j := 0
+        while j < ni:
+            result.push(inner[j])
+            j = j + 1
+        i = i + 1
+    return result
+
+# Split list into chunks of given size
+pub fn chunks(list: List[Int], size: Int) -> List[List[Int]]:
+    mut result: List[List[Int]] := []
+    if size <= 0:
+        return result
+    n := list.len()
+    mut i := 0
+    while i < n:
+        mut chunk: List[Int] := []
+        mut j := 0
+        while j < size and i + j < n:
+            chunk.push(list[i + j])
+            j = j + 1
+        result.push(chunk)
+        i = i + size
+    return result
+
+# ===============================================================
+# Set Operations
+# ===============================================================
+
+# Elements in both lists
+pub fn intersection(a: List[Int], b: List[Int]) -> List[Int]:
+    mut result: List[Int] := []
+    na := a.len()
+    mut i := 0
+    while i < na:
+        if has(b, a[i]):
+            result.push(a[i])
+        i = i + 1
+    return result
+
+# Elements in first but not second
+pub fn difference(a: List[Int], b: List[Int]) -> List[Int]:
+    mut result: List[Int] := []
+    na := a.len()
+    mut i := 0
+    while i < na:
+        if not has(b, a[i]):
+            result.push(a[i])
+        i = i + 1
+    return result
+
+# ===============================================================
+# String List Utilities
+# ===============================================================
+
+# Reverse a list of strings
+pub fn reversed_strings(list: List[String]) -> List[String]:
+    mut result: List[String] := []
+    mut i := list.len() - 1
+    while i >= 0:
+        result.push(list[i])
+        i = i - 1
+    return result
+
+# True if any string in the list equals the value
+pub fn has_string(list: List[String], value: String) -> Bool:
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if list[i] == value:
+            return true
+        i = i + 1
+    return false
+
+# Join strings with a separator (builtin .join() exists but this
+# works on any List[String] passed cross-module)
+pub fn join_with(list: List[String], sep: String) -> String:
+    mut result := ""
+    n := list.len()
+    mut i := 0
+    while i < n:
+        if i > 0:
+            tmp := result + sep
+            result = tmp + list[i]
+        else:
+            result = list[i]
+        i = i + 1
     return result

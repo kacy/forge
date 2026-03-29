@@ -1,37 +1,65 @@
 # std.log — structured logging to stderr
 #
-# Provides timestamped log messages to stderr with four severity levels.
-# Timestamps are formatted as YYYY-MM-DD HH:MM:SS.
+# Timestamped log messages with severity levels, key-value fields,
+# and configurable minimum level.
 #
-#   from std.log import info, error
-#   info("server started on port 8080")
-#   error("connection refused")
+#   from std.log import info, warn, error, set_level
+#   set_level(2)  # only WARN and above
+#   info("skipped")
+#   warn("this prints")
+#   error("connection failed", "host=db.local port=5432")
 
-# ===============================================================
-# Logging Functions
-# ===============================================================
+# Levels: 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR
+mut min_level: Int := 0
 
-# Internal function to format and output a log line.
+# Set minimum log level (0=DEBUG, 1=INFO, 2=WARN, 3=ERROR)
+pub fn set_level(level: Int):
+    min_level = level
+
+fn level_num(level: String) -> Int:
+    if level == "DEBUG":
+        return 0
+    if level == "INFO":
+        return 1
+    if level == "WARN":
+        return 2
+    if level == "ERROR":
+        return 3
+    return 0
+
 fn log_line(level: String, msg: String):
+    if level_num(level) < min_level:
+        return
     ts := format_time(time(), "%Y-%m-%d %H:%M:%S")
     print_err(ts + " [" + level + "] " + msg)
 
-# Logs an informational message to stderr.
-# Use for general status updates and successful operations.
+fn log_kv(level: String, msg: String, fields: String):
+    if level_num(level) < min_level:
+        return
+    ts := format_time(time(), "%Y-%m-%d %H:%M:%S")
+    print_err(ts + " [" + level + "] " + msg + " " + fields)
+
+pub fn debug(msg: String):
+    log_line("DEBUG", msg)
+
 pub fn info(msg: String):
     log_line("INFO", msg)
 
-# Logs a warning message to stderr.
-# Use for potential issues that don't prevent operation.
 pub fn warn(msg: String):
     log_line("WARN", msg)
 
-# Logs an error message to stderr.
-# Use for failures and exceptional conditions.
 pub fn error(msg: String):
     log_line("ERROR", msg)
 
-# Logs a debug message to stderr.
-# Use for detailed diagnostic information during development.
-pub fn debug(msg: String):
-    log_line("DEBUG", msg)
+# Log with key=value fields: error("failed", "host=db port=5432")
+pub fn debug_kv(msg: String, fields: String):
+    log_kv("DEBUG", msg, fields)
+
+pub fn info_kv(msg: String, fields: String):
+    log_kv("INFO", msg, fields)
+
+pub fn warn_kv(msg: String, fields: String):
+    log_kv("WARN", msg, fields)
+
+pub fn error_kv(msg: String, fields: String):
+    log_kv("ERROR", msg, fields)

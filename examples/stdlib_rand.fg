@@ -1,0 +1,57 @@
+# test std.rand — random numbers, shuffle, choice, sample
+from std.rand import seed, int, shuffle, choice, sample, roll, chance
+
+fn list_str(list: List[Int]) -> String:
+    mut parts: List[String] := []
+    mut i := 0
+    while i < list.len():
+        parts.push(list[i].to_string())
+        i = i + 1
+    return "[" + parts.join(", ") + "]"
+
+fn main():
+    seed(42)
+
+    # basic random
+    a := int(1, 10)
+    print("random int: " + a.to_string())
+
+    # roll
+    d := roll(6)
+    print("roll d6: " + d.to_string())
+
+    # choice
+    items := [10, 20, 30, 40, 50]
+    c := choice(items)
+    print("choice: " + c.to_string())
+
+    # shuffle
+    nums := [1, 2, 3, 4, 5]
+    shuffled := shuffle(nums)
+    print("shuffled: " + list_str(shuffled))
+    # verify same elements
+    mut sum_orig := 0
+    mut sum_shuf := 0
+    mut i := 0
+    while i < 5:
+        sum_orig = sum_orig + nums[i]
+        sum_shuf = sum_shuf + shuffled[i]
+        i = i + 1
+    if sum_orig == sum_shuf:
+        print("shuffle preserves sum: true")
+
+    # sample
+    s := sample([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)
+    print("sample 3: " + list_str(s))
+
+    # chance
+    seed(42)
+    mut hits := 0
+    i = 0
+    while i < 100:
+        if chance(50):
+            hits = hits + 1
+        i = i + 1
+    print("chance(50) hits: " + hits.to_string())
+
+    print("rand tests passed")

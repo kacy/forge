@@ -1,0 +1,8 @@
+random int: 10
+roll d6: 1
+choice: 50
+shuffled: [4, 1, 2, 5, 3]
+shuffle preserves sum: true
+sample 3: [9, 7, 3]
+chance(50) hits: 54
+rand tests passed
