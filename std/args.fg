@@ -1,0 +1,333 @@
+# std.args — command-line argument parser
+#
+# Declarative argument parser for CLI tools.
+#
+#   from std.args import init, add_flag, add_option, add_positional
+#   from std.args import parse, get_flag, get_option, get_positional
+#   init("myapp", "Does things")
+#   add_flag("verbose", "v", "Enable verbose output")
+#   add_option("output", "o", "Output file", "out.txt")
+#   add_positional("input", "Input file")
+#   parse()
+
+# ===============================================================
+# State — encoded as delimited strings with counters
+# ===============================================================
+# Each flag entry:  "name|short|desc|value" (value: "0" or "1")
+# Each option entry: "name|short|desc|value"
+# Each pos entry:   "name|desc|value"
+# Records separated by "~"
+
+mut app_name: String := ""
+mut app_desc: String := ""
+mut flags_data: String := ""
+mut flag_count: Int := 0
+mut opts_data: String := ""
+mut opt_count: Int := 0
+mut pos_data: String := ""
+mut pos_count: Int := 0
+mut error_data: String := ""
+mut error_count: Int := 0
+
+# ===============================================================
+# Setup
+# ===============================================================
+
+pub fn init(name: String, description: String):
+    app_name = name
+    app_desc = description
+
+pub fn add_flag(name: String, short: String, description: String):
+    entry := name + "|" + short + "|" + description + "|0"
+    if flag_count > 0:
+        flags_data = flags_data + "~" + entry
+    else:
+        flags_data = entry
+    flag_count = flag_count + 1
+
+pub fn add_option(name: String, short: String, description: String, default_val: String):
+    entry := name + "|" + short + "|" + description + "|" + default_val
+    if opt_count > 0:
+        opts_data = opts_data + "~" + entry
+    else:
+        opts_data = entry
+    opt_count = opt_count + 1
+
+pub fn add_positional(name: String, description: String):
+    entry := name + "|" + description + "| "
+    if pos_count > 0:
+        pos_data = pos_data + "~" + entry
+    else:
+        pos_data = entry
+    pos_count = pos_count + 1
+
+# ===============================================================
+# Internal field access
+# ===============================================================
+
+fn get_field(record: String, idx: Int) -> String:
+    parts := record.split("|")
+    if idx < parts.len():
+        return parts[idx]
+    return ""
+
+fn get_records(data: String) -> List[String]:
+    return data.split("~")
+
+fn find_record(data: String, count: Int, name: String) -> String:
+    if count == 0:
+        return ""
+    recs := get_records(data)
+    mut i := 0
+    while i < recs.len():
+        if get_field(recs[i], 0) == name:
+            return recs[i]
+        i = i + 1
+    return ""
+
+fn find_by_short(data: String, count: Int, short: String) -> String:
+    if count == 0:
+        return ""
+    recs := get_records(data)
+    mut i := 0
+    while i < recs.len():
+        if get_field(recs[i], 1) == short:
+            return get_field(recs[i], 0)
+        i = i + 1
+    return ""
+
+fn rebuild_with_update(data: String, name: String, field_idx: Int, new_val: String) -> String:
+    recs := get_records(data)
+    mut result := ""
+    mut i := 0
+    while i < recs.len():
+        rec := recs[i]
+        if get_field(rec, 0) == name:
+            parts := rec.split("|")
+            mut rebuilt := ""
+            mut j := 0
+            while j < parts.len():
+                if j > 0:
+                    rebuilt = rebuilt + "|"
+                if j == field_idx:
+                    rebuilt = rebuilt + new_val
+                else:
+                    rebuilt = rebuilt + parts[j]
+                j = j + 1
+            rec = rebuilt
+        if i > 0:
+            result = result + "~" + rec
+        else:
+            result = rec
+        i = i + 1
+    return result
+
+# ===============================================================
+# Parsing
+# ===============================================================
+
+pub fn parse():
+    a := args()
+    mut argv: List[String] := []
+    mut i := 1
+    while i < a.len():
+        argv.push(a[i])
+        i = i + 1
+    parse_list(argv)
+
+pub fn parse_list(argv: List[String]):
+    mut pi := 0
+    mut i := 0
+    while i < argv.len():
+        # Copy arg to local var so string methods work
+        arg := "" + argv[i]
+        if arg == "--help" or arg == "-h":
+            print(help_text())
+            i = i + 1
+        elif arg.starts_with("--"):
+            name := arg.substring(2, arg.len())
+            eq := find_eq(name)
+            if eq >= 0:
+                oname := name.substring(0, eq)
+                oval := name.substring(eq + 1, name.len())
+                if find_record(opts_data, opt_count, oname) != "":
+                    opts_data = rebuild_with_update(opts_data, oname, 3, oval)
+                else:
+                    add_error("unknown option: --" + oname)
+            elif find_record(flags_data, flag_count, name) != "":
+                flags_data = rebuild_with_update(flags_data, name, 3, "1")
+            elif find_record(opts_data, opt_count, name) != "":
+                if i + 1 < argv.len():
+                    i = i + 1
+                    opts_data = rebuild_with_update(opts_data, name, 3, "" + argv[i])
+                else:
+                    add_error("--" + name + " requires a value")
+            else:
+                add_error("unknown option: --" + name)
+            i = i + 1
+        elif arg.starts_with("-") and arg != "-":
+            short := arg.substring(1, arg.len())
+            lf := find_by_short(flags_data, flag_count, short)
+            lo := find_by_short(opts_data, opt_count, short)
+            if lf != "":
+                flags_data = rebuild_with_update(flags_data, lf, 3, "1")
+            elif lo != "":
+                if i + 1 < argv.len():
+                    i = i + 1
+                    opts_data = rebuild_with_update(opts_data, lo, 3, "" + argv[i])
+                else:
+                    add_error("-" + short + " requires a value")
+            else:
+                add_error("unknown option: -" + short)
+            i = i + 1
+        else:
+            if pi < pos_count:
+                pos_data = rebuild_with_update_by_index(pos_data, pi, 2, arg)
+                pi = pi + 1
+            else:
+                add_error("unexpected argument: " + arg)
+            i = i + 1
+
+fn find_eq(s: String) -> Int:
+    mut i := 0
+    while i < s.len():
+        if s[i] == "=":
+            return i
+        i = i + 1
+    return -1
+
+fn rebuild_with_update_by_index(data: String, rec_idx: Int, field_idx: Int, new_val: String) -> String:
+    recs := get_records(data)
+    mut result := ""
+    mut i := 0
+    while i < recs.len():
+        rec := recs[i]
+        if i == rec_idx:
+            parts := rec.split("|")
+            mut rebuilt := ""
+            mut j := 0
+            while j < parts.len():
+                if j > 0:
+                    rebuilt = rebuilt + "|"
+                if j == field_idx:
+                    rebuilt = rebuilt + new_val
+                else:
+                    rebuilt = rebuilt + parts[j]
+                j = j + 1
+            rec = rebuilt
+        if i > 0:
+            result = result + "~" + rec
+        else:
+            result = rec
+        i = i + 1
+    return result
+
+fn add_error(msg: String):
+    if error_count > 0:
+        error_data = error_data + "\n" + msg
+    else:
+        error_data = msg
+    error_count = error_count + 1
+
+# Strip leading dashes from an argument string
+fn strip_dashes(arg: String, count: Int) -> String:
+    return arg.substring(count, arg.len())
+
+# ===============================================================
+# Querying
+# ===============================================================
+
+pub fn get_flag(name: String) -> Bool:
+    rec := find_record(flags_data, flag_count, name)
+    if rec == "":
+        return false
+    return get_field(rec, 3) == "1"
+
+pub fn get_option(name: String) -> String:
+    rec := find_record(opts_data, opt_count, name)
+    if rec == "":
+        return ""
+    return get_field(rec, 3)
+
+pub fn get_positional(name: String) -> String:
+    rec := find_record(pos_data, pos_count, name)
+    if rec == "":
+        return ""
+    return get_field(rec, 2).trim()
+
+pub fn has_errors() -> Bool:
+    return error_count > 0
+
+pub fn get_errors() -> String:
+    return error_data
+
+# ===============================================================
+# Help Text
+# ===============================================================
+
+pub fn help_text() -> String:
+    mut lines: List[String] := []
+    lines.push(app_name + " - " + app_desc)
+    lines.push("")
+
+    mut usage := "Usage: " + app_name
+    if flag_count > 0 or opt_count > 0:
+        usage = usage + " [options]"
+    if pos_count > 0:
+        precs := get_records(pos_data)
+        mut i := 0
+        while i < precs.len():
+            usage = usage + " <" + get_field(precs[i], 0) + ">"
+            i = i + 1
+    lines.push(usage)
+
+    if pos_count > 0:
+        lines.push("")
+        lines.push("Arguments:")
+        precs := get_records(pos_data)
+        mut i := 0
+        while i < precs.len():
+            pn := get_field(precs[i], 0)
+            pd := get_field(precs[i], 1)
+            lines.push("  " + pn.pad_right(20, " ") + pd)
+            i = i + 1
+
+    if flag_count > 0 or opt_count > 0:
+        lines.push("")
+        lines.push("Options:")
+        if flag_count > 0:
+            frecs := get_records(flags_data)
+            mut i := 0
+            while i < frecs.len():
+                fn_name := get_field(frecs[i], 0)
+                fs := get_field(frecs[i], 1)
+                fd := get_field(frecs[i], 2)
+                mut label := "  "
+                if fs != "":
+                    label = label + "-" + fs + ", "
+                else:
+                    label = label + "    "
+                label = label + "--" + fn_name
+                lines.push(label.pad_right(24, " ") + fd)
+                i = i + 1
+        if opt_count > 0:
+            orecs := get_records(opts_data)
+            mut i := 0
+            while i < orecs.len():
+                on := get_field(orecs[i], 0)
+                os := get_field(orecs[i], 1)
+                od := get_field(orecs[i], 2)
+                odef := get_field(orecs[i], 3)
+                mut label := "  "
+                if os != "":
+                    label = label + "-" + os + ", "
+                else:
+                    label = label + "    "
+                label = label + "--" + on + " <value>"
+                mut line := label.pad_right(24, " ") + od
+                if odef != "":
+                    line = line + " (default: " + odef + ")"
+                lines.push(line)
+                i = i + 1
+
+    return lines.join("\n")

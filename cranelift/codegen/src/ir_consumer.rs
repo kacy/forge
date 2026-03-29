@@ -46,6 +46,7 @@ pub fn compile_from_ir(
     let mut struct_layouts: HashMap<String, Vec<String>> = HashMap::new();
     let mut global_data: HashMap<String, cranelift_module::DataId> = HashMap::new();
     let mut str_globals: Vec<(String, String)> = Vec::new(); // (global_name, string_id)
+    let mut string_global_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Pass 1: collect string data and declare functions
     for line in &lines {
@@ -115,7 +116,8 @@ pub fn compile_from_ir(
                     // Track str: globals that need runtime initialization
                     if init_kind.starts_with("str:") {
                         let str_id = &init_kind[4..]; // e.g., "m0s0"
-                        str_globals.push((gname, str_id.to_string()));
+                        str_globals.push((gname.clone(), str_id.to_string()));
+                        string_global_names.insert(gname);
                     }
                 }
             }
@@ -208,6 +210,7 @@ pub fn compile_from_ir(
                 &struct_layouts,
                 &global_data,
                 &str_globals,
+                &string_global_names,
             )?;
         }
     }
@@ -227,6 +230,7 @@ fn compile_ir_function(
     struct_layouts: &HashMap<String, Vec<String>>,
     global_data: &HashMap<String, cranelift_module::DataId>,
     str_globals: &[(String, String)],
+    string_global_names: &std::collections::HashSet<String>,
 ) -> Result<(), CompileError> {
     let mut ctx = codegen.module.make_context();
 
@@ -248,6 +252,8 @@ fn compile_ir_function(
     // Map param names to block params
     let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
     let mut regs: HashMap<usize, Value> = HashMap::new();
+    let mut string_regs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut string_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut named_vars: HashMap<String, Variable> = HashMap::new();
     let mut labels: HashMap<String, Block> = HashMap::new();
     let mut next_var_id: u32 = 0;
@@ -358,6 +364,7 @@ fn compile_ir_function(
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));
                 }
+                string_regs.insert(reg);
             }
 
             "band" | "bor" | "bxor" | "shl" | "shr" if parts.len() >= 4 => {
@@ -468,16 +475,25 @@ fn compile_ir_function(
                 } else {
                     regs.insert(reg, a);
                 }
+                string_regs.insert(reg);
             }
 
             "call" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
-                let fname = parts[2];
+                let mut fname = parts[2];
                 let nargs: usize = parts[3].parse().unwrap_or(0);
                 let mut args: Vec<Value> = Vec::new();
                 for j in 0..nargs {
                     if j + 4 < parts.len() {
                         args.push(get_reg(&regs, parts[j + 4]));
+                    }
+                }
+                // Disambiguate `len` — if first arg is a known string, use string_len
+                if fname == "len" && nargs >= 1 && parts.len() > 4 {
+                    if let Ok(arg_reg) = parts[4].parse::<usize>() {
+                        if string_regs.contains(&arg_reg) {
+                            fname = "string_len";
+                        }
                     }
                 }
                 // Look up function: user-defined first, then runtime with name resolution
@@ -519,6 +535,17 @@ fn compile_ir_function(
                     } else {
                         regs.insert(reg, builder.ins().iconst(types::I64, 0));
                     }
+                    // Track functions known to return a string value
+                    if matches!(fname,
+                        "char_at" | "substring" | "to_upper" | "to_lower" | "trim" |
+                        "replace" | "repeat" | "pad_left" | "pad_right" | "reverse" |
+                        "chr" | "smart_to_string" | "to_string" | "int_to_string" |
+                        "float_to_string" | "bool_to_string" | "map_get" |
+                        "string_replace" | "string_repeat" | "string_trim" |
+                        "string_to_upper" | "string_to_lower"
+                    ) {
+                        string_regs.insert(reg);
+                    }
                 } else if let Some(&var) = named_vars.get(fname) {
                     // Indirect call through function pointer variable
                     let fn_ptr = builder.use_var(var);
@@ -538,6 +565,12 @@ fn compile_ir_function(
             "store" if parts.len() >= 3 => {
                 let name = parts[1].to_string();
                 let val = get_reg(&regs, parts[2]);
+                // Propagate string type through store
+                if let Ok(src_reg) = parts[2].parse::<usize>() {
+                    if string_regs.contains(&src_reg) {
+                        string_vars.insert(name.clone());
+                    }
+                }
                 // Check if this is a global variable
                 if let Some(&data_id) = global_data.get(&name) {
                     let gv = codegen.module.declare_data_in_func(data_id, builder.func);
@@ -571,6 +604,10 @@ fn compile_ir_function(
                     regs.insert(reg, val);
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                }
+                // Propagate string type through load
+                if string_vars.contains(name) || string_global_names.contains(name) {
+                    string_regs.insert(reg);
                 }
             }
 
@@ -720,7 +757,7 @@ fn resolve_func_name(name: &str) -> &str {
         "chars" => "forge_cstring_chars",
         "reverse" => "forge_cstring_reverse",
         // List operations
-        "len" => "forge_list_len",
+        "len" => "forge_auto_len",
         "join" => "forge_list_join",
         "push" => "forge_list_push_value",
         "pop" => "forge_list_pop",

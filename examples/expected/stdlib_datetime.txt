@@ -1,0 +1,30 @@
+year: 2026
+month: 3
+day: 29
+format: 2026-03-29
+long: March 29, 2026
+month name: March
+weekday: Sunday
+parsed: 2024-12-25
+bad parse: 0
+leap 2024: true
+leap 2023: false
+leap 2000: true
+leap 1900: false
+feb days 2024: 29
+feb days 2023: 28
+day of year Mar 1 2024: 61
+add 5 days: 2026-04-03
+sub 30 days: 2026-02-27
+add 2 months: 2026-05-29
+jan31+1mo: 2023-02-28
+add 1 year: 2027-03-29
+diff days: 87
+min: 2026-01-01
+max: 2026-12-31
+in range: true
+valid 2026-03-29: true
+valid 2026-02-30: false
+valid 2026-13-01: false
+100 days from epoch: 100
+datetime tests passed

@@ -1,0 +1,60 @@
+# test std.algo — sorting, searching, and list algorithms
+from std.algo import sort, sort_desc, sort_strings, binary_search, index_of
+from std.algo import unique, remove_all, intersection, difference
+from std.algo import reverse_list, slice, zip_merge, flatten, chunks
+from std.algo import sum, product, min_val, max_val, is_sorted, count
+
+fn list_str(list: List[Int]) -> String:
+    mut parts: List[String] := []
+    mut i := 0
+    while i < list.len():
+        parts.push(list[i].to_string())
+        i = i + 1
+    return "[" + parts.join(", ") + "]"
+
+fn nested_str(lists: List[List[Int]]) -> String:
+    mut parts: List[String] := []
+    mut i := 0
+    while i < lists.len():
+        parts.push(list_str(lists[i]))
+        i = i + 1
+    return "[" + parts.join(", ") + "]"
+
+fn main():
+    # sorting
+    print("sort: " + list_str(sort([3, 1, 4, 1, 5, 9, 2, 6])))
+    print("sort_desc: " + list_str(sort_desc([3, 1, 4, 1, 5])))
+    print("sort_strings: " + sort_strings(["banana", "apple", "cherry"]).join(", "))
+    print("sort empty: " + list_str(sort([])))
+
+    # searching
+    sorted := sort([10, 30, 20, 40, 50])
+    print("binary_search 30: " + binary_search(sorted, 30).to_string())
+    print("binary_search 99: " + binary_search(sorted, 99).to_string())
+    print("index_of 20: " + index_of([10, 20, 30], 20).to_string())
+
+    # dedup and filtering
+    print("unique: " + list_str(unique([1, 1, 2, 2, 3, 3, 3])))
+    print("remove_all 2: " + list_str(remove_all([1, 2, 3, 2, 4], 2)))
+    print("intersection: " + list_str(intersection([1, 2, 3, 4], [2, 4, 6])))
+    print("difference: " + list_str(difference([1, 2, 3, 4], [2, 4])))
+
+    # transformation
+    print("reverse: " + list_str(reverse_list([1, 2, 3, 4, 5])))
+    print("slice 1..4: " + list_str(slice([10, 20, 30, 40, 50], 1, 4)))
+    print("zip_merge: " + list_str(zip_merge([1, 3, 5], [2, 4, 6])))
+    print("flatten: " + list_str(flatten([[1, 2], [3], [4, 5, 6]])))
+    print("chunks: " + nested_str(chunks([1, 2, 3, 4, 5], 2)))
+
+    # aggregation
+    print("sum: " + sum([1, 2, 3, 4, 5]).to_string())
+    print("product: " + product([2, 3, 4]).to_string())
+    print("min: " + min_val([5, 2, 8, 1, 9]).to_string())
+    print("max: " + max_val([5, 2, 8, 1, 9]).to_string())
+    if is_sorted([1, 2, 3]):
+        print("is_sorted [1,2,3]: true")
+    if not is_sorted([3, 1, 2]):
+        print("is_sorted [3,1,2]: false")
+    print("count 2 in [1,2,2,3,2]: " + count([1, 2, 2, 3, 2], 2).to_string())
+
+    print("algo tests passed")

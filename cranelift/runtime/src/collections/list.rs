@@ -18,14 +18,20 @@ pub struct ForgeList {
 /// Stores elements as `Vec<Arc<[u8]>>` where each element is a byte slice.
 /// For primitive types (Int, Float), we store the raw bytes.
 /// For heap types (String, List, Map), we store references.
+#[repr(C)]
 pub struct ListImpl {
-    /// Element data as byte vectors
-    pub elements: Vec<Vec<u8>>,
+    /// Magic number to identify ListImpl pointers (0x464F5247 = "FORG")
+    pub magic: u32,
     /// Size of each element in bytes
     pub elem_size: usize,
     /// Type tag for determining how to handle elements
     pub type_tag: ListTypeTag,
+    /// Element data as byte vectors
+    pub elements: Vec<Vec<u8>>,
 }
+
+/// Magic number to identify ListImpl pointers
+pub const LIST_MAGIC: u32 = 0x464F5247;
 
 /// Type tag for list elements
 #[derive(Clone, Copy)]
@@ -39,6 +45,7 @@ pub enum ListTypeTag {
 impl ListImpl {
     fn new(elem_size: usize, type_tag: ListTypeTag) -> Self {
         ListImpl {
+            magic: LIST_MAGIC,
             elements: Vec::new(),
             elem_size,
             type_tag,
@@ -131,6 +138,34 @@ pub extern "C" fn forge_list_len(list: ForgeList) -> i64 {
     unsafe {
         let impl_ref = &*(list.ptr as *const ListImpl);
         impl_ref.len() as i64
+    }
+}
+
+/// Check if a raw pointer looks like a ListImpl (has the magic number)
+pub fn is_list_ptr(ptr: *const ()) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    unsafe {
+        let magic = *(ptr as *const u32);
+        magic == LIST_MAGIC
+    }
+}
+
+/// Auto-detect len: works on both lists and C strings
+/// If the pointer has the list magic number, returns list length.
+/// Otherwise, returns C string length (strlen).
+#[no_mangle]
+pub extern "C" fn forge_auto_len(ptr: i64) -> i64 {
+    if ptr == 0 {
+        return 0;
+    }
+    let raw = ptr as *const ();
+    if is_list_ptr(raw) {
+        let list = ForgeList { ptr: raw as *mut () };
+        forge_list_len(list)
+    } else {
+        crate::string::forge_cstring_len(ptr as *const i8)
     }
 }
 
