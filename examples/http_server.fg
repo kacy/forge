@@ -1,19 +1,20 @@
 # HTTP server using std.net.http
 #
-# Demonstrates the clean API: read_request parses automatically,
-# accessor functions extract fields, response helpers build responses.
+# Demonstrates: request parsing, header/query access, response builders,
+# routing, and the read_request/send_response helpers.
 #
-# Run with: forge run examples/http_server.fg
-# Test with: curl http://localhost:8080
+# Run:  forge run examples/http_server.fg
+# Test: curl http://localhost:8080
+#       curl http://localhost:8080/api
+#       curl http://localhost:8080/greet?name=world
 
-from std.net.tcp import listen, accept, close
 from std.net.http import read_request, send_response
 from std.net.http import method, path, get_header, get_query_param
 from std.net.http import html_response, json_response, not_found, redirect
 
 fn handle(fd: Int):
+    tcp_set_timeout(fd, 1000)
     req := read_request(fd)
-
     m := method(req)
     p := path(req)
 
@@ -50,13 +51,12 @@ fn main():
     port := 8080
     print("http://localhost:" + port.to_string())
 
-    server := listen("0.0.0.0", port)
-    if server.is_err:
+    fd := tcp_listen("0.0.0.0", port)
+    if fd < 0:
         print("failed to start server")
         return
-    fd := server.ok
 
     while true:
-        conn := accept(fd)
-        if conn.is_ok:
-            spawn handle(conn.ok)
+        client := tcp_accept(fd)
+        if client >= 0:
+            handle(client)
