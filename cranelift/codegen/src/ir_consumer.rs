@@ -98,8 +98,14 @@ pub fn compile_from_ir(
                 if !global_data.contains_key(&gname) {
                     let init_kind = parts[2];
                     use cranelift_module::DataDescription;
+                    // Rename global if it conflicts with a function name
+                    let data_name = if declared_funcs.contains_key(&gname) {
+                        format!("__g_{}", gname)
+                    } else {
+                        gname.clone()
+                    };
                     let data_id = codegen.module
-                        .declare_data(&gname, Linkage::Local, true, false)
+                        .declare_data(&data_name, Linkage::Local, true, false)
                         .map_err(|e| CompileError::ModuleError(e.to_string()))?;
                     let mut desc = DataDescription::new();
                     let init_val: i64 = if init_kind == "list" || init_kind == "map" || init_kind == "set" {
@@ -138,11 +144,10 @@ pub fn compile_from_ir(
                         sig.params.push(AbiParam::new(types::I64));
                     }
                     sig.returns.push(AbiParam::new(types::I64));
-                    let func_id = codegen
-                        .module
-                        .declare_function(name, Linkage::Export, &sig)
-                        .map_err(|e| CompileError::ModuleError(e.to_string()))?;
-                    declared_funcs.insert(name.to_string(), func_id);
+                    if let Ok(func_id) = codegen.module.declare_function(name, Linkage::Export, &sig) {
+                        declared_funcs.insert(name.to_string(), func_id);
+                    }
+                    // silently skip if name conflicts with runtime declaration
                 }
             }
             _ => {}
@@ -649,6 +654,10 @@ fn compile_ir_function(
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let mut fname = parts[2];
                 let nargs: usize = parts[3].parse().unwrap_or(0);
+                // tcp_read with 2 args → tcp_read2 (different runtime function)
+                if fname == "tcp_read" && nargs == 2 {
+                    fname = "tcp_read2";
+                }
                 let mut args: Vec<Value> = Vec::new();
                 for j in 0..nargs {
                     if j + 4 < parts.len() {
