@@ -793,3 +793,101 @@ pub extern "C" fn forge_list_destructor(ptr: *mut u8) {
         forge_list_release(*list);
     }
 }
+
+// ===============================================================
+// Functional list operations: map, filter, reduce
+// ===============================================================
+
+/// Apply a function to each element, return a new list.
+/// fn_ptr is a function pointer: fn(i64) -> i64
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_map(list_ptr: i64, fn_ptr: i64) -> i64 {
+    if list_ptr == 0 { return 0; }
+    let src = &*(list_ptr as *const ListImpl);
+    let func: extern "C" fn(i64) -> i64 = std::mem::transmute(fn_ptr as *const ());
+    let result = forge_list_new(8, 0);
+    let result_ptr = result.ptr as i64;
+
+    for i in 0..src.len() {
+        if let Some(elem_data) = src.get(i) {
+            let val = if elem_data.len() >= 8 {
+                i64::from_ne_bytes(elem_data[..8].try_into().unwrap_or([0; 8]))
+            } else { 0 };
+            let mapped = func(val);
+            forge_list_push_value(ForgeList { ptr: result_ptr as *mut () }, mapped);
+        }
+    }
+    result_ptr
+}
+
+/// Return a new list containing only elements where predicate returns non-zero.
+/// fn_ptr is a function pointer: fn(i64) -> i64 (truthy = non-zero)
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_filter(list_ptr: i64, fn_ptr: i64) -> i64 {
+    let list = ForgeList { ptr: list_ptr as *mut () };
+    let result = forge_list_new(8, 0);
+    if list.ptr.is_null() {
+        return result.ptr as i64;
+    }
+
+    let impl_ref = &*(list.ptr as *const ListImpl);
+    let func: extern "C" fn(i64) -> i64 = std::mem::transmute(fn_ptr as *const ());
+
+    for i in 0..impl_ref.len() {
+        if let Some(elem_data) = impl_ref.get(i) {
+            let val = if elem_data.len() >= 8 {
+                i64::from_ne_bytes(elem_data[..8].try_into().unwrap_or([0; 8]))
+            } else { 0 };
+            if func(val) != 0 {
+                forge_list_push_value(result, val);
+            }
+        }
+    }
+    result.ptr as i64
+}
+
+/// Reduce a list to a single value using an accumulator function.
+/// fn_ptr: fn(accumulator: i64, element: i64) -> i64
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_reduce(list_ptr: i64, init: i64, fn_ptr: i64) -> i64 {
+    let list = ForgeList { ptr: list_ptr as *mut () };
+    if list.ptr.is_null() {
+        return init;
+    }
+
+    let impl_ref = &*(list.ptr as *const ListImpl);
+    let func: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(fn_ptr as *const ());
+
+    let mut acc = init;
+    for i in 0..impl_ref.len() {
+        if let Some(elem_data) = impl_ref.get(i) {
+            let val = if elem_data.len() >= 8 {
+                i64::from_ne_bytes(elem_data[..8].try_into().unwrap_or([0; 8]))
+            } else { 0 };
+            acc = func(acc, val);
+        }
+    }
+    acc
+}
+
+/// Apply function to each element (no return value, side effects only).
+/// fn_ptr: fn(i64) -> i64
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_each(list_ptr: i64, fn_ptr: i64) {
+    let list = ForgeList { ptr: list_ptr as *mut () };
+    if list.ptr.is_null() {
+        return;
+    }
+
+    let impl_ref = &*(list.ptr as *const ListImpl);
+    let func: extern "C" fn(i64) -> i64 = std::mem::transmute(fn_ptr as *const ());
+
+    for i in 0..impl_ref.len() {
+        if let Some(elem_data) = impl_ref.get(i) {
+            let val = if elem_data.len() >= 8 {
+                i64::from_ne_bytes(elem_data[..8].try_into().unwrap_or([0; 8]))
+            } else { 0 };
+            func(val);
+        }
+    }
+}

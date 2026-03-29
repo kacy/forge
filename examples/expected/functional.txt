@@ -1,0 +1,10 @@
+doubled: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+squared: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+evens: [2, 4, 6, 8, 10]
+big (>5): [6, 7, 8, 9, 10]
+sum: 55
+product 1-5: 120
+big doubled: [12, 14, 16, 18, 20]
+the: 3
+cat: 1
+functional works

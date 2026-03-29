@@ -463,6 +463,7 @@ fn compile_ir_function(
 
     // Compile instructions
     let mut terminated = false;
+    let _last_call_result: Option<(usize, usize)> = None;
     for line in body_lines {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.is_empty() || parts[0].starts_with(';') {
@@ -835,7 +836,7 @@ fn compile_ir_function(
 
             "store" if parts.len() >= 3 => {
                 let name = parts[1].to_string();
-                let val = get_reg(&regs, parts[2]);
+                let mut val = get_reg(&regs, parts[2]);
                 // Propagate types through store
                 if let Ok(src_reg) = parts[2].parse::<usize>() {
                     if string_regs.contains(&src_reg) {
@@ -1049,6 +1050,10 @@ fn resolve_func_name(name: &str) -> &str {
         "list_contains" => "forge_list_contains_int",
         "list_index_of" => "forge_list_index_of_int",
         "set" => "forge_list_set_value",
+        "map" | "list_map" => "forge_list_map",
+        "filter" | "list_filter" => "forge_list_filter",
+        "reduce" | "list_reduce" => "forge_list_reduce",
+        "each" | "list_each" => "forge_list_each",
         "sort" => "forge_list_sort",
         "sort_strings" => "forge_list_sort_strings",
         "slice" => "forge_list_slice",
@@ -1057,6 +1062,8 @@ fn resolve_func_name(name: &str) -> &str {
         "map_insert_ikey" => "forge_map_insert_ikey",
         "map_get" => "forge_map_get_cstr",
         "map_get_ikey" => "forge_map_get_ikey",
+        "get_default" | "map_get_default" => "forge_map_get_default_cstr",
+        "map_get_default_ikey" => "forge_map_get_default_ikey",
         "contains_key" | "map_contains_key" => "forge_map_contains_cstr",
         "map_contains_ikey" => "forge_map_contains_ikey",
         "keys" | "map_keys" => "forge_map_keys_cstr",

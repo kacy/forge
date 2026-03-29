@@ -666,6 +666,38 @@ pub unsafe extern "C" fn forge_map_contains_cstr(map_handle: i64, key: *const i8
     }
 }
 
+/// Get value by C-string key with a default if not found.
+#[no_mangle]
+pub unsafe extern "C" fn forge_map_get_default_cstr(map_handle: i64, key: *const i8, default: i64) -> i64 {
+    if map_handle == 0 || key.is_null() {
+        return default;
+    }
+    let impl_ref = &*(map_handle as *const MapImpl);
+    let map_key = cstr_to_map_key(key);
+    match impl_ref.get(&map_key) {
+        Some(val_data) if val_data.len() >= 8 => {
+            i64::from_le_bytes(val_data[..8].try_into().unwrap_or([0u8; 8]))
+        }
+        _ => default,
+    }
+}
+
+/// Get value by integer key with a default if not found.
+#[no_mangle]
+pub unsafe extern "C" fn forge_map_get_default_ikey(map_handle: i64, key: i64, default: i64) -> i64 {
+    if map_handle == 0 {
+        return default;
+    }
+    let impl_ref = &*(map_handle as *const MapImpl);
+    let map_key = MapKey::Int(key);
+    match impl_ref.get(&map_key) {
+        Some(val_data) if val_data.len() >= 8 => {
+            i64::from_le_bytes(val_data[..8].try_into().unwrap_or([0u8; 8]))
+        }
+        _ => default,
+    }
+}
+
 /// Remove an entry by C-string key.
 ///
 /// # Safety
