@@ -1,2 +1,4 @@
 has a
 has b
+0
+0

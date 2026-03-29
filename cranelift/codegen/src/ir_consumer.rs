@@ -970,7 +970,7 @@ fn compile_ir_function(
 fn resolve_func_name(name: &str) -> &str {
     match name {
         // String operations
-        "print" => "forge_print_cstr",
+        "print" => "forge_smart_print",
         "print_err" => "forge_print_err",
         "to_string" | "int_to_string" => "forge_int_to_cstr",
         "bool_to_string" => "forge_bool_to_cstr",

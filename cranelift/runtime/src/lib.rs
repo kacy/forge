@@ -2197,6 +2197,17 @@ pub unsafe extern "C" fn forge_smart_to_string(val: i64) -> *mut i8 {
     }
 }
 
+/// Smart print: auto-converts integers to strings, prints cstrings directly
+#[no_mangle]
+pub unsafe extern "C" fn forge_smart_print(val: i64) {
+    let s = forge_smart_to_string(val);
+    if !s.is_null() {
+        forge_print_cstr(s);
+    } else {
+        println!();
+    }
+}
+
 /// Smart encode: if arg is a JSON handle (small positive int), use JSON encode.
 /// Otherwise treat as a C string and do URL percent-encoding.
 #[no_mangle]

@@ -1,0 +1,6 @@
+created map
+0
+after insert a
+1
+after insert b
+2

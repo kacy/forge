@@ -119,6 +119,7 @@ pub fn declare_runtime_functions(
         ("forge_string_release", "forge_string_release", &[I64], &[]),
         ("forge_string_from_cstr", "forge_string_from_cstr_ptr", &[I64, I64], &[]),
         ("forge_print", "forge_print", &[I64], &[]),
+        ("forge_smart_print", "forge_smart_print", &[I64], &[]),
         ("forge_int_to_string", "forge_int_to_string", &[I64], &[I64]),
         ("forge_int_to_cstr", "forge_int_to_cstr", &[I64], &[I64]),
         ("to_string", "forge_int_to_cstr", &[I64], &[I64]),
