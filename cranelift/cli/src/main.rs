@@ -387,7 +387,7 @@ fn collect_imports_recursive(
     // Modules whose functions are handled as runtime builtins — skip importing
     // their Forge implementations to avoid shadowing with incompatible versions
     let builtin_modules = [
-        "std.json", "std.toml", "std.encoding", "std.hash", "std.math",
+        "std.json", "std.toml", "std.encoding", "std.hash",
         "std.fmt", "std.log", "std.fs", "std.net.tcp", "std.net.dns",
         "std.net.url", "std.os.path", "std.os.process",
     ];

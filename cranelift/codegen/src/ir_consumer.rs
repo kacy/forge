@@ -464,20 +464,45 @@ fn compile_ir_function(
 
             "eq" | "neq" | "lt" | "gt" | "lte" | "gte" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
+                let a_reg: usize = parts[2].parse().unwrap_or(usize::MAX);
+                let b_reg: usize = parts[3].parse().unwrap_or(usize::MAX);
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
-                let cc = match parts[0] {
-                    "eq" => IntCC::Equal,
-                    "neq" => IntCC::NotEqual,
-                    "lt" => IntCC::SignedLessThan,
-                    "gt" => IntCC::SignedGreaterThan,
-                    "lte" => IntCC::SignedLessThanOrEqual,
-                    "gte" => IntCC::SignedGreaterThanOrEqual,
-                    _ => IntCC::Equal,
-                };
-                let cmp = builder.ins().icmp(cc, a, b);
-                let v = builder.ins().uextend(types::I64, cmp);
-                regs.insert(reg, v);
+                // For lt/gt/lte/gte on strings, call runtime comparison
+                let is_str_cmp = matches!(parts[0], "lt" | "gt" | "lte" | "gte")
+                    && (string_regs.contains(&a_reg) || string_regs.contains(&b_reg));
+                if is_str_cmp {
+                    let cmp_name = match parts[0] {
+                        "lt" => "forge_cstring_lt",
+                        "gt" => "forge_cstring_gt",
+                        "lte" => "forge_cstring_lte",
+                        "gte" => "forge_cstring_gte",
+                        _ => "forge_cstring_lt",
+                    };
+                    if let Some(&fid) = runtime_funcs.get(cmp_name) {
+                        let fref = *func_ref_cache.entry(fid).or_insert_with(|| {
+                            codegen.module.declare_func_in_func(fid, builder.func)
+                        });
+                        let call = builder.ins().call(fref, &[a, b]);
+                        regs.insert(reg, builder.func.dfg.first_result(call));
+                    } else {
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThan, a, b);
+                        regs.insert(reg, builder.ins().uextend(types::I64, cmp));
+                    }
+                } else {
+                    let cc = match parts[0] {
+                        "eq" => IntCC::Equal,
+                        "neq" => IntCC::NotEqual,
+                        "lt" => IntCC::SignedLessThan,
+                        "gt" => IntCC::SignedGreaterThan,
+                        "lte" => IntCC::SignedLessThanOrEqual,
+                        "gte" => IntCC::SignedGreaterThanOrEqual,
+                        _ => IntCC::Equal,
+                    };
+                    let cmp = builder.ins().icmp(cc, a, b);
+                    let v = builder.ins().uextend(types::I64, cmp);
+                    regs.insert(reg, v);
+                }
             }
 
             "concat" if parts.len() >= 4 => {
@@ -833,6 +858,18 @@ fn resolve_func_name(name: &str) -> &str {
         "floor" => "forge_floor",
         "ceil" => "forge_ceil",
         "round" => "forge_round",
+        "sin" => "forge_sin",
+        "cos" => "forge_cos",
+        "tan" => "forge_tan",
+        "asin" => "forge_asin",
+        "acos" => "forge_acos",
+        "atan" => "forge_atan",
+        "atan2" => "forge_atan2",
+        "math_log" => "forge_log",
+        "math_log10" => "forge_log10",
+        "math_log2" => "forge_log2",
+        "math_exp" => "forge_exp",
+        "math_abs_float" => "forge_abs_float",
         "to_float" => "forge_int_to_float",
         "to_int" => "forge_float_to_int",
         "random_int" => "forge_random_int",

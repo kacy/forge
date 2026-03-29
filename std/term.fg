@@ -1,0 +1,82 @@
+# std.term — terminal colors and text formatting
+#
+# ANSI escape codes for colored and styled terminal output.
+#
+#   from std.term import red, green, bold
+#   print(green("PASS") + " test_math")
+#   print(red("FAIL") + " test_strings")
+#   print(bold("done"))
+
+# ===============================================================
+# Colors
+# ===============================================================
+
+pub fn red(s: String) -> String:
+    esc := chr(27)
+    return esc + "[31m" + s + esc + "[0m"
+
+pub fn green(s: String) -> String:
+    esc := chr(27)
+    return esc + "[32m" + s + esc + "[0m"
+
+pub fn yellow(s: String) -> String:
+    esc := chr(27)
+    return esc + "[33m" + s + esc + "[0m"
+
+pub fn blue(s: String) -> String:
+    esc := chr(27)
+    return esc + "[34m" + s + esc + "[0m"
+
+pub fn magenta(s: String) -> String:
+    esc := chr(27)
+    return esc + "[35m" + s + esc + "[0m"
+
+pub fn cyan(s: String) -> String:
+    esc := chr(27)
+    return esc + "[36m" + s + esc + "[0m"
+
+pub fn gray(s: String) -> String:
+    esc := chr(27)
+    return esc + "[90m" + s + esc + "[0m"
+
+# ===============================================================
+# Styles
+# ===============================================================
+
+pub fn bold(s: String) -> String:
+    esc := chr(27)
+    return esc + "[1m" + s + esc + "[0m"
+
+pub fn dim(s: String) -> String:
+    esc := chr(27)
+    return esc + "[2m" + s + esc + "[0m"
+
+pub fn underline(s: String) -> String:
+    esc := chr(27)
+    return esc + "[4m" + s + esc + "[0m"
+
+pub fn italic(s: String) -> String:
+    esc := chr(27)
+    return esc + "[3m" + s + esc + "[0m"
+
+# ===============================================================
+# Utilities
+# ===============================================================
+
+# Strip all ANSI escape codes from a string
+pub fn strip(s: String) -> String:
+    esc := chr(27)
+    mut result := ""
+    mut i := 0
+    mut in_esc := false
+    n := s.len()
+    while i < n:
+        c := s[i]
+        if c == esc:
+            in_esc = true
+        elif in_esc and c == "m":
+            in_esc = false
+        elif not in_esc:
+            result = result + c
+        i = i + 1
+    return result

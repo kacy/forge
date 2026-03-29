@@ -1,0 +1,10 @@
+  ok   addition
+  ok   multiplication
+  ok   not equal
+  ok   string match
+  ok   greater than
+  ok   not greater
+  ok   string length
+  ok   to_lower
+
+8 passed

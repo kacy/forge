@@ -452,6 +452,76 @@ pub extern "C" fn forge_round(n: f64) -> f64 {
     n.round()
 }
 
+// ===============================================================
+// Trigonometric and logarithmic functions
+// ===============================================================
+
+#[no_mangle]
+pub extern "C" fn forge_sin(n: f64) -> f64 { n.sin() }
+#[no_mangle]
+pub extern "C" fn forge_cos(n: f64) -> f64 { n.cos() }
+#[no_mangle]
+pub extern "C" fn forge_tan(n: f64) -> f64 { n.tan() }
+#[no_mangle]
+pub extern "C" fn forge_asin(n: f64) -> f64 { n.asin() }
+#[no_mangle]
+pub extern "C" fn forge_acos(n: f64) -> f64 { n.acos() }
+#[no_mangle]
+pub extern "C" fn forge_atan(n: f64) -> f64 { n.atan() }
+#[no_mangle]
+pub extern "C" fn forge_atan2(y: f64, x: f64) -> f64 { y.atan2(x) }
+#[no_mangle]
+pub extern "C" fn forge_log(n: f64) -> f64 { n.ln() }
+#[no_mangle]
+pub extern "C" fn forge_log10(n: f64) -> f64 { n.log10() }
+#[no_mangle]
+pub extern "C" fn forge_log2(n: f64) -> f64 { n.log2() }
+#[no_mangle]
+pub extern "C" fn forge_exp(n: f64) -> f64 { n.exp() }
+#[no_mangle]
+pub extern "C" fn forge_abs_float(n: f64) -> f64 { n.abs() }
+
+// ===============================================================
+// String comparison (lexicographic, for < > <= >=)
+// ===============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_compare(a: *const i8, b: *const i8) -> i64 {
+    if a.is_null() && b.is_null() { return 0; }
+    if a.is_null() { return -1; }
+    if b.is_null() { return 1; }
+    let mut pa = a;
+    let mut pb = b;
+    loop {
+        let ca = *pa as u8;
+        let cb = *pb as u8;
+        if ca != cb { return if ca < cb { -1 } else { 1 }; }
+        if ca == 0 { return 0; }
+        pa = pa.add(1);
+        pb = pb.add(1);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_lt(a: *const i8, b: *const i8) -> i64 {
+    if forge_cstring_compare(a, b) < 0 { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_gt(a: *const i8, b: *const i8) -> i64 {
+    if forge_cstring_compare(a, b) > 0 { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_lte(a: *const i8, b: *const i8) -> i64 {
+    if forge_cstring_compare(a, b) <= 0 { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_cstring_gte(a: *const i8, b: *const i8) -> i64 {
+    if forge_cstring_compare(a, b) >= 0 { 1 } else { 0 }
+}
+
 /// Convert int to C string (returns pointer, caller must free with forge_free)
 #[no_mangle]
 pub unsafe extern "C" fn forge_int_to_cstr(n: i64) -> *mut i8 {

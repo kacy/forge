@@ -1,0 +1,66 @@
+# std.test — lightweight testing framework
+#
+#   from std.test import check, check_str, check_true, check_not, done
+#
+#   fn main():
+#       check(1 + 1, 2, "basic math")
+#       check_str("hello", "hello", "strings")
+#       check_true(10 > 5, "comparison")
+#       done()
+
+mut pass_count: Int := 0
+mut fail_count: Int := 0
+
+fn record_pass(name: String):
+    pass_count = pass_count + 1
+    print("  ok   " + name)
+
+fn record_fail(name: String, detail: String):
+    fail_count = fail_count + 1
+    print("  FAIL " + name + " -- " + detail)
+
+# Two integers are equal
+pub fn check(got: Int, want: Int, name: String):
+    if got == want:
+        record_pass(name)
+    else:
+        detail := "got " + got.to_string() + ", want " + want.to_string()
+        record_fail(name, detail)
+
+# Two strings are equal
+pub fn check_str(got: String, want: String, name: String):
+    if got == want:
+        record_pass(name)
+    else:
+        detail := "got \"" + got + "\", want \"" + want + "\""
+        record_fail(name, detail)
+
+# Two integers differ
+pub fn check_ne(a: Int, b: Int, name: String):
+    if a != b:
+        record_pass(name)
+    else:
+        record_fail(name, "values should differ")
+
+# Condition is true
+pub fn check_true(cond: Bool, name: String):
+    if cond:
+        record_pass(name)
+    else:
+        record_fail(name, "expected true")
+
+# Condition is false
+pub fn check_not(cond: Bool, name: String):
+    if not cond:
+        record_pass(name)
+    else:
+        record_fail(name, "expected false")
+
+# Print summary
+pub fn done():
+    total := pass_count + fail_count
+    print("")
+    if fail_count == 0:
+        print(total.to_string() + " passed")
+    else:
+        print(pass_count.to_string() + " passed, " + fail_count.to_string() + " failed")

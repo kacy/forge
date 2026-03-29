@@ -1,0 +1,13 @@
+# test std.test — the testing framework itself
+from std.testing import check, check_str, check_ne, check_true, check_not, done
+
+fn main():
+    check(1 + 1, 2, "addition")
+    check(10 * 3, 30, "multiplication")
+    check_ne(1, 2, "not equal")
+    check_str("hello", "hello", "string match")
+    check_true(10 > 5, "greater than")
+    check_not(3 > 7, "not greater")
+    check("hello".len(), 5, "string length")
+    check_str("HELLO".to_lower(), "hello", "to_lower")
+    done()

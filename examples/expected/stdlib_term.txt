@@ -1,0 +1,10 @@
+red: error
+green: ok
+yellow: warn
+blue: info
+bold: title
+dim: faded
+underline: link
+contains text: true
+has ansi codes: true
+term works

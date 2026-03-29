@@ -1,0 +1,21 @@
+# test std.term — terminal colors (test with stripped output)
+from std.term import red, green, yellow, blue, bold, dim, underline, strip
+
+fn main():
+    # verify strip removes ANSI codes
+    print("red: " + strip(red("error")))
+    print("green: " + strip(green("ok")))
+    print("yellow: " + strip(yellow("warn")))
+    print("blue: " + strip(blue("info")))
+    print("bold: " + strip(bold("title")))
+    print("dim: " + strip(dim("faded")))
+    print("underline: " + strip(underline("link")))
+
+    # verify the colored versions contain the text
+    r := red("hello")
+    if r.contains("hello"):
+        print("contains text: true")
+    if r.len() > 5:
+        print("has ansi codes: true")
+
+    print("term works")
