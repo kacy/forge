@@ -84,7 +84,11 @@ pub fn compile_from_ir(
             "struct" if parts.len() >= 2 => {
                 let name = parts[1].to_string();
                 if !struct_layouts.contains_key(&name) {
-                    let fields: Vec<String> = parts[2..].iter().map(|s| s.to_string()).collect();
+                    // Filter out "pub" markers from field list
+                    let fields: Vec<String> = parts[2..].iter()
+                        .filter(|s| **s != "pub")
+                        .map(|s| s.to_string())
+                        .collect();
                     let field_pairs: Vec<(String, String)> = fields
                         .iter()
                         .map(|f| (f.clone(), "Int".to_string()))
