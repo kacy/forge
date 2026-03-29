@@ -1,0 +1,50 @@
+  ok   int add
+  ok   int sub
+  ok   int mul
+  ok   int div
+  ok   int mod
+  ok   int negate
+  ok   true literal
+  ok   false literal
+  ok   greater than
+  ok   less than
+  ok   gte equal
+  ok   lte equal
+  ok   and true
+  ok   and false
+  ok   or true
+  ok   or false
+  ok   concat
+  ok   length
+  ok   to_lower
+  ok   to_upper
+  ok   contains
+  ok   not contains
+  ok   starts_with
+  ok   ends_with
+  ok   index_of
+  ok   trim
+  ok   repeat
+  ok   str lt
+  ok   str gt
+  ok   str lte eq
+  ok   str gte eq
+  ok   single char lt
+  ok   single char gt
+  ok   if true
+  ok   if-else
+  ok   while loop
+  ok   for-in list
+  ok   list len
+  ok   list index 0
+  ok   list index 2
+  ok   map get
+  ok   map get 2
+  ok   struct field x
+  ok   struct field y
+  ok   optional value
+  ok   optional none
+  ok   lambda apply
+  ok   lambda square
+
+48 passed

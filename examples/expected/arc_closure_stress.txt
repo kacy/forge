@@ -1,0 +1,12 @@
+ARC Closure Stress Test
+Closure ARC is now implemented!
+Test 1: Int-capturing lambdas (100 iterations)
+Test 1 complete
+Test 2: Lambda in binding (100 iterations)
+Test 2 complete
+Test 3: Multiple lambdas (50 iterations)
+Test 3 complete
+Test 4: Direct lambda usage (100 iterations)
+Test 4 complete
+Closure stress tests complete
+All closures should be properly freed via ARC

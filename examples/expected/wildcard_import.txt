@@ -1,0 +1,10 @@
+=== Wildcard Import Demo ===
+
+abs(-42) = 42
+min(10, 5) = 5
+max(10, 5) = 10
+clamp(15, 0, 10) = 10
+sqrt(25.0) = 5
+pow(2.0, 10.0) = 1024
+
+Wildcard imports work!

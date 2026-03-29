@@ -1,0 +1,6 @@
+kids len before struct: 3
+node.kind: test
+node.children.len: 3
+child: 10
+child: 20
+child: 30

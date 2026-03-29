@@ -1,0 +1,2 @@
+has a
+has b

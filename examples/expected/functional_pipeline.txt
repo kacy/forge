@@ -1,0 +1,4 @@
+stage 1: filtered to 5 even numbers
+stage 2: doubled 5 values in parallel
+stage 3: sum = 60
+pipeline complete

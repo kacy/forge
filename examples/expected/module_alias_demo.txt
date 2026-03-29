@@ -1,0 +1,11 @@
+Module Import Patterns Demonstration
+====================================
+abs(-42) = 42
+min(10, 5) = 5
+max(10, 5) = 10
+clamp(15, 0, 10) = 10
+Direct import tests passed!
+
+Note: import X as Y syntax is parsed but full
+module namespace resolution (Y.func()) requires
+additional infrastructure for qualified name lookup.

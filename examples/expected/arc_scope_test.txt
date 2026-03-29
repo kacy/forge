@@ -1,0 +1,12 @@
+ARC Scope Test
+Test 1: Function scope cleanup
+inner_function: local string 1, local string 2
+Test 1 complete
+Test 2: Early return cleanup
+Result: early result
+Result: normal result
+Test 2 complete
+Test 3: Block scope cleanup
+In block: block local
+Test 3 complete
+All scope tests passed!
