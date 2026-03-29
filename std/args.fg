@@ -40,7 +40,8 @@ pub fn init(name: String, description: String):
 pub fn add_flag(name: String, short: String, description: String):
     entry := name + "|" + short + "|" + description + "|0"
     if flag_count > 0:
-        flags_data = flags_data + "~" + entry
+        sep := flags_data + "~"
+        flags_data = sep + entry
     else:
         flags_data = entry
     flag_count = flag_count + 1
@@ -48,7 +49,8 @@ pub fn add_flag(name: String, short: String, description: String):
 pub fn add_option(name: String, short: String, description: String, default_val: String):
     entry := name + "|" + short + "|" + description + "|" + default_val
     if opt_count > 0:
-        opts_data = opts_data + "~" + entry
+        sep := opts_data + "~"
+        opts_data = sep + entry
     else:
         opts_data = entry
     opt_count = opt_count + 1
@@ -56,7 +58,8 @@ pub fn add_option(name: String, short: String, description: String, default_val:
 pub fn add_positional(name: String, description: String):
     entry := name + "|" + description + "| "
     if pos_count > 0:
-        pos_data = pos_data + "~" + entry
+        sep := pos_data + "~"
+        pos_data = sep + entry
     else:
         pos_data = entry
     pos_count = pos_count + 1
@@ -116,7 +119,8 @@ fn rebuild_with_update(data: String, name: String, field_idx: Int, new_val: Stri
                 j = j + 1
             rec = rebuilt
         if i > 0:
-            result = result + "~" + rec
+            sep := result + "~"
+            result = sep + rec
         else:
             result = rec
         i = i + 1
@@ -216,7 +220,8 @@ fn rebuild_with_update_by_index(data: String, rec_idx: Int, field_idx: Int, new_
                 j = j + 1
             rec = rebuilt
         if i > 0:
-            result = result + "~" + rec
+            sep := result + "~"
+            result = sep + rec
         else:
             result = rec
         i = i + 1
@@ -224,7 +229,8 @@ fn rebuild_with_update_by_index(data: String, rec_idx: Int, field_idx: Int, new_
 
 fn add_error(msg: String):
     if error_count > 0:
-        error_data = error_data + "\n" + msg
+        sep := error_data + "\n"
+        error_data = sep + msg
     else:
         error_data = msg
     error_count = error_count + 1

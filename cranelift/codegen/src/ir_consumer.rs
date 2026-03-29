@@ -422,17 +422,44 @@ fn compile_ir_function(
 
             "add" | "sub" | "mul" | "div" | "mod" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
+                let a_reg: usize = parts[2].parse().unwrap_or(usize::MAX);
+                let b_reg: usize = parts[3].parse().unwrap_or(usize::MAX);
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
-                let v = match parts[0] {
-                    "add" => builder.ins().iadd(a, b),
-                    "sub" => builder.ins().isub(a, b),
-                    "mul" => builder.ins().imul(a, b),
-                    "div" => builder.ins().sdiv(a, b),
-                    "mod" => builder.ins().srem(a, b),
-                    _ => unreachable!(),
-                };
-                regs.insert(reg, v);
+                // If `add` has a string operand, treat as concat (IR emitter
+                // sometimes emits `add` instead of `concat` when variable types
+                // aren't tracked across function boundaries)
+                if parts[0] == "add" && string_regs.contains(&a_reg) && string_regs.contains(&b_reg) {
+                    let concat_name = if runtime_funcs.contains_key("forge_concat_cstr") {
+                        "forge_concat_cstr"
+                    } else {
+                        "forge_string_concat"
+                    };
+                    if let Some(&concat_id) = runtime_funcs.get(concat_name) {
+                        let concat_ref = *func_ref_cache.entry(concat_id).or_insert_with(|| {
+                            codegen.module.declare_func_in_func(concat_id, builder.func)
+                        });
+                        let call = builder.ins().call(concat_ref, &[a, b]);
+                        if !builder.func.dfg.inst_results(call).is_empty() {
+                            regs.insert(reg, builder.func.dfg.first_result(call));
+                        } else {
+                            regs.insert(reg, a);
+                        }
+                    } else {
+                        regs.insert(reg, builder.ins().iadd(a, b));
+                    }
+                    string_regs.insert(reg);
+                } else {
+                    let v = match parts[0] {
+                        "add" => builder.ins().iadd(a, b),
+                        "sub" => builder.ins().isub(a, b),
+                        "mul" => builder.ins().imul(a, b),
+                        "div" => builder.ins().sdiv(a, b),
+                        "mod" => builder.ins().srem(a, b),
+                        _ => unreachable!(),
+                    };
+                    regs.insert(reg, v);
+                }
             }
 
             "eq" | "neq" | "lt" | "gt" | "lte" | "gte" if parts.len() >= 4 => {
@@ -488,14 +515,8 @@ fn compile_ir_function(
                         args.push(get_reg(&regs, parts[j + 4]));
                     }
                 }
-                // Disambiguate `len` — if first arg is a known string, use string_len
-                if fname == "len" && nargs >= 1 && parts.len() > 4 {
-                    if let Ok(arg_reg) = parts[4].parse::<usize>() {
-                        if string_regs.contains(&arg_reg) {
-                            fname = "string_len";
-                        }
-                    }
-                }
+                // Note: `len` maps to forge_auto_len which handles both
+                // strings and lists at runtime via magic number check
                 // Look up function: user-defined first, then runtime with name resolution
                 let resolved_name = resolve_func_name(fname);
                 let fid = declared_funcs
