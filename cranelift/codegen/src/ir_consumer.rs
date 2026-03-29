@@ -720,6 +720,40 @@ fn compile_ir_function(
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let mut fname = parts[2];
                 let nargs: usize = parts[3].parse().unwrap_or(0);
+
+                // Struct constructor: call REG StructName N args...
+                // If fname is a known struct, emit __struct_alloc + sstore
+                if struct_layouts.contains_key(fname) {
+                    let mut args: Vec<Value> = Vec::new();
+                    for j in 0..nargs {
+                        if j + 4 < parts.len() {
+                            args.push(get_reg(&regs, parts[j + 4]));
+                        }
+                    }
+                    // Allocate struct
+                    if let Some(&alloc_id) = runtime_funcs.get("forge_struct_alloc") {
+                        let alloc_ref = *func_ref_cache.entry(alloc_id).or_insert_with(|| {
+                            codegen.module.declare_func_in_func(alloc_id, builder.func)
+                        });
+                        let nfields = builder.ins().iconst(types::I64, nargs as i64);
+                        let alloc_call = builder.ins().call(alloc_ref, &[nfields]);
+                        let ptr = builder.func.dfg.first_result(alloc_call);
+                        // Store each field
+                        for (i, arg) in args.iter().enumerate() {
+                            let offset = (i * 8) as i32;
+                            builder.ins().store(
+                                cranelift::codegen::ir::MemFlags::new(),
+                                *arg,
+                                ptr,
+                                offset,
+                            );
+                        }
+                        regs.insert(reg, ptr);
+                    } else {
+                        regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                    }
+                } else {
+
                 // tcp_read with 2 args → tcp_read2 (different runtime function)
                 if fname == "tcp_read" && nargs == 2 {
                     fname = "tcp_read2";
@@ -796,6 +830,7 @@ fn compile_ir_function(
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));
                 }
+            } // end struct constructor else
             }
 
             "store" if parts.len() >= 3 => {
