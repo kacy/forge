@@ -1,2 +1,0 @@
-arg count: 1
-file I/O works

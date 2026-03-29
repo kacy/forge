@@ -1,0 +1,33 @@
+# file operations — read, write, existence checks
+
+fn main():
+    path := "/tmp/forge_test_file_ops.txt"
+
+    # write
+    write_file(path, "hello from forge")
+    print("write: ok")
+
+    # read back
+    content := read_file(path)
+    if content.contains("hello"):
+        print("read: ok")
+
+    # exists
+    if file_exists(path):
+        print("exists: ok")
+
+    # read by size
+    size := content.len()
+    print("size: " + size.to_string())
+
+    # clean up
+    remove_file(path)
+    if not file_exists(path):
+        print("remove: ok")
+
+    # read a known file
+    hello := read_file("examples/hello.fg")
+    if hello.contains("greet"):
+        print("read hello.fg: ok")
+
+    print("file ops work")

@@ -1,3 +1,0 @@
-fn main():
-    content := read_file("examples/hello.fg")
-    print(content)
