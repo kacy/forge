@@ -158,6 +158,123 @@ pub fn compile_from_ir(
         }
     }
 
+    // Pre-scan: identify user functions that return string values.
+    // A function returns a string if it calls a known string-returning function
+    // and returns that result (directly or through a variable).
+    let mut string_returning_funcs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let known_str_fns: std::collections::HashSet<&str> = [
+            "char_at", "substring", "to_upper", "to_lower", "trim",
+            "replace", "repeat", "pad_left", "pad_right", "reverse",
+            "chr", "smart_to_string", "to_string", "int_to_string",
+            "float_to_string", "bool_to_string", "map_get",
+            "string_replace", "string_repeat", "string_trim",
+            "string_to_upper", "string_to_lower",
+            "node_kind", "node_value", "tok_kind", "tok_value",
+            "identity", "read_file", "env", "path_join",
+            "path_dir", "path_base", "path_ext", "path_stem",
+        ].iter().cloned().collect();
+
+        let mut cur_func = String::new();
+        let mut str_regs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut str_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for line in &lines {
+            let p: Vec<&str> = line.split_whitespace().collect();
+            if p.is_empty() { continue; }
+            match p[0] {
+                "func" if p.len() >= 2 => {
+                    cur_func = p[1].to_string();
+                    str_regs.clear();
+                    str_vars.clear();
+                }
+                "call" if p.len() >= 4 => {
+                    if let Ok(reg) = p[1].parse::<usize>() {
+                        let fname = p[2];
+                        if known_str_fns.contains(fname) || string_returning_funcs.contains(fname) {
+                            str_regs.insert(reg);
+                        }
+                    }
+                }
+                "strref" if p.len() >= 2 => {
+                    if let Ok(reg) = p[1].parse::<usize>() {
+                        str_regs.insert(reg);
+                    }
+                }
+                "store" if p.len() >= 3 => {
+                    if let Ok(src) = p[2].parse::<usize>() {
+                        if str_regs.contains(&src) {
+                            str_vars.insert(p[1].to_string());
+                        }
+                    }
+                }
+                "load" if p.len() >= 3 => {
+                    if let Ok(reg) = p[1].parse::<usize>() {
+                        if str_vars.contains(p[2]) {
+                            str_regs.insert(reg);
+                        }
+                    }
+                }
+                "ret" if p.len() >= 2 => {
+                    if let Ok(reg) = p[1].parse::<usize>() {
+                        if str_regs.contains(&reg) && !cur_func.is_empty() {
+                            string_returning_funcs.insert(cur_func.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Run a second pass to propagate transitively
+        for _ in 0..3 {
+            let prev_count = string_returning_funcs.len();
+            let mut cur_func2 = String::new();
+            str_regs.clear();
+            str_vars.clear();
+            for line in &lines {
+                let p: Vec<&str> = line.split_whitespace().collect();
+                if p.is_empty() { continue; }
+                match p[0] {
+                    "func" if p.len() >= 2 => {
+                        cur_func2 = p[1].to_string();
+                        str_regs.clear();
+                        str_vars.clear();
+                    }
+                    "call" if p.len() >= 4 => {
+                        if let Ok(reg) = p[1].parse::<usize>() {
+                            let fname = p[2];
+                            if known_str_fns.contains(fname) || string_returning_funcs.contains(fname) {
+                                str_regs.insert(reg);
+                            }
+                        }
+                    }
+                    "strref" if p.len() >= 2 => {
+                        if let Ok(reg) = p[1].parse::<usize>() { str_regs.insert(reg); }
+                    }
+                    "store" if p.len() >= 3 => {
+                        if let Ok(src) = p[2].parse::<usize>() {
+                            if str_regs.contains(&src) { str_vars.insert(p[1].to_string()); }
+                        }
+                    }
+                    "load" if p.len() >= 3 => {
+                        if let Ok(reg) = p[1].parse::<usize>() {
+                            if str_vars.contains(p[2]) { str_regs.insert(reg); }
+                        }
+                    }
+                    "ret" if p.len() >= 2 => {
+                        if let Ok(reg) = p[1].parse::<usize>() {
+                            if str_regs.contains(&reg) && !cur_func2.is_empty() {
+                                string_returning_funcs.insert(cur_func2.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if string_returning_funcs.len() == prev_count { break; }
+        }
+    }
+
     // Declare string data functions
     let mut string_funcs: HashMap<String, FuncId> = HashMap::new();
     for (idx, content) in &string_data {
@@ -220,6 +337,7 @@ pub fn compile_from_ir(
                 &global_data,
                 &str_globals,
                 &string_global_names,
+                &string_returning_funcs,
             )?;
         }
     }
@@ -240,6 +358,7 @@ fn compile_ir_function(
     global_data: &HashMap<String, cranelift_module::DataId>,
     str_globals: &[(String, String)],
     string_global_names: &std::collections::HashSet<String>,
+    string_returning_funcs: &std::collections::HashSet<String>,
 ) -> Result<(), CompileError> {
     let mut ctx = codegen.module.make_context();
 
@@ -837,8 +956,11 @@ fn compile_ir_function(
                         "chr" | "smart_to_string" | "to_string" | "int_to_string" |
                         "float_to_string" | "bool_to_string" | "map_get" |
                         "string_replace" | "string_repeat" | "string_trim" |
-                        "string_to_upper" | "string_to_lower"
-                    ) {
+                        "string_to_upper" | "string_to_lower" |
+                        "node_kind" | "node_value" | "tok_kind" | "tok_value" |
+                        "identity" | "read_file" | "env" | "path_join" |
+                        "path_dir" | "path_base" | "path_ext" | "path_stem"
+                    ) || string_returning_funcs.contains(fname) {
                         string_regs.insert(reg);
                     }
                 } else if let Some(&var) = named_vars.get(fname) {
