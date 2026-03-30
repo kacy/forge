@@ -60,27 +60,12 @@ fn is_octal_char(c: String) -> Bool:
 
 KEYWORDS := ",fn,if,elif,else,for,in,while,match,return,fail,break,continue,spawn,await,struct,enum,interface,impl,type,pub,mut,ref,weak,import,from,as,self,true,false,none,and,or,not,test,"
 
-fn is_keyword(word: String) -> Bool:
-    return KEYWORDS.contains("," + word + ",")
-
 fn keyword_token_kind(word: String) -> String:
     if KEYWORDS.contains("," + word + ","):
         return "kw_" + word
     return "identifier"
 
 # pad a string to 16 chars with spaces
-fn pad16(s: String) -> String:
-    mut result := s
-    while result.len() < 16:
-        result = result + " "
-    return result
-
-# ---------------------------------------------------------------
-# lexer state
-# ---------------------------------------------------------------
-
-# brace characters — can't write "{" or "}" as string literals in forge
-# because { triggers string interpolation. use chr() to construct them.
 mut LBRACE := ""
 mut RBRACE := ""
 
@@ -308,7 +293,7 @@ fn scan_identifier():
         return
 
     # check if it's a keyword
-    if is_keyword(word):
+    if KEYWORDS.contains("," + word + ","):
         emit(keyword_token_kind(word), word)
     else:
         emit("identifier", word)
@@ -735,47 +720,3 @@ pub fn lex_all(src: String) -> List[Token]:
 # main
 # ---------------------------------------------------------------
 
-fn run() -> String!:
-    # init brace characters via chr() since we can't write them as literals
-    LBRACE = chr(123)
-    RBRACE = chr(125)
-
-    cli_args := args()
-    if cli_args.len() < 2:
-        print("usage: forge run self-host/lexer.fg <file.fg>")
-        exit(1)
-
-    path := cli_args[1]
-    content := read_file(path)!
-
-    source = content
-    current_position = 0
-    at_line_start = true
-    done = false
-    indent_stack = [0]
-    pending_token_kinds = []
-    pending_token_values = []
-    pending_dedents = 0
-
-    while true:
-        next_token()
-
-        if current_token_kind == "newline":
-            print("{pad16(current_token_kind)}  \\n")
-        elif current_token_kind == "indent":
-            print("{pad16(current_token_kind)}  >>>")
-        elif current_token_kind == "dedent":
-            print("{pad16(current_token_kind)}  <<<")
-        elif current_token_kind == "eof":
-            print("{pad16(current_token_kind)}  <eof>")
-            break
-        else:
-            if current_token_value.len() > 0:
-                print("{pad16(current_token_kind)}  {current_token_value}")
-            else:
-                print("{pad16(current_token_kind)}")
-
-    return ""
-
-fn main():
-    run()

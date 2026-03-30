@@ -17,6 +17,47 @@ mut current_token_position := 0
 mut recursion_depth := 0
 mut max_depth := 256
 
+fn _cur_tok_kind() -> String:
+    tc := tok_count()
+    if tc == 0:
+        return "eof"
+    mut i := current_token_position
+    while i < tc:
+        k := tok_kind(i)
+        if k != "comment":
+            return k
+        i = i + 1
+    return tok_kind(tc - 1)
+
+fn _cur_tok_value() -> String:
+    tc := tok_count()
+    if tc == 0:
+        return ""
+    mut i := current_token_position
+    while i < tc:
+        k := tok_kind(i)
+        if k != "comment":
+            return tok_value(i)
+        i = i + 1
+    return tok_value(tc - 1)
+
+
+fn _peek_ahead_kind(offset: Int) -> String:
+    tc := tok_count()
+    if tc == 0:
+        return "eof"
+    mut i := current_token_position
+    mut skipped := 0
+    while i < tc:
+        k := tok_kind(i)
+        if k != "comment":
+            if skipped == offset:
+                return k
+            skipped = skipped + 1
+        i = i + 1
+    return tok_kind(tc - 1)
+
+
 # -------------------------------------------------------------
 # position-aware AST helpers (must come after state declarations)
 # -------------------------------------------------------------
@@ -47,45 +88,15 @@ fn add_leaf_with_position(kind: String, value: String) -> Int:
     return add_leaf(kind, value, pos.0, pos.1)
 
 # safe EOF token for empty token list cases
-fn make_eof_token() -> Token:
-    mut tok := Token{"eof", "", 0, 0}
-    return tok
-
 # ---------------------------------------------------------------
 # token navigation
 # ---------------------------------------------------------------
 
-fn peek_current_token() -> Token:
-    tc := tok_count()
-    if tc == 0:
-        return make_eof_token()
-    mut i := current_token_position
-    while i < tc:
-        k := tok_kind(i)
-        if k != "comment":
-            return Token(k, tok_value(i), tok_line(i), tok_col(i))
-        i = i + 1
-    return Token(tok_kind(tc - 1), tok_value(tc - 1), tok_line(tc - 1), tok_col(tc - 1))
-
-fn peek_ahead(offset: Int) -> Token:
-    tc := tok_count()
-    if tc == 0:
-        return make_eof_token()
-    mut i := current_token_position
-    mut skipped := 0
-    while i < tc:
-        k := tok_kind(i)
-        if k != "comment":
-            if skipped == offset:
-                return Token(k, tok_value(i), tok_line(i), tok_col(i))
-            skipped = skipped + 1
-        i = i + 1
-    return Token(tok_kind(tc - 1), tok_value(tc - 1), tok_line(tc - 1), tok_col(tc - 1))
 
 fn advance_token() -> Token:
     tc := tok_count()
     if tc == 0:
-        return make_eof_token()
+        return Token("eof", "", 0, 0)
     while current_token_position < tc:
         k := tok_kind(current_token_position)
         v := tok_value(current_token_position)
@@ -97,7 +108,7 @@ fn advance_token() -> Token:
     return Token(tok_kind(tc - 1), tok_value(tc - 1), tok_line(tc - 1), tok_col(tc - 1))
 
 fn check(kind: String) -> Bool:
-    return peek_current_token().kind == kind
+    return _cur_tok_kind() == kind
 
 fn match_tok(kind: String) -> Bool:
     if check(kind):
@@ -106,16 +117,16 @@ fn match_tok(kind: String) -> Bool:
     return false
 
 fn expect(kind: String) -> Token:
-    current_token := peek_current_token()
-    if current_token.kind == kind:
+    # token via _cur_tok_kind/_cur_tok_value
+    if _cur_tok_kind() == kind:
         return advance_token()
     # error — create error node and return current token
     # TODO: add proper error reporting with line/column info
-    add_leaf_with_position("error", "expected " + kind + " but found " + current_token.kind)
+    add_leaf_with_position("error", "expected " + kind + " but found " + _cur_tok_kind())
     return current_token
 
 fn skip_newlines():
-    while peek_current_token().kind == "newline":
+    while _cur_tok_kind() == "newline":
         advance_token()
 
 # ---------------------------------------------------------------
@@ -134,7 +145,7 @@ fn parse_type_expr() -> Int:
     # result: T! or T!E
     if check("bang"):
         advance_token()
-        next_kind := peek_current_token().kind
+        next_kind := _cur_tok_kind()
         if next_kind == "identifier" or next_kind == "kw_fn" or next_kind == "lparen":
             err_type := parse_type_expr()
             mut children: List[Int] := [base, err_type]
@@ -145,18 +156,18 @@ fn parse_type_expr() -> Int:
     return base
 
 fn parse_base_type() -> Int:
-    current_token := peek_current_token()
+    # token via _cur_tok_kind/_cur_tok_value
 
     # fn type: fn(Int, String) -> Bool
-    if current_token.kind == "kw_fn":
+    if _cur_tok_kind() == "kw_fn":
         return parse_fn_type()
 
     # tuple type: (Int, String)
-    if current_token.kind == "lparen":
+    if _cur_tok_kind() == "lparen":
         return parse_tuple_type()
 
     # named or generic type
-    if current_token.kind == "identifier":
+    if _cur_tok_kind() == "identifier":
         name_tok := advance_token()
 
         # check for generic args: Type[T, U]
@@ -218,106 +229,124 @@ pub fn parse_expression() -> Int:
     if recursion_depth >= max_depth:
         return add_leaf_with_position("error", "max recursion_depth exceeded")
     recursion_depth = recursion_depth + 1
-    result := parse_or()
-    recursion_depth = recursion_depth - 1
-    return result
-
-fn parse_or() -> Int:
-    mut left := parse_and()
-    while check("kw_or"):
+    # handle prefix not
+    mut not_count := 0
+    while check("kw_not"):
         advance_token()
-        right := parse_and()
-        mut children: List[Int] := [left, right]
-        left = add_node_with_position("binary", "or", children)
-    return left
-
-fn parse_and() -> Int:
-    mut left := parse_not()
-    while check("kw_and"):
-        advance_token()
-        right := parse_not()
-        mut children: List[Int] := [left, right]
-        left = add_node_with_position("binary", "and", children)
-    return left
-
-fn parse_not() -> Int:
-    if check("kw_not"):
-        advance_token()
-        operand := parse_not()
-        mut children: List[Int] := [operand]
-        return add_node_with_position("unary", "not", children)
-    return parse_comparison()
-
-fn parse_comparison_op() -> String:
-    k := peek_current_token().kind
-    if k == "eq_eq":
-        return "eq"
-    if k == "bang_eq":
-        return "neq"
-    if k == "less":
-        return "lt"
-    if k == "greater":
-        return "gt"
-    if k == "less_eq":
-        return "lte"
-    if k == "greater_eq":
-        return "gte"
-    return ""
-
-fn parse_comparison() -> Int:
-    mut left := parse_pipe()
-    mut op := parse_comparison_op()
-    while op != "":
-        advance_token()
-        right := parse_pipe()
-        mut children: List[Int] := [left, right]
-        left = add_node_with_position("binary", op, children)
-        op = parse_comparison_op()
-    return left
-
-fn parse_pipe() -> Int:
-    mut left := parse_add()
-    while check("pipe"):
-        advance_token()
-        right := parse_add()
-        mut children: List[Int] := [left, right]
-        left = add_node_with_position("binary", "pipe", children)
-    return left
-
-fn is_additive_op() -> Bool:
-    k := peek_current_token().kind
-    return k == "plus" or k == "minus"
-
-fn parse_add() -> Int:
-    mut left := parse_mul()
-    while is_additive_op():
-        current_token := peek_current_token()
-        mut op := "add"
-        if current_token.kind == "minus":
-            op = "sub"
-        advance_token()
-        right := parse_mul()
-        mut children: List[Int] := [left, right]
-        left = add_node_with_position("binary", op, children)
-    return left
-
-fn is_multiplicative_op() -> Bool:
-    k := peek_current_token().kind
-    return k == "star" or k == "slash" or k == "percent"
-
-fn parse_mul() -> Int:
+        not_count = not_count + 1
+    # parse atom then binary operators by precedence
     mut left := parse_unary()
-    while is_multiplicative_op():
-        current_token := peek_current_token()
+    # mul/div/mod (highest precedence)
+    mut tk := _cur_tok_kind()
+    while tk == "star" or tk == "slash" or tk == "percent":
         mut op := "mul"
-        if current_token.kind == "slash":
+        if tk == "slash":
             op = "div"
-        elif current_token.kind == "percent":
+        elif tk == "percent":
             op = "mod"
         advance_token()
         right := parse_unary()
-        mut children: List[Int] := [left, right]
-        left = add_node_with_position("binary", op, children)
+        mut c: List[Int] := [left, right]
+        left = add_node_with_position("binary", op, c)
+        tk = _cur_tok_kind()
+    # add/sub
+    tk = _cur_tok_kind()
+    while tk == "plus" or tk == "minus":
+        mut op := "add"
+        if tk == "minus":
+            op = "sub"
+        advance_token()
+        mut right := parse_unary()
+        mut tk2 := _cur_tok_kind()
+        while tk2 == "star" or tk2 == "slash" or tk2 == "percent":
+            mut op2 := "mul"
+            if tk2 == "slash":
+                op2 = "div"
+            elif tk2 == "percent":
+                op2 = "mod"
+            advance_token()
+            r2 := parse_unary()
+            mut c2: List[Int] := [right, r2]
+            right = add_node_with_position("binary", op2, c2)
+            tk2 = _cur_tok_kind()
+        mut c: List[Int] := [left, right]
+        left = add_node_with_position("binary", op, c)
+        tk = _cur_tok_kind()
+    # pipe
+    while check("pipe"):
+        advance_token()
+        right := parse_unary()
+        # parse higher-precedence on right
+        mut tk3 := _cur_tok_kind()
+        while tk3 == "star" or tk3 == "slash" or tk3 == "percent" or tk3 == "plus" or tk3 == "minus":
+            mut op3 := "add"
+            if tk3 == "star":
+                op3 = "mul"
+            elif tk3 == "slash":
+                op3 = "div"
+            elif tk3 == "percent":
+                op3 = "mod"
+            elif tk3 == "minus":
+                op3 = "sub"
+            advance_token()
+            r3 := parse_unary()
+            mut c3: List[Int] := [right, r3]
+            right = add_node_with_position("binary", op3, c3)
+            tk3 = _cur_tok_kind()
+        mut c: List[Int] := [left, right]
+        left = add_node_with_position("binary", "pipe", c)
+    # comparison
+    tk = _cur_tok_kind()
+    mut cmp_op := ""
+    if tk == "eq_eq":
+        cmp_op = "eq"
+    elif tk == "bang_eq":
+        cmp_op = "neq"
+    elif tk == "less":
+        cmp_op = "lt"
+    elif tk == "greater":
+        cmp_op = "gt"
+    elif tk == "less_eq":
+        cmp_op = "lte"
+    elif tk == "greater_eq":
+        cmp_op = "gte"
+    while cmp_op != "":
+        advance_token()
+        right := parse_expression()
+        mut c: List[Int] := [left, right]
+        left = add_node_with_position("binary", cmp_op, c)
+        tk = _cur_tok_kind()
+        cmp_op = ""
+        if tk == "eq_eq":
+            cmp_op = "eq"
+        elif tk == "bang_eq":
+            cmp_op = "neq"
+        elif tk == "less":
+            cmp_op = "lt"
+        elif tk == "greater":
+            cmp_op = "gt"
+        elif tk == "less_eq":
+            cmp_op = "lte"
+        elif tk == "greater_eq":
+            cmp_op = "gte"
+    # and
+    while check("kw_and"):
+        advance_token()
+        right := parse_expression()
+        mut c: List[Int] := [left, right]
+        left = add_node_with_position("binary", "and", c)
+    # or
+    while check("kw_or"):
+        advance_token()
+        right := parse_expression()
+        mut c: List[Int] := [left, right]
+        left = add_node_with_position("binary", "or", c)
+    # wrap not
+    while not_count > 0:
+        mut nc: List[Int] := [left]
+        left = add_node_with_position("unary", "not", nc)
+        not_count = not_count - 1
+    recursion_depth = recursion_depth - 1
     return left
 
 fn parse_unary() -> Int:
@@ -346,8 +375,8 @@ fn parse_postfix() -> Int:
 
     mut has_postfix := true
     while has_postfix:
-        current_token := peek_current_token()
-        kind := current_token.kind
+        # token via _cur_tok_kind/_cur_tok_value
+        kind := _cur_tok_kind()
 
         if kind == "question":
             # unwrap: expr?
@@ -378,9 +407,10 @@ fn parse_postfix() -> Int:
             advance_token()
             if check("int_lit"):
                 # tuple field: expr.0
-                idx_tok := advance_token()
+                _tv := _cur_tok_value()
+                advance_token()
                 mut children: List[Int] := [expr]
-                expr = add_node_with_position("field_access", idx_tok.value, children)
+                expr = add_node_with_position("field_access", _tv, children)
             else:
                 name_tok := expect("identifier")
                 if check("lparen"):
@@ -442,8 +472,8 @@ fn parse_arg_list() -> List[Int]:
 
 fn parse_arg() -> Int:
     # check for named argument: name = expr
-    if peek_current_token().kind == "identifier":
-        if peek_ahead(1).kind == "eq":
+    if _cur_tok_kind() == "identifier":
+        if _peek_ahead_kind(1) == "eq":
             name := advance_token().value
             advance_token()
             val := parse_expression()
@@ -455,64 +485,69 @@ fn parse_arg() -> Int:
     return add_node_with_position("arg", "", children)
 
 fn parse_primary() -> Int:
-    current_token := peek_current_token()
+    # token via _cur_tok_kind/_cur_tok_value
 
-    if current_token.kind == "int_lit":
+    if _cur_tok_kind() == "int_lit":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("int_lit", current_token.value)
+        return add_leaf_with_position("int_lit", _tv)
 
-    if current_token.kind == "float_lit":
+    if _cur_tok_kind() == "float_lit":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("float_lit", current_token.value)
+        return add_leaf_with_position("float_lit", _tv)
 
-    if current_token.kind == "string_lit":
+    if _cur_tok_kind() == "string_lit":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("string_lit", current_token.value)
+        return add_leaf_with_position("string_lit", _tv)
 
-    if current_token.kind == "string_start":
+    if _cur_tok_kind() == "string_start":
         return parse_string_interpolation()
 
-    if current_token.kind == "kw_true":
+    if _cur_tok_kind() == "kw_true":
         advance_token()
         return add_leaf_with_position("bool_lit", "true")
 
-    if current_token.kind == "kw_false":
+    if _cur_tok_kind() == "kw_false":
         advance_token()
         return add_leaf_with_position("bool_lit", "false")
 
-    if current_token.kind == "kw_none":
+    if _cur_tok_kind() == "kw_none":
         advance_token()
         return add_leaf_with_position("none_lit", "")
 
-    if current_token.kind == "kw_self":
+    if _cur_tok_kind() == "kw_self":
         advance_token()
         return add_leaf_with_position("self", "")
 
-    if current_token.kind == "identifier":
+    if _cur_tok_kind() == "identifier":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("ident", current_token.value)
+        return add_leaf_with_position("ident", _tv)
 
-    if current_token.kind == "lparen":
+    if _cur_tok_kind() == "lparen":
         return parse_grouped_or_tuple()
 
-    if current_token.kind == "lbracket":
+    if _cur_tok_kind() == "lbracket":
         return parse_list_literal()
 
-    if current_token.kind == "lbrace":
+    if _cur_tok_kind() == "lbrace":
         return parse_map_or_set_literal()
 
-    if current_token.kind == "kw_if":
+    if _cur_tok_kind() == "kw_if":
         return parse_if_expr()
 
-    if current_token.kind == "kw_match":
+    if _cur_tok_kind() == "kw_match":
         return parse_match_expr()
 
-    if current_token.kind == "kw_fn":
+    if _cur_tok_kind() == "kw_fn":
         return parse_lambda()
 
     # unexpected token — skip it
+    _tv := _cur_tok_value()
     advance_token()
-    return add_leaf_with_position("error", current_token.value)
+    return add_leaf_with_position("error", _tv)
 
 fn parse_grouped_or_tuple() -> Int:
     advance_token()
@@ -721,7 +756,8 @@ fn parse_lambda_param() -> Int:
     return add_node_with_position("param", name_tok.value, children)
 
 fn parse_string_interpolation() -> Int:
-    start_tok := advance_token()
+    _tv := _cur_tok_value()
+    advance_token()
     mut parts: List[Int] := []
 
     if start_tok.value.len() > 0:
@@ -730,22 +766,25 @@ fn parse_string_interpolation() -> Int:
     while true:
         # interpolation expression
         if check("interpolation_expr"):
-            interp_tok := advance_token()
-            interp_expr := parse_interp_expr(interp_tok.value)
+            _tv := _cur_tok_value()
+            advance_token()
+            interp_expr := parse_interp_expr(_tv)
             parts.push(interp_expr)
 
         # string_mid — more interpolations follow
         if check("string_mid"):
-            mid_tok := advance_token()
-            if mid_tok.value.len() > 0:
-                parts.push(add_leaf_with_position("lit", mid_tok.value))
+            _tv := _cur_tok_value()
+            advance_token()
+            if _tv.len() > 0:
+                parts.push(add_leaf_with_position("lit", _tv))
             continue
 
         # string_end — done
         if check("string_end"):
-            end_tok := advance_token()
-            if end_tok.value.len() > 0:
-                parts.push(add_leaf_with_position("lit", end_tok.value))
+            _tv := _cur_tok_value()
+            advance_token()
+            if _tv.len() > 0:
+                parts.push(add_leaf_with_position("lit", _tv))
             break
 
         # unexpected
@@ -780,37 +819,40 @@ fn parse_interp_expr(text: String) -> Int:
 # ---------------------------------------------------------------
 
 fn parse_pattern() -> Int:
-    current_token := peek_current_token()
+    # token via _cur_tok_kind/_cur_tok_value
 
-    if current_token.kind == "underscore":
+    if _cur_tok_kind() == "underscore":
         advance_token()
         return add_leaf_with_position("pat_wildcard", "_")
 
-    if current_token.kind == "int_lit":
+    if _cur_tok_kind() == "int_lit":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("pat_int", current_token.value)
+        return add_leaf_with_position("pat_int", _tv)
 
-    if current_token.kind == "float_lit":
+    if _cur_tok_kind() == "float_lit":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("pat_float", current_token.value)
+        return add_leaf_with_position("pat_float", _tv)
 
-    if current_token.kind == "string_lit":
+    if _cur_tok_kind() == "string_lit":
+        _tv := _cur_tok_value()
         advance_token()
-        return add_leaf_with_position("pat_string", current_token.value)
+        return add_leaf_with_position("pat_string", _tv)
 
-    if current_token.kind == "kw_true":
+    if _cur_tok_kind() == "kw_true":
         advance_token()
         return add_leaf_with_position("pat_bool", "true")
 
-    if current_token.kind == "kw_false":
+    if _cur_tok_kind() == "kw_false":
         advance_token()
         return add_leaf_with_position("pat_bool", "false")
 
-    if current_token.kind == "kw_none":
+    if _cur_tok_kind() == "kw_none":
         advance_token()
         return add_leaf_with_position("pat_none", "")
 
-    if current_token.kind == "identifier":
+    if _cur_tok_kind() == "identifier":
         advance_token()
         # variant pattern: Type.Variant or Type.Variant(fields)
         if check("dot"):
@@ -825,14 +867,14 @@ fn parse_pattern() -> Int:
                     while match_tok("comma"):
                         fields.push(parse_pattern())
                 expect("rparen")
-                return add_node_with_position("pat_variant", current_token.value + "." + variant_tok.value, fields)
+                return add_node_with_position("pat_variant", _cur_tok_value() + "." + variant_tok.value, fields)
 
             mut empty: List[Int] := []
-            return add_node_with_position("pat_variant", current_token.value + "." + variant_tok.value, empty)
+            return add_node_with_position("pat_variant", _cur_tok_value() + "." + variant_tok.value, empty)
 
-        return add_leaf_with_position("pat_binding", current_token.value)
+        return add_leaf_with_position("pat_binding", _cur_tok_value())
 
-    if current_token.kind == "lparen":
+    if _cur_tok_kind() == "lparen":
         advance_token()
         mut patterns: List[Int] := []
         if not check("rparen"):
@@ -863,38 +905,38 @@ fn parse_block() -> Int:
     return add_node_with_position("block", "", stmts)
 
 fn parse_statement() -> Int:
-    current_token := peek_current_token()
+    # token via _cur_tok_kind/_cur_tok_value
 
     # mut binding
-    if current_token.kind == "kw_mut":
+    if _cur_tok_kind() == "kw_mut":
         return parse_binding()
 
     # binding: name := expr or name: Type := expr
-    if current_token.kind == "identifier":
-        if peek_ahead(1).kind == "colon_eq":
+    if _cur_tok_kind() == "identifier":
+        if _peek_ahead_kind(1) == "colon_eq":
             return parse_binding()
-        if peek_ahead(1).kind == "colon":
+        if _peek_ahead_kind(1) == "colon":
             if looks_like_binding():
                 return parse_binding()
 
     # control flow
-    if current_token.kind == "kw_if":
+    if _cur_tok_kind() == "kw_if":
         return parse_if_stmt()
-    if current_token.kind == "kw_for":
+    if _cur_tok_kind() == "kw_for":
         return parse_for_stmt()
-    if current_token.kind == "kw_while":
+    if _cur_tok_kind() == "kw_while":
         return parse_while_stmt()
-    if current_token.kind == "kw_match":
+    if _cur_tok_kind() == "kw_match":
         return parse_match_stmt()
-    if current_token.kind == "kw_return":
+    if _cur_tok_kind() == "kw_return":
         return parse_return_stmt()
-    if current_token.kind == "kw_fail":
+    if _cur_tok_kind() == "kw_fail":
         return parse_fail_stmt()
 
-    if current_token.kind == "kw_break":
+    if _cur_tok_kind() == "kw_break":
         advance_token()
         return add_leaf_with_position("break", "")
-    if current_token.kind == "kw_continue":
+    if _cur_tok_kind() == "kw_continue":
         advance_token()
         return add_leaf_with_position("continue", "")
 
@@ -903,12 +945,12 @@ fn parse_statement() -> Int:
 fn looks_like_binding() -> Bool:
     mut i := 2
     while true:
-        current_token := peek_ahead(i)
-        if current_token.kind == "colon_eq":
+        ak := _peek_ahead_kind(i)
+        if ak == "colon_eq":
             return true
-        if current_token.kind == "eof" or current_token.kind == "newline" or current_token.kind == "dedent":
+        if ak == "eof" or ak == "newline" or ak == "dedent":
             return false
-        if current_token.kind == "identifier" or current_token.kind == "lbracket" or current_token.kind == "rbracket" or current_token.kind == "lparen" or current_token.kind == "rparen" or current_token.kind == "comma" or current_token.kind == "question" or current_token.kind == "bang" or current_token.kind == "arrow" or current_token.kind == "kw_fn" or current_token.kind == "plus":
+        if ak == "identifier" or ak == "lbracket" or ak == "rbracket" or ak == "lparen" or ak == "rparen" or ak == "comma" or ak == "question" or ak == "bang" or ak == "arrow" or ak == "kw_fn" or ak == "plus":
             i = i + 1
             continue
         return false
@@ -936,17 +978,17 @@ fn parse_binding() -> Int:
 fn parse_expr_stmt_or_assignment() -> Int:
     expr := parse_expression()
 
-    current_token := peek_current_token()
+    # token via _cur_tok_kind/_cur_tok_value
     mut op := ""
-    if current_token.kind == "eq":
+    if _cur_tok_kind() == "eq":
         op = "="
-    elif current_token.kind == "plus_eq":
+    elif _cur_tok_kind() == "plus_eq":
         op = "+="
-    elif current_token.kind == "minus_eq":
+    elif _cur_tok_kind() == "minus_eq":
         op = "-="
-    elif current_token.kind == "star_eq":
+    elif _cur_tok_kind() == "star_eq":
         op = "*="
-    elif current_token.kind == "slash_eq":
+    elif _cur_tok_kind() == "slash_eq":
         op = "/="
 
     if op.len() > 0:
@@ -1018,7 +1060,7 @@ fn parse_match_stmt() -> Int:
 
 fn parse_return_stmt() -> Int:
     advance_token()
-    next_kind := peek_current_token().kind
+    next_kind := _cur_tok_kind()
     if next_kind == "newline" or next_kind == "dedent" or next_kind == "eof":
         mut children: List[Int] := []
         return add_node_with_position("return", "", children)
@@ -1123,24 +1165,24 @@ fn parse_top_level_decl() -> Int:
     if match_tok("kw_pub"):
         is_pub = true
 
-    current_token := peek_current_token()
+    # token via _cur_tok_kind/_cur_tok_value
 
     mut decl := 0
-    if current_token.kind == "kw_fn":
+    if _cur_tok_kind() == "kw_fn":
         decl = parse_fn_decl()
-    elif current_token.kind == "kw_struct":
+    elif _cur_tok_kind() == "kw_struct":
         decl = parse_struct_decl()
-    elif current_token.kind == "kw_enum":
+    elif _cur_tok_kind() == "kw_enum":
         decl = parse_enum_decl()
-    elif current_token.kind == "kw_interface":
+    elif _cur_tok_kind() == "kw_interface":
         decl = parse_interface_decl()
-    elif current_token.kind == "kw_impl":
+    elif _cur_tok_kind() == "kw_impl":
         decl = parse_impl_decl()
-    elif current_token.kind == "kw_type":
+    elif _cur_tok_kind() == "kw_type":
         decl = parse_type_alias_decl()
-    elif current_token.kind == "kw_test":
+    elif _cur_tok_kind() == "kw_test":
         decl = parse_test_decl()
-    elif current_token.kind == "kw_mut" or current_token.kind == "identifier":
+    elif _cur_tok_kind() == "kw_mut" or _cur_tok_kind() == "identifier":
         decl = parse_binding()
     else:
         advance_token()
