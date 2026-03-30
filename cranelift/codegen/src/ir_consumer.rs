@@ -771,7 +771,6 @@ fn compile_ir_function(
                         _ => unreachable!(),
                     };
                     regs.insert(reg, v);
-                    // Integer arithmetic — clear stale string tracking
                     string_regs.remove(&reg);
                 }
             }
@@ -853,6 +852,7 @@ fn compile_ir_function(
                     let call = builder.ins().call(concat_ref, &[a, b]);
                     if !builder.func.dfg.inst_results(call).is_empty() {
                         regs.insert(reg, builder.func.dfg.first_result(call));
+                        string_regs.insert(reg);
                     } else {
                         regs.insert(reg, a);
                     }
