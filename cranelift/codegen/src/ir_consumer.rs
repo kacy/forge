@@ -32,7 +32,7 @@
 use crate::{CodeGen, CompileError};
 use cranelift::prelude::*;
 use cranelift_module::{FuncId, Linkage, Module};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Compile IR text to native code via Cranelift
 pub fn compile_from_ir(
@@ -46,7 +46,8 @@ pub fn compile_from_ir(
     let mut struct_layouts: HashMap<String, Vec<String>> = HashMap::new();
     let mut global_data: HashMap<String, cranelift_module::DataId> = HashMap::new();
     let mut str_globals: Vec<(String, String)> = Vec::new(); // (global_name, string_id)
-    let mut string_global_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut string_global_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     // Pass 1: collect string data and declare functions
     for line in &lines {
@@ -62,7 +63,7 @@ pub fn compile_from_ir(
                 // Strip exactly one leading and one trailing quote
                 // (trim_matches would eat escaped quotes like "\"")
                 let raw = if rest.len() >= 2 && rest.starts_with('"') && rest.ends_with('"') {
-                    &rest[1..rest.len()-1]
+                    &rest[1..rest.len() - 1]
                 } else {
                     rest
                 };
@@ -72,13 +73,34 @@ pub fn compile_from_ir(
                 while j < bytes.len() {
                     if bytes[j] == b'\\' && j + 1 < bytes.len() {
                         match bytes[j + 1] {
-                            b'n' => { content.push('\n'); j += 2; }
-                            b't' => { content.push('\t'); j += 2; }
-                            b'\\' => { content.push('\\'); j += 2; }
-                            b'"' => { content.push('"'); j += 2; }
-                            b'r' => { content.push('\r'); j += 2; }
-                            b'0' => { content.push('\0'); j += 2; }
-                            _ => { content.push(bytes[j] as char); j += 1; }
+                            b'n' => {
+                                content.push('\n');
+                                j += 2;
+                            }
+                            b't' => {
+                                content.push('\t');
+                                j += 2;
+                            }
+                            b'\\' => {
+                                content.push('\\');
+                                j += 2;
+                            }
+                            b'"' => {
+                                content.push('"');
+                                j += 2;
+                            }
+                            b'r' => {
+                                content.push('\r');
+                                j += 2;
+                            }
+                            b'0' => {
+                                content.push('\0');
+                                j += 2;
+                            }
+                            _ => {
+                                content.push(bytes[j] as char);
+                                j += 1;
+                            }
                         }
                     } else {
                         content.push(bytes[j] as char);
@@ -91,7 +113,8 @@ pub fn compile_from_ir(
                 let name = parts[1].to_string();
                 if !struct_layouts.contains_key(&name) {
                     // Filter out "pub" markers from field list
-                    let fields: Vec<String> = parts[2..].iter()
+                    let fields: Vec<String> = parts[2..]
+                        .iter()
                         .filter(|s| **s != "pub")
                         .map(|s| s.to_string())
                         .collect();
@@ -114,19 +137,23 @@ pub fn compile_from_ir(
                     } else {
                         gname.clone()
                     };
-                    let data_id = codegen.module
+                    let data_id = codegen
+                        .module
                         .declare_data(&data_name, Linkage::Local, true, false)
                         .map_err(|e| CompileError::ModuleError(e.to_string()))?;
                     let mut desc = DataDescription::new();
-                    let init_val: i64 = if init_kind == "list" || init_kind == "map" || init_kind == "set" {
-                        0
-                    } else if init_kind.starts_with("str:") {
-                        0 // will be patched in __init_globals
-                    } else {
-                        init_kind.parse().unwrap_or(0)
-                    };
+                    let init_val: i64 =
+                        if init_kind == "list" || init_kind == "map" || init_kind == "set" {
+                            0
+                        } else if init_kind.starts_with("str:") {
+                            0 // will be patched in __init_globals
+                        } else {
+                            init_kind.parse().unwrap_or(0)
+                        };
                     desc.define(init_val.to_le_bytes().to_vec().into_boxed_slice());
-                    codegen.module.define_data(data_id, &desc)
+                    codegen
+                        .module
+                        .define_data(data_id, &desc)
                         .map_err(|e| CompileError::ModuleError(e.to_string()))?;
                     global_data.insert(gname.clone(), data_id);
                     // Track str: globals that need runtime initialization
@@ -154,7 +181,9 @@ pub fn compile_from_ir(
                         sig.params.push(AbiParam::new(types::I64));
                     }
                     sig.returns.push(AbiParam::new(types::I64));
-                    if let Ok(func_id) = codegen.module.declare_function(name, Linkage::Export, &sig) {
+                    if let Ok(func_id) =
+                        codegen.module.declare_function(name, Linkage::Export, &sig)
+                    {
                         declared_funcs.insert(name.to_string(), func_id);
                     }
                     // silently skip if name conflicts with runtime declaration
@@ -164,132 +193,17 @@ pub fn compile_from_ir(
         }
     }
 
-    // Pre-scan: identify user functions that return string values.
-    // A function returns a string if it calls a known string-returning function
-    // and returns that result (directly or through a variable).
-    let mut string_returning_funcs: std::collections::HashSet<String> = std::collections::HashSet::new();
-    {
-        let known_str_fns: std::collections::HashSet<&str> = [
-            "char_at", "substring", "to_upper", "to_lower", "trim",
-            "replace", "repeat", "pad_left", "pad_right", "reverse",
-            "chr", "smart_to_string", "to_string", "int_to_string",
-            "float_to_string", "bool_to_string", "map_get",
-            "string_replace", "string_repeat", "string_trim",
-            "string_to_upper", "string_to_lower",
-            "node_kind", "node_value", "tok_kind", "tok_value",
-            "identity", "read_file", "env", "path_join",
-            "path_dir", "path_base", "path_ext", "path_stem",
-            "__list_get", "__index", "join",
-        ].iter().cloned().collect();
-
-        let mut cur_func = String::new();
-        let mut str_regs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut str_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        for line in &lines {
-            let p: Vec<&str> = line.split_whitespace().collect();
-            if p.is_empty() { continue; }
-            match p[0] {
-                "func" if p.len() >= 2 => {
-                    cur_func = p[1].to_string();
-                    str_regs.clear();
-                    str_vars.clear();
-                }
-                "call" if p.len() >= 4 => {
-                    if let Ok(reg) = p[1].parse::<usize>() {
-                        let fname = p[2];
-                        if known_str_fns.contains(fname) || string_returning_funcs.contains(fname) {
-                            str_regs.insert(reg);
-                        }
-                    }
-                }
-                "strref" if p.len() >= 2 => {
-                    if let Ok(reg) = p[1].parse::<usize>() {
-                        str_regs.insert(reg);
-                    }
-                }
-                "store" if p.len() >= 3 => {
-                    if let Ok(src) = p[2].parse::<usize>() {
-                        if str_regs.contains(&src) {
-                            str_vars.insert(p[1].to_string());
-                        }
-                    }
-                }
-                "load" if p.len() >= 3 => {
-                    if let Ok(reg) = p[1].parse::<usize>() {
-                        if str_vars.contains(p[2]) {
-                            str_regs.insert(reg);
-                        }
-                    }
-                }
-                "ret" if p.len() >= 2 => {
-                    if let Ok(reg) = p[1].parse::<usize>() {
-                        if str_regs.contains(&reg) && !cur_func.is_empty() {
-                            string_returning_funcs.insert(cur_func.clone());
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        // Run a second pass to propagate transitively
-        for _ in 0..3 {
-            let prev_count = string_returning_funcs.len();
-            let mut cur_func2 = String::new();
-            str_regs.clear();
-            str_vars.clear();
-            for line in &lines {
-                let p: Vec<&str> = line.split_whitespace().collect();
-                if p.is_empty() { continue; }
-                match p[0] {
-                    "func" if p.len() >= 2 => {
-                        cur_func2 = p[1].to_string();
-                        str_regs.clear();
-                        str_vars.clear();
-                    }
-                    "call" if p.len() >= 4 => {
-                        if let Ok(reg) = p[1].parse::<usize>() {
-                            let fname = p[2];
-                            if known_str_fns.contains(fname) || string_returning_funcs.contains(fname) {
-                                str_regs.insert(reg);
-                            }
-                        }
-                    }
-                    "strref" if p.len() >= 2 => {
-                        if let Ok(reg) = p[1].parse::<usize>() { str_regs.insert(reg); }
-                    }
-                    "store" if p.len() >= 3 => {
-                        if let Ok(src) = p[2].parse::<usize>() {
-                            if str_regs.contains(&src) { str_vars.insert(p[1].to_string()); }
-                        }
-                    }
-                    "load" if p.len() >= 3 => {
-                        if let Ok(reg) = p[1].parse::<usize>() {
-                            if str_vars.contains(p[2]) { str_regs.insert(reg); }
-                        }
-                    }
-                    "ret" if p.len() >= 2 => {
-                        if let Ok(reg) = p[1].parse::<usize>() {
-                            if str_regs.contains(&reg) && !cur_func2.is_empty() {
-                                string_returning_funcs.insert(cur_func2.clone());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if string_returning_funcs.len() == prev_count { break; }
-        }
-    }
+    let struct_returning_funcs = collect_struct_returning_funcs(&lines);
+    let string_returning_funcs =
+        collect_string_returning_funcs(&lines, &string_global_names, &struct_returning_funcs);
 
     // Declare string data functions
     let mut string_funcs: HashMap<String, FuncId> = HashMap::new();
     for (idx, content) in &string_data {
         if !string_funcs.contains_key(idx) {
             let name = format!("__irstr_{}", idx);
-            let func_id =
-                crate::declare_string_data(&mut codegen.module, &name, content)
-                    .map_err(|e| CompileError::ModuleError(format!("string data: {:?}", e)))?;
+            let func_id = crate::declare_string_data(&mut codegen.module, &name, content)
+                .map_err(|e| CompileError::ModuleError(format!("string data: {:?}", e)))?;
             string_funcs.insert(idx.clone(), func_id);
         }
     }
@@ -344,6 +258,7 @@ pub fn compile_from_ir(
                 &global_data,
                 &str_globals,
                 &string_global_names,
+                &struct_returning_funcs,
                 &string_returning_funcs,
             )?;
         }
@@ -365,6 +280,7 @@ fn compile_ir_function(
     global_data: &HashMap<String, cranelift_module::DataId>,
     str_globals: &[(String, String)],
     string_global_names: &std::collections::HashSet<String>,
+    struct_returning_funcs: &HashMap<String, String>,
     string_returning_funcs: &std::collections::HashSet<String>,
 ) -> Result<(), CompileError> {
     let mut ctx = codegen.module.make_context();
@@ -387,10 +303,13 @@ fn compile_ir_function(
     // Map param names to block params
     let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
     let mut regs: HashMap<usize, Value> = HashMap::new();
-    let mut string_regs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut string_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut float_regs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut float_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut string_regs: HashSet<usize> = HashSet::new();
+    let mut string_vars: HashSet<String> = HashSet::new();
+    let mut float_regs: HashSet<usize> = HashSet::new();
+    let mut float_vars: HashSet<String> = HashSet::new();
+    let mut reg_source_vars: HashMap<usize, String> = HashMap::new();
+    let mut struct_regs: HashMap<usize, String> = HashMap::new();
+    let mut struct_vars: HashMap<String, String> = HashMap::new();
     let mut named_vars: HashMap<String, Variable> = HashMap::new();
     let mut labels: HashMap<String, Block> = HashMap::new();
     let mut next_var_id: u32 = 0;
@@ -415,13 +334,18 @@ fn compile_ir_function(
         }
         // Initialize str: globals — call string function and store result
         for (gname, str_id) in str_globals.iter() {
-            if let (Some(&data_id), Some(&sfunc_id)) = (global_data.get(gname.as_str()), string_funcs.get(str_id.as_str())) {
+            if let (Some(&data_id), Some(&sfunc_id)) = (
+                global_data.get(gname.as_str()),
+                string_funcs.get(str_id.as_str()),
+            ) {
                 let sf_ref = codegen.module.declare_func_in_func(sfunc_id, builder.func);
                 let str_val = builder.ins().call(sf_ref, &[]);
                 let str_result = builder.func.dfg.first_result(str_val);
                 let gv = codegen.module.declare_data_in_func(data_id, builder.func);
                 let addr = builder.ins().global_value(types::I64, gv);
-                builder.ins().store(cranelift::codegen::ir::MemFlags::new(), str_result, addr, 0);
+                builder
+                    .ins()
+                    .store(cranelift::codegen::ir::MemFlags::new(), str_result, addr, 0);
             }
         }
     }
@@ -440,10 +364,13 @@ fn compile_ir_function(
     // Pre-scan: detect float-typed variables by finding `store VAR REG`
     // where REG was assigned by fconst/fmul/fadd/fsub/fdiv
     {
-        let mut float_source_regs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut float_source_regs: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
         for line in body_lines {
             let p: Vec<&str> = line.split_whitespace().collect();
-            if p.is_empty() { continue; }
+            if p.is_empty() {
+                continue;
+            }
             match p[0] {
                 "fconst" | "fadd" | "fsub" | "fmul" | "fdiv" if p.len() >= 2 => {
                     if let Ok(r) = p[1].parse::<usize>() {
@@ -493,8 +420,12 @@ fn compile_ir_function(
             for line in body_lines.iter() {
                 let p: Vec<&str> = line.split_whitespace().collect();
                 if p.len() >= 4 && matches!(p[0], "mul" | "div" | "add" | "sub") {
-                    let a_float = p[2].parse::<usize>().map_or(false, |r| float_source_regs.contains(&r));
-                    let b_float = p[3].parse::<usize>().map_or(false, |r| float_source_regs.contains(&r));
+                    let a_float = p[2]
+                        .parse::<usize>()
+                        .map_or(false, |r| float_source_regs.contains(&r));
+                    let b_float = p[3]
+                        .parse::<usize>()
+                        .map_or(false, |r| float_source_regs.contains(&r));
                     if a_float || b_float {
                         if let Ok(r) = p[1].parse::<usize>() {
                             float_source_regs.insert(r);
@@ -634,16 +565,23 @@ fn compile_ir_function(
                 };
                 let v = builder.ins().iconst(types::I64, val);
                 regs.insert(reg, v);
-                // iconst definitively produces an integer — clear any stale string tracking
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 string_regs.remove(&reg);
+                float_regs.remove(&reg);
             }
 
             "fconst" if parts.len() >= 3 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let fval: f64 = parts[2].parse().unwrap_or(0.0);
                 let fv = builder.ins().f64const(fval);
-                let v = builder.ins().bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), fv);
+                let v =
+                    builder
+                        .ins()
+                        .bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), fv);
                 regs.insert(reg, v);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 float_regs.insert(reg);
                 string_regs.remove(&reg);
             }
@@ -659,7 +597,10 @@ fn compile_ir_function(
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));
                 }
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 string_regs.insert(reg);
+                float_regs.remove(&reg);
             }
 
             "band" | "bor" | "bxor" | "shl" | "shr" if parts.len() >= 4 => {
@@ -675,6 +616,10 @@ fn compile_ir_function(
                     _ => unreachable!(),
                 };
                 regs.insert(reg, v);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
+                string_regs.remove(&reg);
+                float_regs.remove(&reg);
             }
 
             "bnot" if parts.len() >= 3 => {
@@ -682,6 +627,10 @@ fn compile_ir_function(
                 let a = get_reg(&regs, parts[2]);
                 let v = builder.ins().bnot(a);
                 regs.insert(reg, v);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
+                string_regs.remove(&reg);
+                float_regs.remove(&reg);
             }
 
             "and" | "or" if parts.len() >= 4 => {
@@ -694,6 +643,10 @@ fn compile_ir_function(
                     _ => unreachable!(),
                 };
                 regs.insert(reg, v);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
+                string_regs.remove(&reg);
+                float_regs.remove(&reg);
             }
 
             "fadd" | "fsub" | "fmul" | "fdiv" if parts.len() >= 4 => {
@@ -701,8 +654,14 @@ fn compile_ir_function(
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
                 // Bitcast i64 → f64
-                let fa = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), a);
-                let fb = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), b);
+                let fa =
+                    builder
+                        .ins()
+                        .bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), a);
+                let fb =
+                    builder
+                        .ins()
+                        .bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), b);
                 let fv = match parts[0] {
                     "fadd" => builder.ins().fadd(fa, fb),
                     "fsub" => builder.ins().fsub(fa, fb),
@@ -711,9 +670,15 @@ fn compile_ir_function(
                     _ => unreachable!(),
                 };
                 // Bitcast f64 → i64
-                let v = builder.ins().bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), fv);
+                let v =
+                    builder
+                        .ins()
+                        .bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), fv);
                 regs.insert(reg, v);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 float_regs.insert(reg);
+                string_regs.remove(&reg);
             }
 
             "add" | "sub" | "mul" | "div" | "mod" if parts.len() >= 4 => {
@@ -722,10 +687,13 @@ fn compile_ir_function(
                 let b_reg: usize = parts[3].parse().unwrap_or(usize::MAX);
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 // If `add` has a string operand, treat as concat (IR emitter
                 // sometimes emits `add` instead of `concat` when variable types
                 // aren't tracked across function boundaries)
-                if parts[0] == "add" && string_regs.contains(&a_reg) && string_regs.contains(&b_reg) {
+                if parts[0] == "add" && string_regs.contains(&a_reg) && string_regs.contains(&b_reg)
+                {
                     let concat_name = if runtime_funcs.contains_key("forge_concat_cstr") {
                         "forge_concat_cstr"
                     } else {
@@ -745,12 +713,21 @@ fn compile_ir_function(
                         regs.insert(reg, builder.ins().iadd(a, b));
                     }
                     string_regs.insert(reg);
+                    float_regs.remove(&reg);
                 // If operands are known floats, promote to float operation
                 } else if matches!(parts[0], "add" | "sub" | "mul" | "div")
                     && (float_regs.contains(&a_reg) || float_regs.contains(&b_reg))
                 {
-                    let fa = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), a);
-                    let fb = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), b);
+                    let fa = builder.ins().bitcast(
+                        types::F64,
+                        cranelift::codegen::ir::MemFlags::new(),
+                        a,
+                    );
+                    let fb = builder.ins().bitcast(
+                        types::F64,
+                        cranelift::codegen::ir::MemFlags::new(),
+                        b,
+                    );
                     let fv = match parts[0] {
                         "add" => builder.ins().fadd(fa, fb),
                         "sub" => builder.ins().fsub(fa, fb),
@@ -758,9 +735,14 @@ fn compile_ir_function(
                         "div" => builder.ins().fdiv(fa, fb),
                         _ => unreachable!(),
                     };
-                    let v = builder.ins().bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), fv);
+                    let v = builder.ins().bitcast(
+                        types::I64,
+                        cranelift::codegen::ir::MemFlags::new(),
+                        fv,
+                    );
                     regs.insert(reg, v);
                     float_regs.insert(reg);
+                    string_regs.remove(&reg);
                 } else {
                     let v = match parts[0] {
                         "add" => builder.ins().iadd(a, b),
@@ -772,6 +754,7 @@ fn compile_ir_function(
                     };
                     regs.insert(reg, v);
                     string_regs.remove(&reg);
+                    float_regs.remove(&reg);
                 }
             }
 
@@ -781,6 +764,8 @@ fn compile_ir_function(
                 let b_reg: usize = parts[3].parse().unwrap_or(usize::MAX);
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 // For lt/gt/lte/gte on strings, call runtime comparison
                 let is_str_cmp = matches!(parts[0], "lt" | "gt" | "lte" | "gte")
                     && (string_regs.contains(&a_reg) || string_regs.contains(&b_reg));
@@ -804,8 +789,16 @@ fn compile_ir_function(
                     }
                 } else if float_regs.contains(&a_reg) || float_regs.contains(&b_reg) {
                     // Float comparison
-                    let fa = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), a);
-                    let fb = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), b);
+                    let fa = builder.ins().bitcast(
+                        types::F64,
+                        cranelift::codegen::ir::MemFlags::new(),
+                        a,
+                    );
+                    let fb = builder.ins().bitcast(
+                        types::F64,
+                        cranelift::codegen::ir::MemFlags::new(),
+                        b,
+                    );
                     use cranelift::codegen::ir::condcodes::FloatCC;
                     let fcc = match parts[0] {
                         "eq" => FloatCC::Equal,
@@ -832,14 +825,17 @@ fn compile_ir_function(
                     let cmp = builder.ins().icmp(cc, a, b);
                     let v = builder.ins().uextend(types::I64, cmp);
                     regs.insert(reg, v);
-                    string_regs.remove(&reg); // comparison returns integer
                 }
+                string_regs.remove(&reg);
+                float_regs.remove(&reg);
             }
 
             "concat" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
                 let concat_name = if runtime_funcs.contains_key("forge_concat_cstr") {
                     "forge_concat_cstr"
                 } else {
@@ -860,12 +856,16 @@ fn compile_ir_function(
                     regs.insert(reg, a);
                 }
                 string_regs.insert(reg);
+                float_regs.remove(&reg);
             }
 
             "call" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let mut fname = parts[2];
                 let nargs: usize = parts[3].parse().unwrap_or(0);
+                let arg_regs = parse_call_arg_regs(&parts, nargs);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
 
                 // Struct constructor: call REG StructName N args...
                 // If fname is a known struct, emit __struct_alloc + sstore
@@ -895,140 +895,138 @@ fn compile_ir_function(
                             );
                         }
                         regs.insert(reg, ptr);
+                        struct_regs.insert(reg, fname.to_string());
+                        string_regs.remove(&reg);
+                        float_regs.remove(&reg);
                     } else {
                         regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                        struct_regs.remove(&reg);
+                        string_regs.remove(&reg);
+                        float_regs.remove(&reg);
                     }
                 } else {
-
-                // tcp_read with 2 args → tcp_read2 (different runtime function)
-                if fname == "tcp_read" && nargs == 2 {
-                    fname = "tcp_read2";
-                }
-                // __list_get on a string → char_at (string indexing)
-                if (fname == "__list_get" || fname == "__index") && nargs >= 1 && parts.len() > 4 {
-                    if let Ok(arg_reg) = parts[4].parse::<usize>() {
-                        if string_regs.contains(&arg_reg) {
-                            fname = "char_at";
-                        }
+                    // tcp_read with 2 args → tcp_read2 (different runtime function)
+                    if fname == "tcp_read" && nargs == 2 {
+                        fname = "tcp_read2";
                     }
-                }
-                let mut args: Vec<Value> = Vec::new();
-                for j in 0..nargs {
-                    if j + 4 < parts.len() {
-                        args.push(get_reg(&regs, parts[j + 4]));
-                    }
-                }
-                // Note: `len` maps to forge_auto_len which handles both
-                // strings and lists at runtime via magic number check
-                // Look up function: user-defined first, then runtime with name resolution
-                let resolved_name = resolve_func_name(fname);
-                let fid = declared_funcs
-                    .get(fname)
-                    .or_else(|| runtime_funcs.get(resolved_name))
-                    .or_else(|| runtime_funcs.get(fname))
-                    .or_else(|| runtime_funcs.get(&format!("forge_{}", fname)))
-                    .copied();
-
-                if let Some(fid) = fid {
-                    let fref = *func_ref_cache.entry(fid).or_insert_with(|| {
-                        codegen.module.declare_func_in_func(fid, builder.func)
-                    });
-                    // Check function signature for f64 params and bitcast as needed
-                    let sig_ref = builder.func.dfg.ext_funcs[fref].signature;
-                    let sig = &builder.func.dfg.signatures[sig_ref];
-                    let param_types: Vec<types::Type> = sig.params.iter().map(|p| p.value_type).collect();
-                    let ret_types: Vec<types::Type> = sig.returns.iter().map(|r| r.value_type).collect();
-                    let mut typed_args = args.clone();
-                    for (i, arg) in typed_args.iter_mut().enumerate() {
-                        if i < param_types.len() && param_types[i] == types::F64 {
-                            // Bitcast i64 → f64 for float params
-                            *arg = builder.ins().bitcast(types::F64, cranelift::codegen::ir::MemFlags::new(), *arg);
-                        }
-                    }
-                    let call = builder.ins().call(fref, &typed_args);
-                    if !builder.func.dfg.inst_results(call).is_empty() {
-                        let result = builder.func.dfg.first_result(call);
-                        let result_ty = builder.func.dfg.value_type(result);
-                        if result_ty == types::F64 {
-                            // Bitcast f64 → i64 for uniform handling
-                            let cast = builder.ins().bitcast(types::I64, cranelift::codegen::ir::MemFlags::new(), result);
-                            regs.insert(reg, cast);
-                        } else {
-                            // Normalize i64 results: iadd 0 works around a Cranelift
-                            // register state issue with struct-from-list returns
-                            let zero = builder.ins().iconst(types::I64, 0);
-                            regs.insert(reg, builder.ins().iadd(result, zero));
-                        }
-                    } else {
-                        regs.insert(reg, builder.ins().iconst(types::I64, 0));
-                    }
-                    // Track functions known to return a string value
-                    // __list_get from a List[String] returns strings.
-                    // Heuristic: if the list variable was loaded from a global whose
-                    // name suggests string content (contains "string", "kind", "value",
-                    // "line", "key"), mark the result as a string.
-                    let is_list_get_string = if (fname == "__list_get" || fname == "__index")
-                        && nargs >= 1 && parts.len() > 4
+                    // __list_get on a string → char_at (string indexing)
+                    if (fname == "__list_get" || fname == "__index")
+                        && nargs >= 1
+                        && parts.len() > 4
                     {
-                        if string_regs.contains(&parts[4].parse::<usize>().unwrap_or(usize::MAX)) {
-                            true // char_at case
-                        } else {
-                            // Check the last `load` instruction for this register to get the variable name
-                            // This is a heuristic — check if recent loads suggest string list
-                            let arg_reg = parts[4].parse::<usize>().unwrap_or(usize::MAX);
-                            // Look backward in body_lines to find what was loaded into arg_reg
-                            let mut found_string_list = false;
-                            for prev_line in body_lines.iter().rev() {
-                                let pp: Vec<&str> = prev_line.split_whitespace().collect();
-                                if pp.len() >= 3 && pp[0] == "load" {
-                                    if let Ok(prev_reg) = pp[1].parse::<usize>() {
-                                        if prev_reg == arg_reg {
-                                            let var_name = pp[2].to_lowercase();
-                                            if var_name.contains("string") || var_name.contains("kind")
-                                                || var_name.contains("value") || var_name.contains("_line")
-                                                || var_name.contains("_tok_") || var_name.contains("_key")
-                                            {
-                                                found_string_list = true;
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
+                        if let Ok(arg_reg) = parts[4].parse::<usize>() {
+                            if string_regs.contains(&arg_reg) {
+                                fname = "char_at";
                             }
-                            found_string_list
                         }
-                    } else {
-                        false
-                    };
+                    }
+                    let mut args: Vec<Value> = Vec::new();
+                    for j in 0..nargs {
+                        if j + 4 < parts.len() {
+                            args.push(get_reg(&regs, parts[j + 4]));
+                        }
+                    }
+                    // Note: `len` maps to forge_auto_len which handles both
+                    // strings and lists at runtime via magic number check
+                    // Look up function: user-defined first, then runtime with name resolution
+                    let resolved_name = resolve_func_name(fname);
+                    let fid = declared_funcs
+                        .get(fname)
+                        .or_else(|| runtime_funcs.get(resolved_name))
+                        .or_else(|| runtime_funcs.get(fname))
+                        .or_else(|| runtime_funcs.get(&format!("forge_{}", fname)))
+                        .copied();
 
-                    if is_list_get_string || matches!(fname,
-                        "char_at" | "substring" | "to_upper" | "to_lower" | "trim" |
-                        "replace" | "repeat" | "pad_left" | "pad_right" | "reverse" |
-                        "chr" | "smart_to_string" | "to_string" | "int_to_string" |
-                        "float_to_string" | "bool_to_string" | "map_get" |
-                        "string_replace" | "string_repeat" | "string_trim" |
-                        "string_to_upper" | "string_to_lower" |
-                        "node_kind" | "node_value" | "tok_kind" | "tok_value" |
-                        "identity" | "read_file" | "env" | "path_join" |
-                        "path_dir" | "path_base" | "path_ext" | "path_stem"
-                    ) || string_returning_funcs.contains(fname) {
-                        string_regs.insert(reg);
+                    if let Some(fid) = fid {
+                        let fref = *func_ref_cache.entry(fid).or_insert_with(|| {
+                            codegen.module.declare_func_in_func(fid, builder.func)
+                        });
+                        // Check function signature for f64 params and bitcast as needed
+                        let sig_ref = builder.func.dfg.ext_funcs[fref].signature;
+                        let sig = &builder.func.dfg.signatures[sig_ref];
+                        let param_types: Vec<types::Type> =
+                            sig.params.iter().map(|p| p.value_type).collect();
+                        let ret_types: Vec<types::Type> =
+                            sig.returns.iter().map(|r| r.value_type).collect();
+                        let mut typed_args = args.clone();
+                        for (i, arg) in typed_args.iter_mut().enumerate() {
+                            if i < param_types.len() && param_types[i] == types::F64 {
+                                // Bitcast i64 → f64 for float params
+                                *arg = builder.ins().bitcast(
+                                    types::F64,
+                                    cranelift::codegen::ir::MemFlags::new(),
+                                    *arg,
+                                );
+                            }
+                        }
+                        let call = builder.ins().call(fref, &typed_args);
+                        let mut returns_float = false;
+                        if !builder.func.dfg.inst_results(call).is_empty() {
+                            let result = builder.func.dfg.first_result(call);
+                            let result_ty = builder.func.dfg.value_type(result);
+                            if result_ty == types::F64 {
+                                // Bitcast f64 → i64 for uniform handling
+                                let cast = builder.ins().bitcast(
+                                    types::I64,
+                                    cranelift::codegen::ir::MemFlags::new(),
+                                    result,
+                                );
+                                regs.insert(reg, cast);
+                                returns_float = true;
+                            } else {
+                                // Normalize i64 results: iadd 0 works around a Cranelift
+                                // register state issue with struct-from-list returns
+                                let zero = builder.ins().iconst(types::I64, 0);
+                                regs.insert(reg, builder.ins().iadd(result, zero));
+                            }
+                        } else {
+                            regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                        }
+                        if call_returns_string(
+                            fname,
+                            &arg_regs,
+                            &string_regs,
+                            &reg_source_vars,
+                            string_global_names,
+                            string_returning_funcs,
+                        ) {
+                            string_regs.insert(reg);
+                        } else {
+                            string_regs.remove(&reg);
+                        }
+                        if returns_float {
+                            float_regs.insert(reg);
+                        } else {
+                            float_regs.remove(&reg);
+                        }
+                        if let Some(struct_name) = known_struct_returning_fn(fname) {
+                            struct_regs.insert(reg, struct_name.to_string());
+                        } else if let Some(struct_name) = struct_returning_funcs.get(fname) {
+                            struct_regs.insert(reg, struct_name.clone());
+                        } else {
+                            struct_regs.remove(&reg);
+                        }
+                    } else if let Some(&var) = named_vars.get(fname) {
+                        // Indirect call through function pointer variable
+                        let fn_ptr = builder.use_var(var);
+                        let mut sig = codegen.module.make_signature();
+                        for _ in &args {
+                            sig.params.push(AbiParam::new(types::I64));
+                        }
+                        sig.returns.push(AbiParam::new(types::I64));
+                        let sig_ref = builder.import_signature(sig);
+                        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &args);
+                        regs.insert(reg, builder.func.dfg.first_result(call));
+                        struct_regs.remove(&reg);
+                        string_regs.remove(&reg);
+                        float_regs.remove(&reg);
+                    } else {
+                        regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                        struct_regs.remove(&reg);
+                        string_regs.remove(&reg);
+                        float_regs.remove(&reg);
                     }
-                } else if let Some(&var) = named_vars.get(fname) {
-                    // Indirect call through function pointer variable
-                    let fn_ptr = builder.use_var(var);
-                    let mut sig = codegen.module.make_signature();
-                    for _ in &args {
-                        sig.params.push(AbiParam::new(types::I64));
-                    }
-                    sig.returns.push(AbiParam::new(types::I64));
-                    let sig_ref = builder.import_signature(sig);
-                    let call = builder.ins().call_indirect(sig_ref, fn_ptr, &args);
-                    regs.insert(reg, builder.func.dfg.first_result(call));
-                } else {
-                    regs.insert(reg, builder.ins().iconst(types::I64, 0));
-                }
-            } // end struct constructor else
+                } // end struct constructor else
             }
 
             "store" if parts.len() >= 3 => {
@@ -1036,18 +1034,29 @@ fn compile_ir_function(
                 let mut val = get_reg(&regs, parts[2]);
                 // Propagate types through store
                 if let Ok(src_reg) = parts[2].parse::<usize>() {
+                    if let Some(struct_name) = struct_regs.get(&src_reg) {
+                        struct_vars.insert(name.clone(), struct_name.clone());
+                    } else {
+                        struct_vars.remove(&name);
+                    }
                     if string_regs.contains(&src_reg) {
                         string_vars.insert(name.clone());
+                    } else {
+                        string_vars.remove(&name);
                     }
                     if float_regs.contains(&src_reg) {
                         float_vars.insert(name.clone());
+                    } else {
+                        float_vars.remove(&name);
                     }
                 }
                 // Check if this is a global variable
                 if let Some(&data_id) = global_data.get(&name) {
                     let gv = codegen.module.declare_data_in_func(data_id, builder.func);
                     let addr = builder.ins().global_value(types::I64, gv);
-                    builder.ins().store(cranelift::codegen::ir::MemFlags::new(), val, addr, 0);
+                    builder
+                        .ins()
+                        .store(cranelift::codegen::ir::MemFlags::new(), val, addr, 0);
                 } else {
                     let var = if let Some(&v) = named_vars.get(&name) {
                         v
@@ -1065,11 +1074,22 @@ fn compile_ir_function(
             "load" if parts.len() >= 3 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let name = parts[2];
+                reg_source_vars.insert(reg, name.to_string());
+                if let Some(struct_name) = struct_vars.get(name) {
+                    struct_regs.insert(reg, struct_name.clone());
+                } else {
+                    struct_regs.remove(&reg);
+                }
                 // Check if this is a global variable
                 if let Some(&data_id) = global_data.get(name) {
                     let gv = codegen.module.declare_data_in_func(data_id, builder.func);
                     let addr = builder.ins().global_value(types::I64, gv);
-                    let val = builder.ins().load(types::I64, cranelift::codegen::ir::MemFlags::new(), addr, 0);
+                    let val = builder.ins().load(
+                        types::I64,
+                        cranelift::codegen::ir::MemFlags::new(),
+                        addr,
+                        0,
+                    );
                     regs.insert(reg, val);
                 } else if let Some(&var) = named_vars.get(name) {
                     let val = builder.use_var(var);
@@ -1080,27 +1100,32 @@ fn compile_ir_function(
                 // Propagate types through load
                 if string_vars.contains(name) || string_global_names.contains(name) {
                     string_regs.insert(reg);
+                } else {
+                    string_regs.remove(&reg);
                 }
                 if float_vars.contains(name) {
                     float_regs.insert(reg);
+                } else {
+                    float_regs.remove(&reg);
                 }
             }
 
             "field" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
+                let obj_reg: usize = parts[2].parse().unwrap_or(usize::MAX);
+                let obj_struct_name = struct_regs.get(&obj_reg).cloned();
                 let obj = get_reg(&regs, parts[2]);
-                let field_name = parts[3];
+                let (explicit_struct_name, bare_field_name) = if parts.len() >= 5 {
+                    (Some(parts[3]), parts[4])
+                } else {
+                    split_typed_field_name(parts[3])
+                };
+                let field_struct_name = explicit_struct_name.or(obj_struct_name.as_deref());
                 // Try numeric field index first (for tuples: .0, .1)
-                let offset = if let Ok(idx) = field_name.parse::<usize>() {
+                let offset = if let Ok(idx) = bare_field_name.parse::<usize>() {
                     (idx * 8) as i32
                 } else {
-                    // Look up field offset from struct layouts
-                    struct_layouts
-                        .values()
-                        .find_map(|fields| {
-                            fields.iter().position(|f| f == field_name).map(|i| (i * 8) as i32)
-                        })
-                        .unwrap_or(0)
+                    field_offset_for_name(struct_layouts, field_struct_name, bare_field_name)
                 };
                 let raw = builder.ins().load(
                     types::I64,
@@ -1111,20 +1136,36 @@ fn compile_ir_function(
                 let zero = builder.ins().iconst(types::I64, 0);
                 let v = builder.ins().iadd(raw, zero);
                 regs.insert(reg, v);
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
+                if let Some(struct_name) = field_struct_name {
+                    if known_string_field(struct_name, bare_field_name) {
+                        string_regs.insert(reg);
+                    } else {
+                        string_regs.remove(&reg);
+                    }
+                } else {
+                    string_regs.remove(&reg);
+                }
+                float_regs.remove(&reg);
             }
 
             "funcref" if parts.len() >= 3 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
                 let fname = parts[2];
                 if let Some(&fid) = declared_funcs.get(fname) {
-                    let fref = *func_ref_cache.entry(fid).or_insert_with(|| {
-                        codegen.module.declare_func_in_func(fid, builder.func)
-                    });
+                    let fref = *func_ref_cache
+                        .entry(fid)
+                        .or_insert_with(|| codegen.module.declare_func_in_func(fid, builder.func));
                     let addr = builder.ins().func_addr(types::I64, fref);
                     regs.insert(reg, addr);
                 } else {
                     regs.insert(reg, builder.ins().iconst(types::I64, 0));
                 }
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
+                string_regs.remove(&reg);
+                float_regs.remove(&reg);
             }
 
             "sstore" if parts.len() >= 4 => {
@@ -1154,14 +1195,17 @@ fn compile_ir_function(
                 let cond_bool = builder.ins().icmp_imm(IntCC::NotEqual, cond, 0);
                 let then_block = labels.get(then_label).copied().unwrap_or(entry_block);
                 let else_block = labels.get(else_label).copied().unwrap_or(entry_block);
-                builder.ins().brif(cond_bool, then_block, &[], else_block, &[]);
+                builder
+                    .ins()
+                    .brif(cond_bool, then_block, &[], else_block, &[]);
                 terminated = true;
             }
 
             "jmp" if parts.len() >= 2 => {
                 let target = parts[1];
                 // Redirect break targets that incorrectly loop back
-                let actual_target = break_redirects.get(target)
+                let actual_target = break_redirects
+                    .get(target)
                     .map(|s| s.as_str())
                     .unwrap_or(target);
                 let block = labels.get(actual_target).copied().unwrap_or(entry_block);
@@ -1197,11 +1241,434 @@ fn compile_ir_function(
         .module
         .define_function(func_id, &mut ctx)
         .map_err(|e| {
-            eprintln!("IR consumer verifier error in '{}': {}\nIR:\n{}", func_name, e, ctx.func.display());
+            eprintln!(
+                "IR consumer verifier error in '{}': {}\nIR:\n{}",
+                func_name,
+                e,
+                ctx.func.display()
+            );
             CompileError::ModuleError(format!("IR consumer: {}", e))
         })?;
 
     Ok(())
+}
+
+fn is_known_string_returning_fn(name: &str) -> bool {
+    matches!(
+        name,
+        "char_at"
+            | "substring"
+            | "to_upper"
+            | "to_lower"
+            | "trim"
+            | "replace"
+            | "repeat"
+            | "pad_left"
+            | "pad_right"
+            | "reverse"
+            | "chr"
+            | "smart_to_string"
+            | "to_string"
+            | "int_to_string"
+            | "float_to_string"
+            | "bool_to_string"
+            | "map_get"
+            | "string_replace"
+            | "string_repeat"
+            | "string_trim"
+            | "string_to_upper"
+            | "string_to_lower"
+            | "node_kind"
+            | "node_value"
+            | "tok_kind"
+            | "tok_value"
+            | "identity"
+            | "read_file"
+            | "env"
+            | "path_join"
+            | "path_dir"
+            | "path_base"
+            | "path_ext"
+            | "path_stem"
+            | "join"
+    )
+}
+
+fn name_suggests_string_list(name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    lowered.contains("string")
+        || lowered.contains("kind")
+        || lowered.contains("value")
+        || lowered.contains("_line")
+        || lowered.contains("_tok_")
+        || lowered.contains("_key")
+}
+
+fn parse_call_arg_regs(parts: &[&str], nargs: usize) -> Vec<usize> {
+    let mut arg_regs = Vec::with_capacity(nargs);
+    for i in 0..nargs {
+        if let Some(arg) = parts.get(4 + i) {
+            arg_regs.push(arg.parse::<usize>().unwrap_or(usize::MAX));
+        }
+    }
+    arg_regs
+}
+
+fn call_returns_string(
+    fname: &str,
+    arg_regs: &[usize],
+    string_regs: &HashSet<usize>,
+    reg_source_vars: &HashMap<usize, String>,
+    string_global_names: &HashSet<String>,
+    string_returning_funcs: &HashSet<String>,
+) -> bool {
+    if is_known_string_returning_fn(fname) || string_returning_funcs.contains(fname) {
+        return true;
+    }
+
+    if matches!(fname, "__list_get" | "__index") {
+        if let Some(&list_reg) = arg_regs.first() {
+            if string_regs.contains(&list_reg) {
+                return true;
+            }
+            if let Some(var_name) = reg_source_vars.get(&list_reg) {
+                if string_global_names.contains(var_name) || name_suggests_string_list(var_name) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn known_struct_returning_fn(name: &str) -> Option<&'static str> {
+    match name {
+        "get_node" => Some("Node"),
+        "advance_token" | "expect" => Some("Token"),
+        "ti_primitive" | "ti_struct" | "ti_enum" | "ti_function" | "ti_optional" | "ti_result"
+        | "ti_tuple" | "ti_list" | "ti_map" | "ti_set" | "ti_task" | "ti_channel"
+        | "get_type_info" => Some("TypeInfo"),
+        _ => None,
+    }
+}
+
+fn known_string_field(struct_name: &str, field_name: &str) -> bool {
+    matches!(
+        (struct_name, field_name),
+        ("Node", "kind")
+            | ("Node", "value")
+            | ("Token", "kind")
+            | ("Token", "value")
+            | ("TypeInfo", "kind")
+            | ("TypeInfo", "name")
+            | ("Diagnostic", "severity")
+            | ("Diagnostic", "code")
+            | ("Diagnostic", "message")
+            | ("Diagnostic", "file")
+            | ("Diagnostic", "fix")
+    )
+}
+
+fn field_offset_for_name(
+    struct_layouts: &HashMap<String, Vec<String>>,
+    struct_name: Option<&str>,
+    field_name: &str,
+) -> i32 {
+    if let Some(name) = struct_name {
+        if let Some(fields) = struct_layouts.get(name) {
+            if let Some(idx) = fields.iter().position(|field| field == field_name) {
+                return (idx * 8) as i32;
+            }
+        }
+    }
+
+    let mut matching_positions: Vec<usize> = struct_layouts
+        .values()
+        .filter_map(|fields| fields.iter().position(|field| field == field_name))
+        .collect();
+    matching_positions.sort_unstable();
+    matching_positions.dedup();
+
+    matching_positions
+        .first()
+        .map_or(0, |idx| (*idx * 8) as i32)
+}
+
+fn split_typed_field_name(field_name: &str) -> (Option<&str>, &str) {
+    if let Some(dot_idx) = field_name.find('.') {
+        let struct_name = &field_name[..dot_idx];
+        let bare_field = &field_name[dot_idx + 1..];
+        if !struct_name.is_empty() && !bare_field.is_empty() {
+            return (Some(struct_name), bare_field);
+        }
+    }
+    (None, field_name)
+}
+
+fn collect_struct_returning_funcs(lines: &[&str]) -> HashMap<String, String> {
+    let mut struct_names: HashSet<String> = HashSet::new();
+    for line in lines {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts[0] == "struct" {
+            struct_names.insert(parts[1].to_string());
+        }
+    }
+
+    let mut struct_returning_funcs: HashMap<String, String> = HashMap::new();
+
+    loop {
+        let prev_count = struct_returning_funcs.len();
+        let mut cur_func = String::new();
+        let mut struct_regs: HashMap<usize, String> = HashMap::new();
+        let mut struct_vars: HashMap<String, String> = HashMap::new();
+
+        for line in lines {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+
+            match parts[0] {
+                "func" if parts.len() >= 2 => {
+                    cur_func = parts[1].to_string();
+                    struct_regs.clear();
+                    struct_vars.clear();
+                }
+                "call" if parts.len() >= 4 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        let fname = parts[2];
+                        if let Some(struct_name) = known_struct_returning_fn(fname) {
+                            struct_regs.insert(reg, struct_name.to_string());
+                        } else if let Some(struct_name) = struct_returning_funcs.get(fname) {
+                            struct_regs.insert(reg, struct_name.clone());
+                        } else if struct_names.contains(fname) {
+                            struct_regs.insert(reg, fname.to_string());
+                        } else {
+                            struct_regs.remove(&reg);
+                        }
+                    }
+                }
+                "load" if parts.len() >= 3 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        if let Some(struct_name) = struct_vars.get(parts[2]) {
+                            struct_regs.insert(reg, struct_name.clone());
+                        } else {
+                            struct_regs.remove(&reg);
+                        }
+                    }
+                }
+                "store" if parts.len() >= 3 => {
+                    if let Ok(src_reg) = parts[2].parse::<usize>() {
+                        let name = parts[1].to_string();
+                        if let Some(struct_name) = struct_regs.get(&src_reg) {
+                            struct_vars.insert(name, struct_name.clone());
+                        } else {
+                            struct_vars.remove(&name);
+                        }
+                    }
+                }
+                "field" | "iconst" | "fconst" | "strref" | "concat" | "band" | "bor" | "bxor"
+                | "shl" | "shr" | "bnot" | "and" | "or" | "fadd" | "fsub" | "fmul" | "fdiv"
+                | "add" | "sub" | "mul" | "div" | "mod" | "eq" | "neq" | "lt" | "gt" | "lte"
+                | "gte" | "funcref" => {
+                    if parts.len() >= 2 {
+                        if let Ok(reg) = parts[1].parse::<usize>() {
+                            struct_regs.remove(&reg);
+                        }
+                    }
+                }
+                "ret" if parts.len() >= 2 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        if let Some(struct_name) = struct_regs.get(&reg) {
+                            if !cur_func.is_empty() {
+                                struct_returning_funcs
+                                    .insert(cur_func.clone(), struct_name.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if struct_returning_funcs.len() == prev_count {
+            break;
+        }
+    }
+
+    struct_returning_funcs
+}
+
+fn collect_string_returning_funcs(
+    lines: &[&str],
+    string_global_names: &HashSet<String>,
+    struct_returning_funcs: &HashMap<String, String>,
+) -> HashSet<String> {
+    let mut string_returning_funcs: HashSet<String> = HashSet::new();
+
+    loop {
+        let prev_count = string_returning_funcs.len();
+        let mut cur_func = String::new();
+        let mut str_regs: HashSet<usize> = HashSet::new();
+        let mut str_vars: HashSet<String> = HashSet::new();
+        let mut reg_source_vars: HashMap<usize, String> = HashMap::new();
+        let mut struct_regs: HashMap<usize, String> = HashMap::new();
+        let mut struct_vars: HashMap<String, String> = HashMap::new();
+
+        for line in lines {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+
+            match parts[0] {
+                "func" if parts.len() >= 2 => {
+                    cur_func = parts[1].to_string();
+                    str_regs.clear();
+                    str_vars.clear();
+                    reg_source_vars.clear();
+                    struct_regs.clear();
+                    struct_vars.clear();
+                }
+                "call" if parts.len() >= 4 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        let fname = parts[2];
+                        let nargs = parts[3].parse::<usize>().unwrap_or(0);
+                        let arg_regs = parse_call_arg_regs(&parts, nargs);
+                        let returns_string = call_returns_string(
+                            fname,
+                            &arg_regs,
+                            &str_regs,
+                            &reg_source_vars,
+                            string_global_names,
+                            &string_returning_funcs,
+                        );
+                        reg_source_vars.remove(&reg);
+                        if let Some(struct_name) = known_struct_returning_fn(fname) {
+                            struct_regs.insert(reg, struct_name.to_string());
+                        } else if let Some(struct_name) = struct_returning_funcs.get(fname) {
+                            struct_regs.insert(reg, struct_name.clone());
+                        } else {
+                            struct_regs.remove(&reg);
+                        }
+                        if returns_string {
+                            str_regs.insert(reg);
+                        } else {
+                            str_regs.remove(&reg);
+                        }
+                    }
+                }
+                "strref" if parts.len() >= 2 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        reg_source_vars.remove(&reg);
+                        struct_regs.remove(&reg);
+                        str_regs.insert(reg);
+                    }
+                }
+                "concat" if parts.len() >= 2 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        reg_source_vars.remove(&reg);
+                        struct_regs.remove(&reg);
+                        str_regs.insert(reg);
+                    }
+                }
+                "add" if parts.len() >= 4 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        let left = parts[2].parse::<usize>().unwrap_or(usize::MAX);
+                        let right = parts[3].parse::<usize>().unwrap_or(usize::MAX);
+                        let returns_string = str_regs.contains(&left) && str_regs.contains(&right);
+                        reg_source_vars.remove(&reg);
+                        struct_regs.remove(&reg);
+                        if returns_string {
+                            str_regs.insert(reg);
+                        } else {
+                            str_regs.remove(&reg);
+                        }
+                    }
+                }
+                "load" if parts.len() >= 3 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        let name = parts[2].to_string();
+                        reg_source_vars.insert(reg, name.clone());
+                        if let Some(struct_name) = struct_vars.get(&name) {
+                            struct_regs.insert(reg, struct_name.clone());
+                        } else {
+                            struct_regs.remove(&reg);
+                        }
+                        if str_vars.contains(&name) || string_global_names.contains(&name) {
+                            str_regs.insert(reg);
+                        } else {
+                            str_regs.remove(&reg);
+                        }
+                    }
+                }
+                "store" if parts.len() >= 3 => {
+                    if let Ok(src_reg) = parts[2].parse::<usize>() {
+                        let name = parts[1].to_string();
+                        if let Some(struct_name) = struct_regs.get(&src_reg) {
+                            struct_vars.insert(name.clone(), struct_name.clone());
+                        } else {
+                            struct_vars.remove(&name);
+                        }
+                        if str_regs.contains(&src_reg) {
+                            str_vars.insert(name);
+                        } else {
+                            str_vars.remove(&name);
+                        }
+                    }
+                }
+                "field" if parts.len() >= 4 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        let obj_reg = parts[2].parse::<usize>().unwrap_or(usize::MAX);
+                        let obj_struct_name = struct_regs.get(&obj_reg).cloned();
+                        let (explicit_struct_name, bare_field_name) = if parts.len() >= 5 {
+                            (Some(parts[3]), parts[4])
+                        } else {
+                            split_typed_field_name(parts[3])
+                        };
+                        reg_source_vars.remove(&reg);
+                        struct_regs.remove(&reg);
+                        let field_struct_name = explicit_struct_name.or(obj_struct_name.as_deref());
+                        if let Some(struct_name) = field_struct_name {
+                            if known_string_field(struct_name, bare_field_name) {
+                                str_regs.insert(reg);
+                            } else {
+                                str_regs.remove(&reg);
+                            }
+                        } else {
+                            str_regs.remove(&reg);
+                        }
+                    }
+                }
+                "iconst" | "fconst" | "band" | "bor" | "bxor" | "shl" | "shr" | "bnot" | "and"
+                | "or" | "fadd" | "fsub" | "fmul" | "fdiv" | "sub" | "mul" | "div" | "mod"
+                | "eq" | "neq" | "lt" | "gt" | "lte" | "gte" => {
+                    if parts.len() >= 2 {
+                        if let Ok(reg) = parts[1].parse::<usize>() {
+                            reg_source_vars.remove(&reg);
+                            struct_regs.remove(&reg);
+                            str_regs.remove(&reg);
+                        }
+                    }
+                }
+                "ret" if parts.len() >= 2 => {
+                    if let Ok(reg) = parts[1].parse::<usize>() {
+                        if str_regs.contains(&reg) && !cur_func.is_empty() {
+                            string_returning_funcs.insert(cur_func.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if string_returning_funcs.len() == prev_count {
+            break;
+        }
+    }
+
+    string_returning_funcs
 }
 
 /// Map IR function names to runtime_funcs keys.
@@ -1418,4 +1885,78 @@ fn get_reg(regs: &HashMap<usize, Value>, s: &str) -> Value {
         .or_else(|| regs.get(&usize::MAX)) // fallback to zero sentinel
         .copied()
         .unwrap_or_else(|| panic!("IR consumer: no registers available"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_string_returning_funcs_clears_stale_call_regs() {
+        let lines = vec![
+            "func ir_stmt 0 i64",
+            "call 5 node_kind 1 0",
+            "call 5 node_child_count 1 0",
+            "ret 5",
+            "endfunc",
+        ];
+
+        let struct_funcs = collect_struct_returning_funcs(&lines);
+        let string_funcs = collect_string_returning_funcs(&lines, &HashSet::new(), &struct_funcs);
+        assert!(!string_funcs.contains("ir_stmt"));
+    }
+
+    #[test]
+    fn collect_string_returning_funcs_detects_add_and_string_list_get() {
+        let lines = vec![
+            "func make_name 0 i64",
+            "strref 1 s0",
+            "strref 2 s1",
+            "add 3 1 2",
+            "ret 3",
+            "endfunc",
+            "func token_kind_at 0 i64",
+            "load 1 token_kinds",
+            "iconst 2 0",
+            "call 3 __list_get 2 1 2",
+            "ret 3",
+            "endfunc",
+        ];
+
+        let string_globals = HashSet::from([String::from("token_kinds")]);
+        let struct_funcs = collect_struct_returning_funcs(&lines);
+        let string_funcs = collect_string_returning_funcs(&lines, &string_globals, &struct_funcs);
+        assert!(string_funcs.contains("make_name"));
+        assert!(string_funcs.contains("token_kind_at"));
+    }
+
+    #[test]
+    fn collect_string_returning_funcs_tracks_string_fields_through_calls() {
+        let lines = vec![
+            "func parse_dotted_path 0 i64",
+            "call 1 expect 1 0",
+            "store next 1",
+            "strref 2 s0",
+            "store path 2",
+            "load 3 path",
+            "strref 4 s1",
+            "concat 5 3 4",
+            "load 6 next",
+            "field 7 6 value",
+            "add 8 5 7",
+            "ret 8",
+            "endfunc",
+            "func parse_import_decl 0 i64",
+            "call 1 parse_dotted_path 0",
+            "strref 2 s2",
+            "add 3 1 2",
+            "ret 3",
+            "endfunc",
+        ];
+
+        let struct_funcs = collect_struct_returning_funcs(&lines);
+        let string_funcs = collect_string_returning_funcs(&lines, &HashSet::new(), &struct_funcs);
+        assert!(string_funcs.contains("parse_dotted_path"));
+        assert!(string_funcs.contains("parse_import_decl"));
+    }
 }

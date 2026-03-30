@@ -48,8 +48,10 @@ mut ir_next_reg := 0
 mut ir_next_label := 0
 mut ir_strings: List[String] := []
 mut ir_var_regs: Map[String, Int] := {}
-mut ir_var_types: Map[String, String] := {}  # variable name -> type hint ("int", "bool", "string")
+mut ir_var_types: Map[String, String] := {}  # variable name -> type hint or struct name
 mut ir_struct_names: Map[String, Int] := {}  # struct name -> field count
+mut ir_struct_field_names: Map[String, List[String]] := {}  # struct name -> field names
+mut ir_struct_field_types: Map[String, List[String]] := {}  # struct name -> field types
 mut ir_type_aliases: Map[String, String] := {}  # alias name -> target type
 mut ir_last_was_ret := false  # tracks if the last emitted instruction was a return
 mut ir_func_returns: Map[String, String] := {}  # function name -> return type hint
@@ -66,6 +68,8 @@ pub fn ir_reset():
     ir_next_label = 0
     ir_strings = []
     ir_var_regs = {}
+    ir_struct_field_names = {}
+    ir_struct_field_types = {}
 
 fn ir_emit(line: String):
     ir_lines.push(line)
@@ -88,6 +92,33 @@ fn ir_strip_quotes(s: String) -> String:
         if result.len() > 0 and result[result.len() - 1] == chr(34):
             result = result.substring(0, result.len() - 1)
     return result
+
+fn ir_resolve_type_hint(type_name: String) -> String:
+    mut resolved := type_name
+    if ir_type_aliases.contains_key(resolved):
+        resolved = ir_type_aliases[resolved]
+    if resolved == "String":
+        return "string"
+    if resolved == "Bool":
+        return "bool"
+    if resolved == "Int":
+        return "int"
+    if resolved == "Float":
+        return "float"
+    if resolved.contains("List[String]"):
+        return "list_string"
+    if resolved.contains("List[") or resolved == "List":
+        return "list"
+    if resolved.contains("Map[") or resolved == "Map":
+        return "map"
+    if resolved.contains("Set[") or resolved == "Set":
+        return "set"
+    mut base := resolved
+    if base.contains("["):
+        base = base.substring(0, base.index_of("["))
+    if ir_struct_names.contains_key(base):
+        return base
+    return resolved
 
 fn ir_find_free_vars(idx: Int, bound: List[String], free: List[String]):
     node := get_node(idx)
@@ -214,21 +245,7 @@ fn ir_infer_type(idx: Int) -> String:
             if STRING_RETURNING_FUNCS.contains(fname):
                 return "string"
             if ir_func_returns.contains_key(fname):
-                frt := ir_func_returns[fname]
-                if frt == "String":
-                    return "string"
-                elif frt == "Int":
-                    return "int"
-                elif frt == "Bool":
-                    return "bool"
-                elif frt == "Float":
-                    return "float"
-                elif frt.contains("List"):
-                    return "list"
-                elif frt.contains("Map"):
-                    return "map"
-                elif frt.contains("Set"):
-                    return "set"
+                return ir_resolve_type_hint(ir_func_returns[fname])
         return ""
     # method calls
     if node.kind == "method_call":
@@ -246,9 +263,20 @@ fn ir_infer_type(idx: Int) -> String:
         if meth == "keys" or meth == "values" or meth == "split" or meth == "chars":
             return "list_string"
         return ""
-    # field access — unknown type without checker info
     if node.kind == "field_access":
+        if node.children.len() > 0:
+            obj_type := ir_infer_type(node.children[0])
+            if obj_type.len() > 0 and ir_struct_field_names.contains_key(obj_type) and ir_struct_field_types.contains_key(obj_type):
+                field_names := ir_struct_field_names[obj_type]
+                field_types := ir_struct_field_types[obj_type]
+                mut fi := 0
+                while fi < field_names.len() and fi < field_types.len():
+                    if field_names[fi] == node.value:
+                        return field_types[fi]
+                    fi = fi + 1
         return ""
+    if node.kind == "struct_init":
+        return ir_resolve_type_hint(node.value)
     # index — depends on collection type
     if node.kind == "index" and node.children.len() > 0:
         coll_type := ir_infer_type(node.children[0])
@@ -823,7 +851,11 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         if node.children.len() > 0:
             obj_r := ir_expr(node.children[0])
             r := ir_reg()
-            ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + fname)
+            obj_type := ir_infer_type(node.children[0])
+            if obj_type.len() > 0 and obj_type != "int" and obj_type != "float" and obj_type != "bool" and obj_type != "string" and obj_type != "list" and obj_type != "list_string" and obj_type != "map" and obj_type != "map_int" and obj_type != "set" and obj_type != "tuple":
+                ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + obj_type + " " + fname)
+            else:
+                ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + fname)
             return r
         r := ir_reg()
         ir_emit("iconst " + r.to_string() + " 0")
@@ -957,14 +989,23 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
 # --- emit statement ---
 fn ir_stmt(idx: Int):
     node := get_node(idx)
+    kind := node.kind
 
-    if node.kind == "call" or node.kind == "method_call" or node.kind == "spawn":
+    if kind == "call":
         ir_expr(idx)
+        return
+    if kind == "method_call":
+        ir_expr(idx)
+        return
+    if kind == "spawn":
+        ir_expr(idx)
+        return
 
-    elif node.kind == "block":
+    if kind == "block":
         ir_block(idx)
+        return
 
-    elif node.kind == "return":
+    if kind == "return":
         if node.children.len() > 0:
             r := ir_expr(node.children[0])
             ir_emit("ret " + r.to_string())
@@ -973,8 +1014,9 @@ fn ir_stmt(idx: Int):
             ir_emit("iconst " + r.to_string() + " 0")
             ir_emit("ret " + r.to_string())
         ir_last_was_ret = true
+        return
 
-    elif node.kind == "bind" or node.kind == "binding":
+    if kind == "bind" or kind == "binding":
         mut name := node.value
         # strip " mut" suffix from binding names
         if name.contains(" mut"):
@@ -1015,27 +1057,10 @@ fn ir_stmt(idx: Int):
                 ir_var_types.insert(name, "map_int")
             else:
                 ir_var_types.insert(name, "map")
-        elif type_ann.contains("Set[") or type_ann == "Set":
-            ir_var_types.insert(name, "set")
-        elif type_ann.contains("List[String]"):
-            ir_var_types.insert(name, "list_string")
-        elif type_ann.contains("List[") or type_ann == "List":
-            ir_var_types.insert(name, "list")
-        elif type_ann == "String":
-            ir_var_types.insert(name, "string")
-        elif type_ann == "Bool":
-            ir_var_types.insert(name, "bool")
-        elif type_ann == "Int":
-            ir_var_types.insert(name, "int")
-        # resolve type aliases
-        elif ir_type_aliases.contains_key(type_ann):
-            resolved := ir_type_aliases[type_ann]
-            if resolved == "Bool":
-                ir_var_types.insert(name, "bool")
-            elif resolved == "String":
-                ir_var_types.insert(name, "string")
-            elif resolved == "Int":
-                ir_var_types.insert(name, "int")
+        else:
+            resolved_type := ir_resolve_type_hint(type_ann)
+            if resolved_type.len() > 0:
+                ir_var_types.insert(name, resolved_type)
         if val_idx >= 0:
             r := ir_expr(val_idx)
             ir_var_regs.insert(name, r)
@@ -1045,15 +1070,17 @@ fn ir_stmt(idx: Int):
                 inferred := ir_infer_type(val_idx)
                 if inferred.len() > 0:
                     ir_var_types.insert(name, inferred)
+        return
 
-    elif node.kind == "assign":
+    if kind == "assign":
         name := node.value
         if node.children.len() > 0:
             r := ir_expr(node.children[0])
             ir_var_regs.insert(name, r)
             ir_emit("store " + name + " " + r.to_string())
+        return
 
-    elif node.kind == "assign" or node.kind == "assignment":
+    if kind == "assignment":
         op := node.value
         if op == "=" and node.children.len() >= 2:
             tn := get_node(node.children[0])
@@ -1076,9 +1103,9 @@ fn ir_stmt(idx: Int):
             elif op == "/=":
                 ir_emit("div " + res.to_string() + " " + cur.to_string() + " " + rhs.to_string())
             ir_emit("store " + name + " " + res.to_string())
+        return
 
-    else:
-        ir_stmt_control(idx, node)
+    ir_stmt_control(idx, node)
 
 fn ir_stmt_control(idx: Int, node: Node):
     if node.kind == "if" or node.kind == "if_stmt":
@@ -1252,25 +1279,19 @@ fn ir_stmt_control(idx: Int, node: Node):
             ir_emit("label " + end_l)
 
 # --- emit block ---
-# Iterative block walker — unwinds block/body/then/else wrappers
-# and calls ir_stmt on leaf statements. Uses explicit stack to
-# avoid deep recursion crashes with the Cranelift backend.
+# Recursive block walker — unwrap block/body/then/else wrappers
+# and emits statements in source order.
 fn ir_block(idx: Int):
-    mut stack: List[Int] := [idx]
-    while stack.len() > 0:
-        current := stack[stack.len() - 1]
-        stack.remove(stack.len() - 1)
-        node := get_node(current)
-        kind := node.kind
-        if kind == "block" or kind == "then" or kind == "else" or kind == "body":
-            # Push children in reverse so first child is processed first
-            kids := node.children
-            mut i := kids.len() - 1
-            while i >= 0:
-                stack.push(kids[i])
-                i = i - 1
-        else:
-            ir_stmt(current)
+    node := get_node(idx)
+    kind := node.kind
+    if kind == "block" or kind == "then" or kind == "else" or kind == "body":
+        kids := node.children
+        mut i := 0
+        while i < kids.len():
+            ir_block(kids[i])
+            i = i + 1
+    else:
+        ir_stmt(idx)
 
 # --- helpers for function emission ---
 
@@ -1295,6 +1316,8 @@ fn ir_find_body(fn_idx: Int) -> Int:
         if cn.kind == "body":
             return nk[i]
         i = i + 1
+    if nk.len() > 0:
+        return nk[nk.len() - 1]
     return 0 - 1
 
 fn ir_collect_params(fn_idx: Int, params: List[String], param_types: List[String]):
@@ -1316,28 +1339,16 @@ fn ir_emit_param_types(params: List[String], param_types: List[String]):
         ir_emit("param " + params[i])
         if i < param_types.len():
             pt := param_types[i]
-            if pt == "String":
-                ir_var_types.insert(params[i], "string")
-            elif pt == "Int":
-                ir_var_types.insert(params[i], "int")
-            elif pt == "Float":
-                ir_var_types.insert(params[i], "float")
-            elif pt == "Bool":
-                ir_var_types.insert(params[i], "bool")
-            elif pt == "Map" or pt.contains("Map"):
+            if pt == "Map" or pt.contains("Map"):
                 ir_var_types.insert(params[i], "map")
             elif pt == "Set" or pt.contains("Set"):
                 ir_var_types.insert(params[i], "set")
             elif pt == "List" or pt.contains("List"):
                 ir_var_types.insert(params[i], "list")
-            elif ir_type_aliases.contains_key(pt):
-                resolved := ir_type_aliases[pt]
-                if resolved == "String":
-                    ir_var_types.insert(params[i], "string")
-                elif resolved == "Bool":
-                    ir_var_types.insert(params[i], "bool")
-                elif resolved == "Float":
-                    ir_var_types.insert(params[i], "float")
+            else:
+                resolved := ir_resolve_type_hint(pt)
+                if resolved.len() > 0:
+                    ir_var_types.insert(params[i], resolved)
         i = i + 1
 
 fn ir_emit_default_return():
@@ -1459,6 +1470,8 @@ pub fn emit_ir(root_idx: Int) -> String:
         _fi21 = _fi21 + 1
     # emit struct declarations and register names (unwrap pub)
     ir_struct_names = {}
+    ir_struct_field_names = {}
+    ir_struct_field_types = {}
     mut _fi22 := 0
     _kids22 := root.children
     while _fi22 < _kids22.len():
@@ -1472,15 +1485,29 @@ pub fn emit_ir(root_idx: Int) -> String:
             if sname.contains("["):
                 sname = sname.substring(0, sname.index_of("["))
             mut field_names: List[String] := []
+            mut field_types: List[String] := []
             mut _fi34 := 0
             _kids34 := cn.children
             while _fi34 < _kids34.len():
                 fc := _kids34[_fi34]
                 fn_node := get_node(fc)
                 if fn_node.kind == "field":
-                    field_names.push(fn_node.value)
+                    mut field_name := fn_node.value
+                    if field_name.contains(" "):
+                        field_name = field_name.split(" ")[0]
+                    field_names.push(field_name)
+                    if fn_node.children.len() > 0:
+                        type_node := get_node(fn_node.children[0])
+                        if type_node.kind == "type" or type_node.kind == "generic_type":
+                            field_types.push(ir_resolve_type_hint(type_node.value))
+                        else:
+                            field_types.push("")
+                    else:
+                        field_types.push("")
                 _fi34 = _fi34 + 1
             ir_struct_names.insert(sname, field_names.len())
+            ir_struct_field_names.insert(sname, field_names)
+            ir_struct_field_types.insert(sname, field_types)
             ir_emit("struct " + sname + " " + field_names.join(" "))
 
         _fi22 = _fi22 + 1
