@@ -59,7 +59,13 @@ pub fn compile_from_ir(
                 let idx = parts[1].to_string();
                 // Extract quoted string content and process escape sequences
                 let rest = &line[line.find('"').unwrap_or(0)..];
-                let raw = rest.trim_matches('"');
+                // Strip exactly one leading and one trailing quote
+                // (trim_matches would eat escaped quotes like "\"")
+                let raw = if rest.len() >= 2 && rest.starts_with('"') && rest.ends_with('"') {
+                    &rest[1..rest.len()-1]
+                } else {
+                    rest
+                };
                 let mut content = String::new();
                 let bytes = raw.as_bytes();
                 let mut j = 0;
