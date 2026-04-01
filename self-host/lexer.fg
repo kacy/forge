@@ -58,6 +58,21 @@ fn is_octal_char(c: String) -> Bool:
         return true
     return false
 
+fn is_lbrace(character: String) -> Bool:
+    return not (character < LBRACE) and not (character > LBRACE)
+
+fn is_rbrace(character: String) -> Bool:
+    return not (character < RBRACE) and not (character > RBRACE)
+
+fn is_quote(character: String) -> Bool:
+    return not (character < chr(34)) and not (character > chr(34))
+
+fn is_backslash(character: String) -> Bool:
+    return not (character < chr(92)) and not (character > chr(92))
+
+fn is_newline_char(character: String) -> Bool:
+    return not (character < chr(10)) and not (character > chr(10))
+
 KEYWORDS := ",fn,if,elif,else,for,in,while,match,return,fail,break,continue,spawn,await,struct,enum,interface,impl,type,pub,mut,ref,weak,import,from,as,self,true,false,none,and,or,not,test,"
 
 fn keyword_token_kind(word: String) -> String:
@@ -96,12 +111,17 @@ fn peek() -> String:
         return ""
     return source[current_position]
 
+fn source_char(pos: Int) -> String:
+    if pos < 0 or pos >= source.len():
+        return ""
+    return source.substring(pos, pos + 1)
+
 fn advance() -> String:
-    character := source[current_position]
+    character := source_char(current_position)
     current_position = current_position + 1
     current_column = current_column + 1
     # Track current_line and column position
-    if character == "\n":
+    if is_newline_char(character):
         current_line = current_line + 1
         current_column = 0
     else:
@@ -111,22 +131,22 @@ fn advance() -> String:
 fn is_blank_line() -> Bool:
     mut i := current_position
     while i < source.len():
-        character := source[i]
-        if character == "\n":
+        character := source_char(i)
+        if is_newline_char(character):
             return true
         if character == "#":
             return true
         if character != " ":
-            if character != "\t":
+            if character != chr(9):
                 return false
         i = i + 1
     return true
 
 fn skip_to_next_line():
     while current_position < source.len():
-        character := source[current_position]
+        character := source_char(current_position)
         current_position = current_position + 1
-        if character == "\n":
+        if is_newline_char(character):
             current_line = current_line + 1
             current_column = 0
             return
@@ -137,11 +157,11 @@ fn measure_indent() -> Int:
     mut level := 0
     mut i := current_position
     while i < source.len():
-        character := source[i]
+        character := source_char(i)
         if character == " ":
             level = level + 1
             i = i + 1
-        elif character == "\t":
+        elif character == chr(9):
             level = level + 1
             i = i + 1
         else:
@@ -150,7 +170,7 @@ fn measure_indent() -> Int:
 
 fn skip_spaces():
     while current_position < source.len():
-        if source[current_position] == " ":
+        if source_char(current_position) == " ":
             current_position = current_position + 1
             current_column = current_column + 1
         else:
@@ -245,7 +265,7 @@ fn next_token():
     # step 7: dispatch on character
 
     # newline
-    if character == "\n":
+    if is_newline_char(character):
         current_position = current_position + 1
         current_line = current_line + 1
         current_column = 0
@@ -256,14 +276,14 @@ fn next_token():
     # comment
     if character == "#":
         start := current_position
-        while current_position < source.len() and source[current_position] != "\n":
+        while current_position < source.len() and not is_newline_char(source_char(current_position)):
             current_position = current_position + 1
             current_column = current_column + 1
         emit("comment", source.substring(start, current_position))
         return
 
     # string
-    if character == "\"":
+    if is_quote(character):
         scan_string()
         return
 
@@ -377,58 +397,61 @@ fn scan_string():
     # check for interpolation by peeking ahead
     mut has_interpolation := false
     mut i := current_position
-    while i < source.len():
-        scan_char := source[i]
-        if scan_char == "\\":
-            i = i + 2
-            continue
-        if scan_char == LBRACE:
+    mut found_string_boundary := false
+    while i < source.len() and not found_string_boundary:
+        scan_char := source_char(i)
+        if is_backslash(scan_char):
+            if i + 1 >= source.len():
+                found_string_boundary = true
+            else:
+                i = i + 2
+        elif is_lbrace(scan_char):
             has_interpolation = true
-            break
-        if scan_char == "\"" or scan_char == "\n":
-            break
-        i = i + 1
+            found_string_boundary = true
+        elif is_quote(scan_char) or is_newline_char(scan_char):
+            found_string_boundary = true
+        else:
+            i = i + 1
 
     if not has_interpolation:
         # simple string
         while current_position < source.len():
-            scan_char := source[current_position]
-            if scan_char == "\\":
+            scan_char := source_char(current_position)
+            if is_backslash(scan_char):
                 if current_position + 1 >= source.len():
                     emit("err", "unterminated escape sequence")
                     return
                 current_position = current_position + 2
                 current_column = current_column + 2
-                continue
-            if scan_char == "\"":
+            elif is_quote(scan_char):
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("string_lit", source.substring(start, current_position))
                 return
-            if scan_char == "\n":
+            elif is_newline_char(scan_char):
                 emit("err", "newline in string literal")
                 return
-            current_position = current_position + 1
-            current_column = current_column + 1
+            else:
+                current_position = current_position + 1
+                current_column = current_column + 1
         emit("err", "unterminated string literal")
         return
 
     # interpolated string — scan to first {
-    while current_position < source.len():
-        scan_char := source[current_position]
-        if scan_char == "\\":
+    mut found_interp_start := false
+    while current_position < source.len() and not found_interp_start:
+        scan_char := source_char(current_position)
+        if is_backslash(scan_char):
             if current_position + 1 >= source.len():
                 emit("err", "unterminated escape sequence in string interpolation")
                 return
             current_position = current_position + 2
             current_column = current_column + 2
-            continue
-        if scan_char == LBRACE:
-            break
-        if scan_char == "\"" or scan_char == "\n":
-            break
-        current_position = current_position + 1
-        current_column = current_column + 1
+        elif is_lbrace(scan_char) or is_quote(scan_char) or is_newline_char(scan_char):
+            found_interp_start = true
+        else:
+            current_position = current_position + 1
+            current_column = current_column + 1
 
     # emit string_start (from opening " to the {)
     string_start_value := source.substring(start, current_position)
@@ -440,7 +463,7 @@ fn scan_string():
 
 fn scan_interpolation_parts():
     while current_position < source.len():
-        if source[current_position] != LBRACE:
+        if not is_lbrace(source_char(current_position)):
             return
 
         # skip the {
@@ -450,18 +473,20 @@ fn scan_interpolation_parts():
         # scan expression inside {}
         mut brace_depth := 1
         expression_start := current_position
-        while current_position < source.len():
-            input_char := source[current_position]
-            if input_char == LBRACE:
+        mut found_expr_end := false
+        while current_position < source.len() and not found_expr_end:
+            input_char := source_char(current_position)
+            if is_lbrace(input_char):
                 brace_depth = brace_depth + 1
                 current_position = current_position + 1
                 current_column = current_column + 1
-            elif input_char == RBRACE:
+            elif is_rbrace(input_char):
                 brace_depth = brace_depth - 1
                 if brace_depth == 0:
-                    break
-                current_position = current_position + 1
-                current_column = current_column + 1
+                    found_expr_end = true
+                else:
+                    current_position = current_position + 1
+                    current_column = current_column + 1
             else:
                 current_position = current_position + 1
                 current_column = current_column + 1
@@ -480,32 +505,32 @@ fn scan_interpolation_parts():
 
         # scan string content after the }
         middle_start := current_position
-        while current_position < source.len():
-            scan_char := source[current_position]
-            if scan_char == "\\":
+        mut found_middle_end := false
+        while current_position < source.len() and not found_middle_end:
+            scan_char := source_char(current_position)
+            if is_backslash(scan_char):
                 if current_position + 1 >= source.len():
                     return
                 current_position = current_position + 2
                 current_column = current_column + 2
-                continue
-            if scan_char == LBRACE:
-                break
-            if scan_char == "\"" or scan_char == "\n":
-                break
-            current_position = current_position + 1
-            current_column = current_column + 1
+            elif is_lbrace(scan_char) or is_quote(scan_char) or is_newline_char(scan_char):
+                found_middle_end = true
+            else:
+                current_position = current_position + 1
+                current_column = current_column + 1
 
         if current_position >= source.len():
             return
 
-        if source[current_position] == "\"":
+        if is_quote(source_char(current_position)):
+            end_text := source.substring(middle_start, current_position)
             current_position = current_position + 1
             current_column = current_column + 1
             pending_token_kinds.push("string_end")
-            pending_token_values.push(source.substring(middle_start, current_position))
+            pending_token_values.push(end_text)
             return
 
-        if source[current_position] == "\n":
+        if is_newline_char(source_char(current_position)):
             return
 
         # another { — emit string_mid and continue
@@ -647,11 +672,11 @@ fn scan_operator():
         emit("rbracket", "]")
         return
 
-    if character == LBRACE:
+    if is_lbrace(character):
         emit("lbrace", LBRACE)
         return
 
-    if character == RBRACE:
+    if is_rbrace(character):
         emit("rbrace", RBRACE)
         return
 
@@ -705,7 +730,8 @@ pub fn lex_all(src: String) -> List[Token]:
     _tok_lines = []
     _tok_cols = []
     mut tokens: List[Token] := []
-    while true:
+    mut keep_going := true
+    while keep_going:
         next_token()
         tokens.push(Token(current_token_kind, current_token_value, current_token_line, current_token_column))
         _tok_kinds.push(current_token_kind)
@@ -713,10 +739,9 @@ pub fn lex_all(src: String) -> List[Token]:
         _tok_lines.push(current_token_line)
         _tok_cols.push(current_token_column)
         if current_token_kind == "eof":
-            break
+            keep_going = false
     return tokens
 
 # ---------------------------------------------------------------
 # main
 # ---------------------------------------------------------------
-
