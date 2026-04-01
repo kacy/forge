@@ -222,7 +222,13 @@ fn run_ir_driver(driver: &str, path: &str, module_index: usize) -> Result<String
                 "global" if parts.len() >= 2 => {
                     let old = parts[1];
                     if !old.starts_with("__for_") { // don't rename loop vars
-                        new_line = new_line.replacen(old, &format!("{}{}", prefix, old), 1);
+                        let renamed = format!("{}{}", prefix, old);
+                        let suffix = if parts.len() > 2 {
+                            format!(" {}", parts[2..].join(" "))
+                        } else {
+                            String::new()
+                        };
+                        new_line = format!("global {}{}", renamed, suffix);
                     }
                 }
                 "store" if parts.len() >= 3 => {
