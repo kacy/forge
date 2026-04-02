@@ -16,24 +16,33 @@ pub struct Token:
     pub current_line: Int
     pub current_column: Int
 
+mut LBRACE := ""
+mut RBRACE := ""
+
 # ---------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------
 
 fn is_alpha(character: String) -> Bool:
-    if character >= "a":
-        if character <= "z":
+    if character.len() == 0:
+        return false
+    code := ord(character)
+    if code >= 97:
+        if code <= 122:
             return true
-    if character >= "A":
-        if character <= "Z":
+    if code >= 65:
+        if code <= 90:
             return true
     if character == "_":
         return true
     return false
 
 fn is_digit(character: String) -> Bool:
-    if character >= "0":
-        if character <= "9":
+    if character.len() == 0:
+        return false
+    code := ord(character)
+    if code >= 48:
+        if code <= 57:
             return true
     return false
 
@@ -43,35 +52,42 @@ fn is_alnum(character: String) -> Bool:
 fn is_hex_digit(character: String) -> Bool:
     if is_digit(character):
         return true
-    if character >= "a":
-        if character <= "f":
+    if character.len() == 0:
+        return false
+    code := ord(character)
+    if code >= 97:
+        if code <= 102:
             return true
-    if character >= "A":
-        if character <= "F":
+    if code >= 65:
+        if code <= 70:
             return true
     return false
 
 fn is_octal_char(c: String) -> Bool:
     if c == "_":
         return true
-    if c >= "0" and c <= "7":
-        return true
+    if c.len() == 0:
+        return false
+    code := ord(c)
+    if code >= 48:
+        if code <= 55:
+            return true
     return false
 
 fn is_lbrace(character: String) -> Bool:
-    return not (character < LBRACE) and not (character > LBRACE)
+    return character == LBRACE
 
 fn is_rbrace(character: String) -> Bool:
-    return not (character < RBRACE) and not (character > RBRACE)
+    return character == RBRACE
 
 fn is_quote(character: String) -> Bool:
-    return not (character < chr(34)) and not (character > chr(34))
+    return character == chr(34)
 
 fn is_backslash(character: String) -> Bool:
-    return not (character < chr(92)) and not (character > chr(92))
+    return character == chr(92)
 
 fn is_newline_char(character: String) -> Bool:
-    return not (character < chr(10)) and not (character > chr(10))
+    return character == chr(10)
 
 KEYWORDS := ",fn,if,elif,else,for,in,while,match,return,fail,break,continue,spawn,await,struct,enum,interface,impl,type,pub,mut,ref,weak,import,from,as,self,true,false,none,and,or,not,test,"
 
@@ -79,10 +95,6 @@ fn keyword_token_kind(word: String) -> String:
     if KEYWORDS.contains("," + word + ","):
         return "kw_" + word
     return "identifier"
-
-# pad a string to 16 chars with spaces
-mut LBRACE := ""
-mut RBRACE := ""
 
 # global mutable state — the lexer modifies these as it scans
 mut source := ""
@@ -109,10 +121,12 @@ mut pending_token_columns: List[Int] := []
 fn peek() -> String:
     if current_position >= source.len():
         return ""
-    return source[current_position]
+    return source_char(current_position)
 
 fn source_char(pos: Int) -> String:
-    if pos < 0 or pos >= source.len():
+    if pos < 0:
+        return ""
+    if pos >= source.len():
         return ""
     return source.substring(pos, pos + 1)
 
@@ -240,9 +254,12 @@ fn next_token():
             return
         elif level < current_indent:
             mut dedents := 0
-            while indent_stack.len() > 1 and indent_stack[indent_stack.len() - 1] > level:
-                indent_stack.remove(indent_stack.len() - 1)
-                dedents = dedents + 1
+            while indent_stack.len() > 1:
+                if indent_stack[indent_stack.len() - 1] > level:
+                    indent_stack.remove(indent_stack.len() - 1)
+                    dedents = dedents + 1
+                else:
+                    break
             # verify the target indentation level exists in the stack
             if indent_stack[indent_stack.len() - 1] != level:
                 emit("err", "invalid dedent: indentation level does not match any outer block")
@@ -276,7 +293,9 @@ fn next_token():
     # comment
     if character == "#":
         start := current_position
-        while current_position < source.len() and not is_newline_char(source_char(current_position)):
+        while current_position < source.len():
+            if is_newline_char(source_char(current_position)):
+                break
             current_position = current_position + 1
             current_column = current_column + 1
         emit("comment", source.substring(start, current_position))
@@ -302,7 +321,9 @@ fn next_token():
 
 fn scan_identifier():
     start := current_position
-    while current_position < source.len() and is_alnum(source[current_position]):
+    while current_position < source.len():
+        if not is_alnum(source_char(current_position)):
+            break
         current_position = current_position + 1
         current_column = current_column + 1
     word := source.substring(start, current_position)
@@ -322,67 +343,175 @@ fn scan_number():
     start := current_position
 
     # check for hex, binary, octal prefixes
-    if source[current_position] == "0":
+    if source_char(current_position) == "0":
         if current_position + 1 < source.len():
-            next_char := source[current_position + 1]
-            if next_char == "x" or next_char == "X":
+            next_char := source_char(current_position + 1)
+            if next_char == "x":
                 current_position = current_position + 2
                 current_column = current_column + 2
-                while current_position < source.len() and (is_hex_digit(source[current_position]) or source[current_position] == "_"):
+                while current_position < source.len():
+                    scan_char := source_char(current_position)
+                    if is_hex_digit(scan_char):
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    elif scan_char == "_":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    else:
+                        break
+                emit("int_lit", source.substring(start, current_position))
+                return
+            if next_char == "X":
+                current_position = current_position + 2
+                current_column = current_column + 2
+                while current_position < source.len():
+                    scan_char := source_char(current_position)
+                    if is_hex_digit(scan_char):
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    elif scan_char == "_":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    else:
+                        break
+                emit("int_lit", source.substring(start, current_position))
+                return
+            if next_char == "b":
+                current_position = current_position + 2
+                current_column = current_column + 2
+                while current_position < source.len():
+                    scan_char := source_char(current_position)
+                    if scan_char == "0":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    elif scan_char == "1":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    elif scan_char == "_":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    else:
+                        break
+                emit("int_lit", source.substring(start, current_position))
+                return
+            if next_char == "B":
+                current_position = current_position + 2
+                current_column = current_column + 2
+                while current_position < source.len():
+                    scan_char := source_char(current_position)
+                    if scan_char == "0":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    elif scan_char == "1":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    elif scan_char == "_":
+                        current_position = current_position + 1
+                        current_column = current_column + 1
+                    else:
+                        break
+                emit("int_lit", source.substring(start, current_position))
+                return
+            if next_char == "o":
+                current_position = current_position + 2
+                current_column = current_column + 2
+                while current_position < source.len():
+                    if not is_octal_char(source_char(current_position)):
+                        break
                     current_position = current_position + 1
                     current_column = current_column + 1
                 emit("int_lit", source.substring(start, current_position))
                 return
-            if next_char == "b" or next_char == "B":
+            if next_char == "O":
                 current_position = current_position + 2
                 current_column = current_column + 2
-                while current_position < source.len() and (source[current_position] == "0" or source[current_position] == "1" or source[current_position] == "_"):
-                    current_position = current_position + 1
-                    current_column = current_column + 1
-                emit("int_lit", source.substring(start, current_position))
-                return
-            if next_char == "o" or next_char == "O":
-                current_position = current_position + 2
-                current_column = current_column + 2
-                while current_position < source.len() and is_octal_char(source[current_position]):
+                while current_position < source.len():
+                    if not is_octal_char(source_char(current_position)):
+                        break
                     current_position = current_position + 1
                     current_column = current_column + 1
                 emit("int_lit", source.substring(start, current_position))
                 return
 
     # decimal digits
-    while current_position < source.len() and (is_digit(source[current_position]) or source[current_position] == "_"):
-        current_position = current_position + 1
-        current_column = current_column + 1
+    while current_position < source.len():
+        scan_char := source_char(current_position)
+        if is_digit(scan_char):
+            current_position = current_position + 1
+            current_column = current_column + 1
+        elif scan_char == "_":
+            current_position = current_position + 1
+            current_column = current_column + 1
+        else:
+            break
 
     # check for decimal point (must be followed by a digit)
     mut is_float := false
     if current_position < source.len():
-        if source[current_position] == ".":
+        if source_char(current_position) == ".":
             if current_position + 1 < source.len():
-                if is_digit(source[current_position + 1]):
+                if is_digit(source_char(current_position + 1)):
                     is_float = true
                     current_position = current_position + 1
                     current_column = current_column + 1
-                    while current_position < source.len() and (is_digit(source[current_position]) or source[current_position] == "_"):
-                        current_position = current_position + 1
-                        current_column = current_column + 1
+                    while current_position < source.len():
+                        scan_char := source_char(current_position)
+                        if is_digit(scan_char):
+                            current_position = current_position + 1
+                            current_column = current_column + 1
+                        elif scan_char == "_":
+                            current_position = current_position + 1
+                            current_column = current_column + 1
+                        else:
+                            break
 
     # check for exponent
     if current_position < source.len():
-        exp_char := source[current_position]
-        if exp_char == "e" or exp_char == "E":
+        exp_char := source_char(current_position)
+        if exp_char == "e":
             is_float = true
             current_position = current_position + 1
             current_column = current_column + 1
             if current_position < source.len():
-                scan_char := source[current_position]
-                if scan_char == "+" or scan_char == "-":
+                scan_char := source_char(current_position)
+                if scan_char == "+":
                     current_position = current_position + 1
                     current_column = current_column + 1
-            while current_position < source.len() and (is_digit(source[current_position]) or source[current_position] == "_"):
-                current_position = current_position + 1
-                current_column = current_column + 1
+                elif scan_char == "-":
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+            while current_position < source.len():
+                scan_char := source_char(current_position)
+                if is_digit(scan_char):
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+                elif scan_char == "_":
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+                else:
+                    break
+        elif exp_char == "E":
+            is_float = true
+            current_position = current_position + 1
+            current_column = current_column + 1
+            if current_position < source.len():
+                scan_char := source_char(current_position)
+                if scan_char == "+":
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+                elif scan_char == "-":
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+            while current_position < source.len():
+                scan_char := source_char(current_position)
+                if is_digit(scan_char):
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+                elif scan_char == "_":
+                    current_position = current_position + 1
+                    current_column = current_column + 1
+                else:
+                    break
 
     if is_float:
         emit("float_lit", source.substring(start, current_position))
@@ -398,7 +527,9 @@ fn scan_string():
     mut has_interpolation := false
     mut i := current_position
     mut found_string_boundary := false
-    while i < source.len() and not found_string_boundary:
+    while i < source.len():
+        if found_string_boundary:
+            break
         scan_char := source_char(i)
         if is_backslash(scan_char):
             if i + 1 >= source.len():
@@ -408,7 +539,9 @@ fn scan_string():
         elif is_lbrace(scan_char):
             has_interpolation = true
             found_string_boundary = true
-        elif is_quote(scan_char) or is_newline_char(scan_char):
+        elif is_quote(scan_char):
+            found_string_boundary = true
+        elif is_newline_char(scan_char):
             found_string_boundary = true
         else:
             i = i + 1
@@ -439,7 +572,9 @@ fn scan_string():
 
     # interpolated string — scan to first {
     mut found_interp_start := false
-    while current_position < source.len() and not found_interp_start:
+    while current_position < source.len():
+        if found_interp_start:
+            break
         scan_char := source_char(current_position)
         if is_backslash(scan_char):
             if current_position + 1 >= source.len():
@@ -447,7 +582,11 @@ fn scan_string():
                 return
             current_position = current_position + 2
             current_column = current_column + 2
-        elif is_lbrace(scan_char) or is_quote(scan_char) or is_newline_char(scan_char):
+        elif is_lbrace(scan_char):
+            found_interp_start = true
+        elif is_quote(scan_char):
+            found_interp_start = true
+        elif is_newline_char(scan_char):
             found_interp_start = true
         else:
             current_position = current_position + 1
@@ -474,7 +613,9 @@ fn scan_interpolation_parts():
         mut brace_depth := 1
         expression_start := current_position
         mut found_expr_end := false
-        while current_position < source.len() and not found_expr_end:
+        while current_position < source.len():
+            if found_expr_end:
+                break
             input_char := source_char(current_position)
             if is_lbrace(input_char):
                 brace_depth = brace_depth + 1
@@ -506,14 +647,20 @@ fn scan_interpolation_parts():
         # scan string content after the }
         middle_start := current_position
         mut found_middle_end := false
-        while current_position < source.len() and not found_middle_end:
+        while current_position < source.len():
+            if found_middle_end:
+                break
             scan_char := source_char(current_position)
             if is_backslash(scan_char):
                 if current_position + 1 >= source.len():
                     return
                 current_position = current_position + 2
                 current_column = current_column + 2
-            elif is_lbrace(scan_char) or is_quote(scan_char) or is_newline_char(scan_char):
+            elif is_lbrace(scan_char):
+                found_middle_end = true
+            elif is_quote(scan_char):
+                found_middle_end = true
+            elif is_newline_char(scan_char):
                 found_middle_end = true
             else:
                 current_position = current_position + 1
@@ -542,7 +689,7 @@ fn scan_operator():
 
     if character == "+":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("plus_eq", "+=")
@@ -552,12 +699,12 @@ fn scan_operator():
 
     if character == "-":
         if current_position < source.len():
-            if source[current_position] == ">":
+            if source_char(current_position) == ">":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("arrow", "->")
                 return
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("minus_eq", "-=")
@@ -567,7 +714,7 @@ fn scan_operator():
 
     if character == "*":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("star_eq", "*=")
@@ -577,7 +724,7 @@ fn scan_operator():
 
     if character == "/":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("slash_eq", "/=")
@@ -591,12 +738,12 @@ fn scan_operator():
 
     if character == "=":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("eq_eq", "==")
                 return
-            if source[current_position] == ">":
+            if source_char(current_position) == ">":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("fat_arrow", "=>")
@@ -606,7 +753,7 @@ fn scan_operator():
 
     if character == "!":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("bang_eq", "!=")
@@ -616,7 +763,7 @@ fn scan_operator():
 
     if character == "<":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("less_eq", "<=")
@@ -626,7 +773,7 @@ fn scan_operator():
 
     if character == ">":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("greater_eq", ">=")
@@ -636,7 +783,7 @@ fn scan_operator():
 
     if character == ":":
         if current_position < source.len():
-            if source[current_position] == "=":
+            if source_char(current_position) == "=":
                 current_position = current_position + 1
                 current_column = current_column + 1
                 emit("colon_eq", ":=")

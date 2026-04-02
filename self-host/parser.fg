@@ -123,7 +123,7 @@ fn expect(kind: String) -> Token:
     # error — create error node and return current token
     # TODO: add proper error reporting with line/column info
     add_leaf_with_position("error", "expected " + kind + " but found " + _cur_tok_kind())
-    return current_token
+    return advance_token()
 
 fn skip_newlines():
     while _cur_tok_kind() == "newline":
@@ -245,7 +245,7 @@ pub fn parse_expression() -> Int:
         elif tk == "percent":
             op = "mod"
         advance_token()
-        right := parse_unary()
+        mut right := parse_unary()
         mut c: List[Int] := [left, right]
         left = add_node_with_position("binary", op, c)
         tk = _cur_tok_kind()
@@ -275,7 +275,7 @@ pub fn parse_expression() -> Int:
     # pipe
     while check("pipe"):
         advance_token()
-        right := parse_unary()
+        mut right := parse_unary()
         # parse higher-precedence on right
         mut tk3 := _cur_tok_kind()
         while tk3 == "star" or tk3 == "slash" or tk3 == "percent" or tk3 == "plus" or tk3 == "minus":
@@ -312,7 +312,7 @@ pub fn parse_expression() -> Int:
         cmp_op = "gte"
     while cmp_op != "":
         advance_token()
-        right := parse_expression()
+        mut right := parse_expression()
         mut c: List[Int] := [left, right]
         left = add_node_with_position("binary", cmp_op, c)
         tk = _cur_tok_kind()
@@ -332,13 +332,13 @@ pub fn parse_expression() -> Int:
     # and
     while check("kw_and"):
         advance_token()
-        right := parse_expression()
+        mut right := parse_expression()
         mut c: List[Int] := [left, right]
         left = add_node_with_position("binary", "and", c)
     # or
     while check("kw_or"):
         advance_token()
-        right := parse_expression()
+        mut right := parse_expression()
         mut c: List[Int] := [left, right]
         left = add_node_with_position("binary", "or", c)
     # wrap not
@@ -760,35 +760,41 @@ fn parse_string_interpolation() -> Int:
     advance_token()
     mut parts: List[Int] := []
 
-    if start_tok.value.len() > 0:
-        parts.push(add_leaf_with_position("lit", start_tok.value))
+    if _tv.len() > 0:
+        parts.push(add_leaf_with_position("lit", _tv))
 
-    while true:
+    mut keep_parsing := true
+    while keep_parsing:
+        mut matched_part := false
+
         # interpolation expression
         if check("interpolation_expr"):
             _tv := _cur_tok_value()
             advance_token()
             interp_expr := parse_interp_expr(_tv)
             parts.push(interp_expr)
+            matched_part = true
 
         # string_mid — more interpolations follow
-        if check("string_mid"):
+        if not matched_part and check("string_mid"):
             _tv := _cur_tok_value()
             advance_token()
             if _tv.len() > 0:
                 parts.push(add_leaf_with_position("lit", _tv))
-            continue
+            matched_part = true
 
         # string_end — done
-        if check("string_end"):
+        if not matched_part and check("string_end"):
             _tv := _cur_tok_value()
             advance_token()
             if _tv.len() > 0:
                 parts.push(add_leaf_with_position("lit", _tv))
-            break
+            matched_part = true
+            keep_parsing = false
 
         # unexpected
-        break
+        if not matched_part:
+            keep_parsing = false
 
     return add_node_with_position("string_interp", "", parts)
 
@@ -1118,8 +1124,8 @@ fn parse_import_decl() -> Int:
         # Check for wildcard import: from X import *
         if check("star"):
             advance_token()
-            # Build label: "path *" to indicate wildcard import
-            return add_leaf_with_position("from_import", path + " *")
+            mut parts: List[String] := [path, "*"]
+            return add_leaf_with_position("from_import", parts.join(" "))
 
         mut names: List[String] := []
         n := expect("identifier")
@@ -1136,21 +1142,21 @@ fn parse_import_decl() -> Int:
             if match_tok("kw_as"):
                 expect("identifier")
 
-        # build label: "path import name1, name2"
-        mut label := path
+        mut parts: List[String] := [path]
         for nm in names:
-            label = label + " " + nm
-        return add_leaf_with_position("from_import", label)
+            parts.push(nm)
+        return add_leaf_with_position("from_import", parts.join(" "))
 
     # import path [as alias]
     advance_token()
     path := parse_dotted_path()
-    mut label := path
+    mut parts: List[String] := [path]
     if match_tok("kw_as"):
         alias_tok := expect("identifier")
-        label = label + " as " + alias_tok.value
+        parts.push("as")
+        parts.push(alias_tok.value)
 
-    return add_leaf_with_position("import", label)
+    return add_leaf_with_position("import", parts.join(" "))
 
 fn parse_dotted_path() -> String:
     first := expect("identifier")
