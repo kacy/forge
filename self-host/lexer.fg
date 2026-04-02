@@ -870,6 +870,17 @@ pub fn tok_col(i: Int) -> Int:
 pub fn tok_count() -> Int:
     return _tok_kinds.len()
 
+pub fn load_tokens(token_list: List[Token]):
+    _tok_kinds = []
+    _tok_values = []
+    _tok_lines = []
+    _tok_cols = []
+    for tok in token_list:
+        _tok_kinds.push(tok.kind)
+        _tok_values.push(tok.value)
+        _tok_lines.push(tok.current_line)
+        _tok_cols.push(tok.current_column)
+
 pub fn lex_all(src: String) -> List[Token]:
     init_lexer(src)
     _tok_kinds = []

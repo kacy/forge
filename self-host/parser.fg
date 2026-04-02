@@ -5,7 +5,7 @@
 #
 # usage: import from parse_main.fg or call parse() directly
 
-from lexer import Token, lex_all, tok_kind, tok_value, tok_line, tok_col, tok_count
+from lexer import Token, lex_all, tok_kind, tok_value, tok_line, tok_col, tok_count, load_tokens
 from ast import Node, add_node, add_leaf, get_node
 
 # ---------------------------------------------------------------
@@ -808,6 +808,7 @@ fn parse_interp_expr(text: String) -> Int:
     saved_depth := recursion_depth
 
     tokens = sub_tokens
+    load_tokens(sub_tokens)
     current_token_position = 0
     recursion_depth = 0
 
@@ -815,6 +816,7 @@ fn parse_interp_expr(text: String) -> Int:
 
     # restore parser state
     tokens = saved_tokens
+    load_tokens(saved_tokens)
     current_token_position = saved_pos
     recursion_depth = saved_depth
 
@@ -1086,6 +1088,7 @@ fn parse_fail_stmt() -> Int:
 
 pub fn parse(token_list: List[Token]) -> Int:
     tokens = token_list
+    load_tokens(token_list)
     current_token_position = 0
     recursion_depth = 0
 
