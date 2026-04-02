@@ -86,7 +86,10 @@ pub fn ti_function(param_types: List[Int], return_type: Int) -> TypeInfo:
     mut empty_i: List[Int] := []
     mut empty_b: List[Bool] := []
     mut empty_li: List[List[Int]] := []
-    return TypeInfo("function", "", empty_s, empty_i, empty_b, empty_b, param_types, return_type, -1, -1, -1, empty_i, empty_s, empty_li)
+    mut copied_params: List[Int] := []
+    for param_type in param_types:
+        copied_params.push(param_type)
+    return TypeInfo("function", "", empty_s, empty_i, empty_b, empty_b, copied_params, return_type, -1, -1, -1, empty_i, empty_s, empty_li)
 
 pub fn ti_optional(inner: Int) -> TypeInfo:
     mut empty_s: List[String] := []

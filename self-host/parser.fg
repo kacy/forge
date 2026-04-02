@@ -1175,24 +1175,33 @@ fn parse_top_level_decl() -> Int:
         is_pub = true
 
     # token via _cur_tok_kind/_cur_tok_value
+    cur_kind := _cur_tok_kind()
 
     mut decl := 0
-    if _cur_tok_kind() == "kw_fn":
+    if cur_kind == "kw_fn":
         decl = parse_fn_decl()
-    elif _cur_tok_kind() == "kw_struct":
+    elif cur_kind == "kw_struct":
         decl = parse_struct_decl()
-    elif _cur_tok_kind() == "kw_enum":
+    elif cur_kind == "kw_enum":
         decl = parse_enum_decl()
-    elif _cur_tok_kind() == "kw_interface":
+    elif cur_kind == "kw_interface":
         decl = parse_interface_decl()
-    elif _cur_tok_kind() == "kw_impl":
+    elif cur_kind == "kw_impl":
         decl = parse_impl_decl()
-    elif _cur_tok_kind() == "kw_type":
+    elif cur_kind == "kw_type":
         decl = parse_type_alias_decl()
-    elif _cur_tok_kind() == "kw_test":
+    elif cur_kind == "kw_test":
         decl = parse_test_decl()
-    elif _cur_tok_kind() == "kw_mut" or _cur_tok_kind() == "identifier":
+    elif cur_kind == "kw_mut":
         decl = parse_binding()
+    elif cur_kind == "identifier":
+        if _peek_ahead_kind(1) == "colon_eq":
+            decl = parse_binding()
+        elif _peek_ahead_kind(1) == "colon" and looks_like_binding():
+            decl = parse_binding()
+        else:
+            advance_token()
+            decl = add_leaf_with_position("error", "expected declaration")
     else:
         advance_token()
         decl = add_leaf_with_position("error", "expected declaration")

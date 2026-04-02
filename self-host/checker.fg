@@ -35,9 +35,10 @@ mut current_file_path: String := ""
 # Module alias tracking - maps alias name to module path
 mut module_aliases: Map[String, String] := {}
 
-# Module exports tracking - maps module_path -> {export_name: type_id}
-# This enables qualified name resolution (e.g., math.abs)
-mut module_exports: Map[String, Map[String, Int]] := {}
+# Module exports tracking - flat list of "module_path<TAB>export_name".
+# Qualified resolution currently uses scope bindings directly, so this is
+# retained only as lightweight bookkeeping for future module APIs.
+mut module_export_entries: List[String] := []
 
 # Wildcard import tracking - which modules have been wildcard imported
 # This enables from X import * functionality
@@ -107,7 +108,7 @@ pub fn initialize_checker(file_path: String):
     implementation_set = {}
     expression_type_cache = {}
     module_aliases = {}
-    module_exports = {}
+    module_export_entries = []
     wildcard_imports = []
     current_scope = create_scope(-1)
     register_builtin_types()
@@ -135,11 +136,14 @@ pub fn process_import_aliases(root_idx: Int):
             mut alias := ""
             mut si := 0
             while si < value.len() - 3:
-                if value[si] == " " and value[si + 1] == "a" and value[si + 2] == "s" and value[si + 3] == " ":
-                    path = value.substring(0, si)
-                    alias = value.substring(si + 4, value.len())
-                    has_alias = true
-                    break
+                if value[si] == " ":
+                    if value[si + 1] == "a":
+                        if value[si + 2] == "s":
+                            if value[si + 3] == " ":
+                                path = value.substring(0, si)
+                                alias = value.substring(si + 4, value.len())
+                                has_alias = true
+                                break
                 si = si + 1
             if has_alias:
                 register_import_alias(alias, path)
@@ -149,7 +153,12 @@ pub fn process_import_aliases(root_idx: Int):
             mut part_start := 0
             mut i := 0
             while i <= value.len():
-                if i == value.len() or value[i] == " ":
+                mut at_boundary := false
+                if i == value.len():
+                    at_boundary = true
+                elif value[i] == " ":
+                    at_boundary = true
+                if at_boundary:
                     if part_start < i:
                         parts.push(value.substring(part_start, i))
                     part_start = i + 1
@@ -158,13 +167,13 @@ pub fn process_import_aliases(root_idx: Int):
             if parts.len() > 0:
                 mod_path := parts[0]
                 # Check for wildcard import (second part is "*")
-                if parts.len() > 1 and parts[1] == "*":
-                    wildcard_imports.push(mod_path)
+                if parts.len() > 1:
+                    if parts[1] == "*":
+                        wildcard_imports.push(mod_path)
 
-# Collect all pub exports from a module and store in module_exports
+# Collect all pub exports from a module.
 pub fn collect_module_exports(module_path: String, root_idx: Int):
     root := get_node(root_idx)
-    mut exports: Map[String, Int] := {}
     
     for child in root.children:
         node := get_node(child)
@@ -172,13 +181,13 @@ pub fn collect_module_exports(module_path: String, root_idx: Int):
             if node.children.len() > 0:
                 inner := get_node(node.children[0])
                 if inner.kind == "fn_decl":
-                    exports.insert(inner.value, TID_ERR)  # Will be resolved later
+                    module_export_entries.push(module_path + "\t" + inner.value)
                 elif inner.kind == "struct_decl":
-                    exports.insert(inner.value, TID_ERR)
+                    module_export_entries.push(module_path + "\t" + inner.value)
                 elif inner.kind == "enum_decl":
-                    exports.insert(inner.value, TID_ERR)
+                    module_export_entries.push(module_path + "\t" + inner.value)
                 elif inner.kind == "type_alias":
-                    exports.insert(inner.value, TID_ERR)
+                    module_export_entries.push(module_path + "\t" + inner.value)
                 elif inner.kind == "binding":
                     # Extract binding name from value (format: "name mut" or "name")
                     mut name_end := inner.value.len()
@@ -189,21 +198,26 @@ pub fn collect_module_exports(module_path: String, root_idx: Int):
                             break
                         si = si + 1
                     binding_name := inner.value.substring(0, name_end)
-                    exports.insert(binding_name, TID_ERR)
-    
-    module_exports.insert(module_path, exports)
+                    module_export_entries.push(module_path + "\t" + binding_name)
 
 fn register_builtin_types():
+    tid_int := lookup_type_id("Int")
+    tid_float := lookup_type_id("Float")
+    tid_bool := lookup_type_id("Bool")
+    tid_string := lookup_type_id("String")
+    tid_void := lookup_type_id("Void")
+    tid_err := lookup_type_id("<error>")
+
     # pre-register List[String] — used by String.split() and args()
-    intern_collection_type("List", TID_STRING, -1)
+    intern_collection_type("List", tid_string, -1)
     list_string := lookup_type_id("List[String]")
 
     # result types used by multiple builtins
-    int_result := add_type_info(ti_result(TID_INT, TID_ERR))
-    float_result := add_type_info(ti_result(TID_FLOAT, TID_ERR))
-    str_result := add_type_info(ti_result(TID_STRING, TID_ERR))
-    bool_result := add_type_info(ti_result(TID_BOOL, TID_ERR))
-    opt_string := add_type_info(ti_optional(TID_STRING))
+    int_result := add_type_info(ti_result(tid_int, tid_err))
+    float_result := add_type_info(ti_result(tid_float, tid_err))
+    str_result := add_type_info(ti_result(tid_string, tid_err))
+    bool_result := add_type_info(ti_result(tid_bool, tid_err))
+    opt_string := add_type_info(ti_optional(tid_string))
 
     # --- shared function signatures, one type per group ---
 
@@ -330,21 +344,80 @@ fn register_builtin_types():
     # concurrency primitives (stub types)
     register_sync_primitive_type("Mutex", [])
     register_sync_primitive_type("WaitGroup", [])
-    register_sync_primitive_type("Semaphore", [TID_INT])
+    register_sync_primitive_type("Semaphore", [tid_int])
+
+    # Rebind builtin names at the end. On the active self-hosted path,
+    # the long registration sequence above can leave some earlier
+    # function type entries with corrupted return_type fields. Rebinding
+    # after all mutations makes the final scope bindings authoritative.
+    fix_builtin_binding("time", [], tid_int)
+    fix_builtin_binding("random_float", [], tid_float)
+    fix_builtin_binding("input", [], tid_string)
+    fix_builtin_binding("args", [], list_string)
+    fix_builtin_binding("assert", [tid_bool], tid_void)
+    fix_builtin_binding("exit", [tid_int], tid_void)
+    fix_builtin_binding("sleep", [tid_int], tid_void)
+    fix_builtin_binding("random_seed", [tid_int], tid_void)
+    fix_builtin_binding("tcp_close", [tid_int], tid_void)
+    fix_builtin_binding("bit_not", [tid_int], tid_int)
+    fix_builtin_binding("chr", [tid_int], tid_string)
+    fix_builtin_binding("random_string", [tid_int], tid_string)
+    fix_builtin_binding("assert_eq", [tid_int, tid_int], tid_void)
+    fix_builtin_binding("assert_ne", [tid_int, tid_int], tid_void)
+    fix_builtin_binding("random_int", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("bit_and", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("bit_or", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("bit_xor", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("bit_shl", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("bit_shr", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("format_time", [tid_int, tid_string], tid_string)
+    fix_builtin_binding("math_sqrt", [tid_float], tid_float)
+    fix_builtin_binding("math_floor", [tid_float], tid_int)
+    fix_builtin_binding("math_ceil", [tid_float], tid_int)
+    fix_builtin_binding("math_round", [tid_float], tid_int)
+    fix_builtin_binding("math_pow", [tid_float, tid_float], tid_float)
+    fix_builtin_binding("fmt_float", [tid_float, tid_int], tid_string)
+    fix_builtin_binding("print", [tid_string], tid_void)
+    fix_builtin_binding("print_err", [tid_string], tid_void)
+    fix_builtin_binding("exec", [tid_string], tid_int)
+    fix_builtin_binding("ord", [tid_string], tid_int)
+    fix_builtin_binding("file_exists", [tid_string], tid_bool)
+    fix_builtin_binding("dir_exists", [tid_string], tid_bool)
+    fix_builtin_binding("mkdir", [tid_string], tid_bool)
+    fix_builtin_binding("remove_file", [tid_string], tid_bool)
+    fix_builtin_binding("env", [tid_string], opt_string)
+    fix_builtin_binding("list_dir", [tid_string], list_string)
+    fix_builtin_binding("parse_int", [tid_string], int_result)
+    fix_builtin_binding("parse_float", [tid_string], float_result)
+    fix_builtin_binding("read_file", [tid_string], str_result)
+    fix_builtin_binding("exec_output", [tid_string], str_result)
+    fix_builtin_binding("dns_resolve", [tid_string], str_result)
+    fix_builtin_binding("rename_file", [tid_string, tid_string], tid_bool)
+    fix_builtin_binding("write_file", [tid_string, tid_string], bool_result)
+    fix_builtin_binding("append_file", [tid_string, tid_string], bool_result)
+    fix_builtin_binding("tcp_connect", [tid_string, tid_int], int_result)
+    fix_builtin_binding("tcp_listen", [tid_string, tid_int], int_result)
+    fix_builtin_binding("tcp_accept", [tid_int], int_result)
+    fix_builtin_binding("tcp_read", [tid_int, tid_int], str_result)
+    fix_builtin_binding("tcp_write", [tid_int, tid_string], int_result)
+    fix_builtin_binding("process_spawn", [tid_string], int_result)
+    fix_builtin_binding("process_write", [tid_int, tid_string], int_result)
+    fix_builtin_binding("process_read", [tid_int, tid_int], str_result)
+    fix_builtin_binding("process_read_err", [tid_int, tid_int], str_result)
+    fix_builtin_binding("process_wait", [tid_int], tid_int)
+    fix_builtin_binding("process_kill", [tid_int], tid_bool)
+    fix_builtin_binding("process_close", [tid_int], tid_void)
 
 # create a function type from param list and return type
 fn create_function_type(params: List[Int], ret: Int) -> Int:
-    # ti_function takes a mutable list, so copy the input
-    mut p: List[Int] := []
-    mut i := 0
-    while i < params.len():
-        p.push(params[i])
-        i = i + 1
-    return add_type_info(ti_function(p, ret))
+    return add_type_info(ti_function(params, ret))
 
 # register a builtin function name with a pre-computed function type
 fn define_builtin_function(name: String, fn_tid: Int):
     define_binding(current_scope, name, fn_tid, false)
+
+fn fix_builtin_binding(name: String, params: List[Int], ret: Int):
+    define_builtin_function(name, add_type_info(ti_function(params, ret)))
 
 # register an opaque sync primitive type with a constructor
 fn register_sync_primitive_type(name: String, param_tids: List[Int]):
@@ -1192,10 +1265,11 @@ fn check_if_statement(node: Node, scope_id: Int):
     # children: [condition, then, elif..., else?]
     if node.children.len() < 2:
         return
+    tid_bool := lookup_type_id("Bool")
     # check condition
     cond_type := c_check_expr(node.children[0], scope_id)
     if is_error_type(cond_type) == false:
-        if cond_type != TID_BOOL:
+        if cond_type != tid_bool:
             report_error("E200", "condition must be Bool, got " + get_type_name(cond_type))
     # check then branch
     then_node := get_node(node.children[1])
@@ -1217,7 +1291,7 @@ fn check_if_statement(node: Node, scope_id: Int):
             if cn.children.len() > 0:
                 econd := c_check_expr(cn.children[0], elif_scope)
                 if is_error_type(econd) == false:
-                    if econd != TID_BOOL:
+                    if econd != tid_bool:
                         report_error("E200", "condition must be Bool, got " + get_type_name(econd))
             if cn.children.len() > 1:
                 ebody := get_node(cn.children[1])
@@ -1242,9 +1316,10 @@ fn check_if_statement(node: Node, scope_id: Int):
 fn check_while_statement(node: Node, scope_id: Int):
     if node.children.len() < 2:
         return
+    tid_bool := lookup_type_id("Bool")
     cond_type := c_check_expr(node.children[0], scope_id)
     if is_error_type(cond_type) == false:
-        if cond_type != TID_BOOL:
+        if cond_type != tid_bool:
             report_error("E200", "condition must be Bool, got " + get_type_name(cond_type))
     loop_scope := create_loop_scope(scope_id)
     body_node := get_node(node.children[1])
@@ -1317,16 +1392,21 @@ pub fn c_get_expr_type(node_idx: Int) -> Int:
 
 fn check_expression_implementation(node_idx: Int, scope_id: Int) -> Int:
     node := get_node(node_idx)
+    tid_int := lookup_type_id("Int")
+    tid_float := lookup_type_id("Float")
+    tid_string := lookup_type_id("String")
+    tid_bool := lookup_type_id("Bool")
+    tid_err := lookup_type_id("<error>")
     if node.kind == "int_lit":
-        return TID_INT
+        return tid_int
     if node.kind == "float_lit":
-        return TID_FLOAT
+        return tid_float
     if node.kind == "string_lit":
-        return TID_STRING
+        return tid_string
     if node.kind == "bool_lit":
-        return TID_BOOL
+        return tid_bool
     if node.kind == "none_lit":
-        return TID_ERR
+        return tid_err
     if node.kind == "ident":
         return check_identifier(node_idx, node.value, scope_id)
     if node.kind == "self":
@@ -1345,7 +1425,7 @@ fn check_expression_implementation(node_idx: Int, scope_id: Int) -> Int:
             cn := get_node(child)
             if cn.kind != "lit":
                 c_check_expr(child, scope_id)
-        return TID_STRING
+        return tid_string
     if node.kind == "if_expr":
         return check_if_expression(node, scope_id)
     if node.kind == "call":
@@ -1402,6 +1482,8 @@ fn check_binary_expression(node: Node, scope_id: Int) -> Int:
     if node.children.len() < 2:
         return TID_ERR
     op := node.value
+    tid_bool := lookup_type_id("Bool")
+    tid_string := lookup_type_id("String")
     # pipe operator: special handling
     if op == "pipe":
         return check_pipe_expression(node, scope_id)
@@ -1416,9 +1498,9 @@ fn check_binary_expression(node: Node, scope_id: Int) -> Int:
 
     # string concatenation
     if op == "add":
-        if left == TID_STRING:
-            if right == TID_STRING:
-                return TID_STRING
+        if left == tid_string:
+            if right == tid_string:
+                return tid_string
 
     # arithmetic operators: add, sub, mul, div, mod
     if op == "add":
@@ -1467,68 +1549,68 @@ fn check_binary_expression(node: Node, scope_id: Int) -> Int:
         if left != right:
             report_error("E217", "operator == type mismatch: " + get_type_name(left) + " vs " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
     if op == "neq":
         if left != right:
             report_error("E217", "operator != type mismatch: " + get_type_name(left) + " vs " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
 
     # ordering: lt, gt, lte, gte
     if op == "lt":
         if is_numeric_type(left) == false:
-            if left != TID_STRING:
+            if left != tid_string:
                 report_error("E217", "operator < requires numeric or string type, got " + get_type_name(left))
                 return TID_ERR
         if left != right:
             report_error("E217", "operator < type mismatch: " + get_type_name(left) + " vs " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
     if op == "gt":
         if is_numeric_type(left) == false:
-            if left != TID_STRING:
+            if left != tid_string:
                 report_error("E217", "operator > requires numeric or string type, got " + get_type_name(left))
                 return TID_ERR
         if left != right:
             report_error("E217", "operator > type mismatch: " + get_type_name(left) + " vs " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
     if op == "lte":
         if is_numeric_type(left) == false:
-            if left != TID_STRING:
+            if left != tid_string:
                 report_error("E217", "operator <= requires numeric or string type, got " + get_type_name(left))
                 return TID_ERR
         if left != right:
             report_error("E217", "operator <= type mismatch: " + get_type_name(left) + " vs " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
     if op == "gte":
         if is_numeric_type(left) == false:
-            if left != TID_STRING:
+            if left != tid_string:
                 report_error("E217", "operator >= requires numeric or string type, got " + get_type_name(left))
                 return TID_ERR
         if left != right:
             report_error("E217", "operator >= type mismatch: " + get_type_name(left) + " vs " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
 
     # logical: and, or
     if op == "and":
-        if left != TID_BOOL:
+        if left != tid_bool:
             report_error("E217", "operator 'and' requires Bool, got " + get_type_name(left))
             return TID_ERR
-        if right != TID_BOOL:
+        if right != tid_bool:
             report_error("E217", "operator 'and' requires Bool, got " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
     if op == "or":
-        if left != TID_BOOL:
+        if left != tid_bool:
             report_error("E217", "operator 'or' requires Bool, got " + get_type_name(left))
             return TID_ERR
-        if right != TID_BOOL:
+        if right != tid_bool:
             report_error("E217", "operator 'or' requires Bool, got " + get_type_name(right))
             return TID_ERR
-        return TID_BOOL
+        return tid_bool
 
     return TID_ERR
 
@@ -1626,8 +1708,9 @@ fn check_function_call(node: Node, scope_id: Int) -> Int:
             if info.kind == "struct":
                 # opaque types (0 fields) with args use a constructor function
                 # e.g. Semaphore(10) — registered via register_sync_primitive_type
-                if info.fields.len() == 0 and arg_indices.len() > 0:
-                    return check_function_call_expression(callee_idx, arg_indices, scope_id)
+                if info.fields.len() == 0:
+                    if arg_indices.len() > 0:
+                        return check_function_call_expression(callee_idx, arg_indices, scope_id)
                 return check_struct_constructor(name, struct_tid, info, arg_indices, scope_id)
             if info.kind == "enum":
                 # enum variant constructor (qualified as EnumName.Variant)
@@ -2710,9 +2793,13 @@ fn check_match_exhaustiveness(subject_type: Int, arm_values: List[String], node_
         mut has_some := false
         mut has_none := false
         for v in arm_values:
-            if v == "Some" or v == "_":
+            if v == "Some":
                 has_some = true
-            if v == "None" or v == "_":
+            elif v == "_":
+                has_some = true
+            if v == "None":
+                has_none = true
+            elif v == "_":
                 has_none = true
         if not has_some:
             report_error("E204", "non-exhaustive match on Optional: add 'Some' case or wildcard (_)")

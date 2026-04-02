@@ -51,6 +51,7 @@ mut ir_var_regs: Map[String, Int] := {}
 mut ir_var_types: Map[String, String] := {}  # variable name -> type hint or struct name
 mut ir_global_int_names: List[String] := []
 mut ir_global_string_names: List[String] := []
+mut ir_global_list_string_names: List[String] := []
 mut ir_global_list_names: List[String] := []
 mut ir_global_map_names: List[String] := []
 mut ir_global_map_int_names: List[String] := []
@@ -79,6 +80,7 @@ pub fn ir_reset():
     ir_var_types = {}
     ir_global_int_names = []
     ir_global_string_names = []
+    ir_global_list_string_names = []
     ir_global_list_names = []
     ir_global_map_names = []
     ir_global_map_int_names = []
@@ -250,6 +252,8 @@ fn ir_infer_type(idx: Int) -> String:
             return "int"
         if ir_global_string_names.contains(node.value):
             return "string"
+        if ir_global_list_string_names.contains(node.value):
+            return "list_string"
         if ir_global_list_names.contains(node.value):
             return "list"
         if ir_global_map_int_names.contains(node.value):
@@ -292,6 +296,8 @@ fn ir_infer_type(idx: Int) -> String:
         fn_node := get_node(node.children[0])
         if fn_node.kind == "ident":
             fname := fn_node.value
+            if ir_struct_names.contains_key(fname):
+                return fname
             if FLOAT_RETURNING_FUNCS.contains(fname):
                 return "float"
             if BOOL_RETURNING_FUNCS.contains(fname):
@@ -346,6 +352,8 @@ fn ir_lookup_name_type(name: String) -> String:
         return "int"
     if ir_global_string_names.contains(name):
         return "string"
+    if ir_global_list_string_names.contains(name):
+        return "list_string"
     if ir_global_list_names.contains(name):
         return "list"
     if ir_global_map_int_names.contains(name):
@@ -412,7 +420,7 @@ fn ir_emit_method_call(idx: Int) -> Int:
                 recv_name := recv_node.value
                 if recv_name == "source" or recv_name == "KEYWORDS" or recv_name == "LBRACE" or recv_name == "RBRACE" or recv_name.ends_with("_kind") or recv_name.ends_with("_value") or recv_name.ends_with("_text"):
                     emit_name = "string_len"
-                elif recv_name == "tokens" or recv_name == "sub_tokens" or recv_name.ends_with("_tokens") or recv_name.ends_with("_stack") or recv_name.starts_with("pending_") or recv_name.starts_with("_tok_") or recv_name == "args" or recv_name == "params" or recv_name == "param_nodes" or recv_name == "types" or recv_name == "parts" or recv_name == "fields" or recv_name == "patterns" or recv_name == "entries" or recv_name == "elements" or recv_name == "children" or recv_name == "stmts" or recv_name == "imports" or recv_name == "decls" or recv_name == "generics" or recv_name == "bounds" or recv_name == "names":
+                elif recv_name == "tokens" or recv_name == "sub_tokens" or recv_name.ends_with("_tokens") or recv_name.ends_with("_stack") or recv_name.starts_with("pending_") or recv_name.starts_with("_tok_") or recv_name == "args" or recv_name == "params" or recv_name == "param_nodes" or recv_name == "types" or recv_name == "parts" or recv_name == "fields" or recv_name == "patterns" or recv_name == "entries" or recv_name == "elements" or recv_name == "children" or recv_name == "stmts" or recv_name == "imports" or recv_name == "decls" or recv_name == "generics" or recv_name == "bounds" or recv_name == "names" or recv_name.ends_with("_types") or recv_name.ends_with("_fields") or recv_name.ends_with("_entries") or recv_name.ends_with("_elements") or recv_name.ends_with("_patterns") or recv_name.ends_with("_children") or recv_name.ends_with("_params") or recv_name.ends_with("_bounds") or recv_name.ends_with("_names") or recv_name.ends_with("_variants"):
                     emit_name = "forge_list_len"
                 else:
                     emit_name = "string_len"
@@ -420,7 +428,7 @@ fn ir_emit_method_call(idx: Int) -> Int:
                 recv_field := recv_node.value
                 if recv_field == "value" or recv_field == "kind" or recv_field == "name" or recv_field == "text" or recv_field == "path":
                     emit_name = "string_len"
-                elif recv_field == "children" or recv_field == "params" or recv_field == "fields" or recv_field == "elements" or recv_field == "entries" or recv_field == "patterns" or recv_field == "types" or recv_field == "parts" or recv_field == "names" or recv_field == "generics" or recv_field == "bounds":
+                elif recv_field == "children" or recv_field == "params" or recv_field == "fields" or recv_field == "elements" or recv_field == "entries" or recv_field == "patterns" or recv_field == "types" or recv_field == "parts" or recv_field == "names" or recv_field == "generics" or recv_field == "bounds" or recv_field.ends_with("_types") or recv_field.ends_with("_fields") or recv_field.ends_with("_entries") or recv_field.ends_with("_elements") or recv_field.ends_with("_patterns") or recv_field.ends_with("_children") or recv_field.ends_with("_params") or recv_field.ends_with("_bounds") or recv_field.ends_with("_names") or recv_field.ends_with("_variants"):
                     emit_name = "forge_list_len"
                 else:
                     emit_name = "string_len"
@@ -979,6 +987,8 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
             if ir_var_types.contains_key(oname):
                 if ir_var_types[oname] == "string":
                     is_str_idx = true
+            elif ir_global_string_names.contains(oname):
+                is_str_idx = true
         elif obj_n.kind == "string_lit" or obj_n.kind == "string":
             is_str_idx = true
         # map index: if key is a string literal or string var
@@ -991,6 +1001,10 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
                     is_map_idx = true
                 elif ir_var_types[oname] == "map_int":
                     is_map_int_idx = true
+            elif ir_global_map_names.contains(oname):
+                is_map_idx = true
+            elif ir_global_map_int_names.contains(oname):
+                is_map_int_idx = true
         if is_str_idx:
             ir_emit("call " + r.to_string() + " char_at 2 " + obj_r.to_string() + " " + idx_r.to_string())
         elif is_map_int_idx:
@@ -1045,40 +1059,20 @@ fn ir_stmt(idx: Int):
             name = name.split(" ")[0]
         # find type annotation and value expression
         mut val_idx := 0 - 1
-        mut type_ann := ""
+        mut type_idx := 0 - 1
         mut _fi13 := 0
         _kids13 := node.children
         while _fi13 < _kids13.len():
             child := _kids13[_fi13]
             cn := get_node(child)
-            if cn.kind == "type":
-                type_ann = cn.value
-            elif cn.kind == "generic_type":
-                type_ann = cn.value  # "Map", "List", "Set", etc.
+            if cn.kind == "type" or cn.kind == "generic_type":
+                type_idx = child
             else:
                 val_idx = child
             _fi13 = _fi13 + 1
-        # track type from annotation — detect int-key maps
-        mut is_int_key_map := false
-        if type_ann == "Map":
-            # check generic_type children for key type
-            mut _fi14 := 0
-            _kids14 := node.children
-            while _fi14 < _kids14.len():
-                child2 := _kids14[_fi14]
-                cn2 := get_node(child2)
-                if cn2.kind == "generic_type" and cn2.children.len() > 0:
-                    first_type := get_node(cn2.children[0])
-                    if first_type.kind == "type" and first_type.value == "Int":
-                        is_int_key_map = true
-                _fi14 = _fi14 + 1
-        if type_ann.contains("Map[") or type_ann == "Map":
-            if is_int_key_map:
-                ir_var_types.insert(name, "map_int")
-            else:
-                ir_var_types.insert(name, "map")
-        else:
-            resolved_type := ir_resolve_type_hint(type_ann)
+        # track type from annotation with full generic information
+        if type_idx >= 0:
+            resolved_type := ir_resolve_type_node(type_idx)
             if resolved_type.len() > 0:
                 ir_var_types.insert(name, resolved_type)
         if val_idx >= 0:
@@ -1406,7 +1400,7 @@ fn ir_extract_param_type(param_idx: Int) -> String:
         stack.remove(last)
         tn := get_node(cur_idx)
         if tn.kind == "type" or tn.kind == "generic_type":
-            return tn.value
+            return ir_resolve_type_node(cur_idx)
         mut ci := 0
         while ci < tn.children.len():
             stack.push(tn.children[ci])
@@ -1441,6 +1435,8 @@ fn ir_param_count(fn_idx: Int) -> Int:
 fn ir_emit_named_param(name: String, param_type: String):
     r := ir_reg()
     ir_var_regs.insert(name, r)
+    if param_type.len() > 0:
+        ir_var_types.insert(name, param_type)
     ir_emit("param " + name)
 
 fn ir_emit_fn_params(fn_idx: Int):
@@ -1706,7 +1702,9 @@ pub fn emit_ir(root_idx: Int) -> String:
                     ir_global_int_names.push(gname)
                 elif global_type == "string":
                     ir_global_string_names.push(gname)
-                elif global_type == "list" or global_type == "list_string":
+                elif global_type == "list_string":
+                    ir_global_list_string_names.push(gname)
+                elif global_type == "list":
                     ir_global_list_names.push(gname)
                 elif global_type == "map_int":
                     ir_global_map_int_names.push(gname)
