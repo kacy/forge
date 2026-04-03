@@ -881,6 +881,20 @@ pub fn load_tokens(token_list: List[Token]):
         _tok_lines.push(tok.current_line)
         _tok_cols.push(tok.current_column)
 
+pub fn load_token_snapshot(kinds: List[String], values: List[String], lines: List[Int], cols: List[Int]):
+    _tok_kinds = []
+    _tok_values = []
+    _tok_lines = []
+    _tok_cols = []
+    for kind in kinds:
+        _tok_kinds.push(kind)
+    for value in values:
+        _tok_values.push(value)
+    for line in lines:
+        _tok_lines.push(line)
+    for col in cols:
+        _tok_cols.push(col)
+
 pub fn lex_all(src: String) -> List[Token]:
     init_lexer(src)
     _tok_kinds = []
