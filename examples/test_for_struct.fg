@@ -10,6 +10,6 @@ fn make_tokens() -> List[Token]:
 
 fn main():
     tokens := make_tokens()
-    print(tokens.len())
+    print(tokens.len().to_string())
     for tok in tokens:
         print(tok.kind + " " + tok.value)

@@ -1826,4 +1826,4 @@ pub fn emit_ir(root_idx: Int) -> String:
         li = li + 1
 
     ir_module_count = ir_module_count + 1
-    return ir_lines.join("\n")
+    return ir_lines.join(chr(10))

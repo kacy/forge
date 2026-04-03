@@ -75,19 +75,33 @@ fn is_octal_char(c: String) -> Bool:
     return false
 
 fn is_lbrace(character: String) -> Bool:
-    return character == LBRACE
+    if character.len() == 0:
+        return false
+    if LBRACE.len() == 0:
+        return false
+    return ord(character) == ord(LBRACE)
 
 fn is_rbrace(character: String) -> Bool:
-    return character == RBRACE
+    if character.len() == 0:
+        return false
+    if RBRACE.len() == 0:
+        return false
+    return ord(character) == ord(RBRACE)
 
 fn is_quote(character: String) -> Bool:
-    return character == chr(34)
+    if character.len() == 0:
+        return false
+    return ord(character) == 34
 
 fn is_backslash(character: String) -> Bool:
-    return character == chr(92)
+    if character.len() == 0:
+        return false
+    return ord(character) == 92
 
 fn is_newline_char(character: String) -> Bool:
-    return character == chr(10)
+    if character.len() == 0:
+        return false
+    return ord(character) == 10
 
 KEYWORDS := ",fn,if,elif,else,for,in,while,match,return,fail,break,continue,spawn,await,struct,enum,interface,impl,type,pub,mut,ref,weak,import,from,as,self,true,false,none,and,or,not,test,"
 

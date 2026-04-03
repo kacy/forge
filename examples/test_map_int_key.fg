@@ -2,6 +2,6 @@ fn main():
     mut m: Map[Int, String] := {}
     m.insert(0, "hello")
     m.insert(1, "world")
-    print(m.len())
+    print(m.len().to_string())
     print(m[0])
     print(m[1])

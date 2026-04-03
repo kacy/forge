@@ -251,6 +251,7 @@ fn register_builtin_types():
     define_builtin_function("tcp_close", int_to_void)
     # (Int) -> Int
     int_to_int := create_function_type([TID_INT], TID_INT)
+    define_builtin_function("abs", int_to_int)
     # (Int) -> Int (bitwise unary)
     define_builtin_function("bit_not", int_to_int)
 
@@ -265,25 +266,28 @@ fn register_builtin_types():
     define_builtin_function("assert_ne", two_int_to_void)
     # (Int, Int) -> Int
     two_int_to_int := create_function_type([TID_INT, TID_INT], TID_INT)
+    define_builtin_function("min", two_int_to_int)
+    define_builtin_function("max", two_int_to_int)
     define_builtin_function("random_int", two_int_to_int)
     define_builtin_function("bit_and", two_int_to_int)
     define_builtin_function("bit_or", two_int_to_int)
     define_builtin_function("bit_xor", two_int_to_int)
     define_builtin_function("bit_shl", two_int_to_int)
     define_builtin_function("bit_shr", two_int_to_int)
+    # (Int, Int, Int) -> Int
+    define_builtin_function("clamp", create_function_type([TID_INT, TID_INT, TID_INT], TID_INT))
 
     # (Int, String) -> String
     int_str_to_str := create_function_type([TID_INT, TID_STRING], TID_STRING)
     define_builtin_function("format_time", int_str_to_str)
     # (Float) -> Float
-    define_builtin_function("math_sqrt", create_function_type([TID_FLOAT], TID_FLOAT))
-    # (Float) -> Int
-    float_to_int := create_function_type([TID_FLOAT], TID_INT)
-    define_builtin_function("math_floor", float_to_int)
-    define_builtin_function("math_ceil", float_to_int)
-    define_builtin_function("math_round", float_to_int)
+    float_to_float := create_function_type([TID_FLOAT], TID_FLOAT)
+    define_builtin_function("sqrt", float_to_float)
+    define_builtin_function("floor", float_to_float)
+    define_builtin_function("ceil", float_to_float)
+    define_builtin_function("round", float_to_float)
     # (Float, Float) -> Float
-    define_builtin_function("math_pow", create_function_type([TID_FLOAT, TID_FLOAT], TID_FLOAT))
+    define_builtin_function("pow", create_function_type([TID_FLOAT, TID_FLOAT], TID_FLOAT))
     # (Float, Int) -> String
     define_builtin_function("fmt_float", create_function_type([TID_FLOAT, TID_INT], TID_STRING))
 
@@ -370,23 +374,27 @@ fn register_builtin_types():
     fix_builtin_binding("sleep", [tid_int], tid_void)
     fix_builtin_binding("random_seed", [tid_int], tid_void)
     fix_builtin_binding("tcp_close", [tid_int], tid_void)
+    fix_builtin_binding("abs", [tid_int], tid_int)
     fix_builtin_binding("bit_not", [tid_int], tid_int)
     fix_builtin_binding("chr", [tid_int], tid_string)
     fix_builtin_binding("random_string", [tid_int], tid_string)
     fix_builtin_binding("assert_eq", [tid_int, tid_int], tid_void)
     fix_builtin_binding("assert_ne", [tid_int, tid_int], tid_void)
+    fix_builtin_binding("min", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("max", [tid_int, tid_int], tid_int)
     fix_builtin_binding("random_int", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_and", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_or", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_xor", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_shl", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_shr", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("clamp", [tid_int, tid_int, tid_int], tid_int)
     fix_builtin_binding("format_time", [tid_int, tid_string], tid_string)
-    fix_builtin_binding("math_sqrt", [tid_float], tid_float)
-    fix_builtin_binding("math_floor", [tid_float], tid_int)
-    fix_builtin_binding("math_ceil", [tid_float], tid_int)
-    fix_builtin_binding("math_round", [tid_float], tid_int)
-    fix_builtin_binding("math_pow", [tid_float, tid_float], tid_float)
+    fix_builtin_binding("sqrt", [tid_float], tid_float)
+    fix_builtin_binding("floor", [tid_float], tid_float)
+    fix_builtin_binding("ceil", [tid_float], tid_float)
+    fix_builtin_binding("round", [tid_float], tid_float)
+    fix_builtin_binding("pow", [tid_float, tid_float], tid_float)
     fix_builtin_binding("fmt_float", [tid_float, tid_int], tid_string)
     fix_builtin_binding("print", [tid_string], tid_void)
     fix_builtin_binding("print_err", [tid_string], tid_void)
@@ -1486,10 +1494,13 @@ fn check_for_statement(node: Node, scope_id: Int):
     if is_error_type(iter_type):
         return
     # infer element type from collection
-    mut elem_type := TID_ERR
+    tid_err := lookup_type_id("<error>")
+    tid_int := lookup_type_id("Int")
+    tid_string := lookup_type_id("String")
+    mut elem_type := tid_err
     iter_info := get_type_info(iter_type)
-    if iter_type == TID_STRING:
-        elem_type = TID_STRING
+    if iter_type == tid_string:
+        elem_type = tid_string
     elif iter_info.kind == "list":
         elem_type = iter_info.inner
     elif iter_info.kind == "map":
@@ -1507,7 +1518,7 @@ fn check_for_statement(node: Node, scope_id: Int):
         define_binding(loop_scope, elem_name, elem_type, false)
         if node.children.len() >= 4:
             idx_name := get_node(node.children[3]).value
-            define_binding(loop_scope, idx_name, TID_INT, false)
+            define_binding(loop_scope, idx_name, tid_int, false)
     else:
         binding_names := node.value
         define_binding(loop_scope, binding_names.trim(), elem_type, false)
@@ -2603,6 +2614,16 @@ fn check_field_access_expression(node: Node, scope_id: Int) -> Int:
             report_error("E209", "tuple index " + field_name + " out of bounds (tuple has " + obj_info.elements.len().to_string() + " elements)")
             return TID_ERR
         return obj_info.elements[idx]
+    if obj_info.kind == "result":
+        tid_bool := lookup_type_id("Bool")
+        if strings_equal(field_name, "is_ok") or strings_equal(field_name, "is_err"):
+            return tid_bool
+        if strings_equal(field_name, "ok"):
+            return obj_info.inner
+        if strings_equal(field_name, "err"):
+            return obj_info.value_type
+        report_error("E209", "result has no field '" + field_name + "'")
+        return TID_ERR
     # enum variant access (e.g. Shape.Circle) — for match patterns
     if obj_info.kind == "enum":
         # this is typically used in patterns, not field access
@@ -3399,9 +3420,9 @@ fn json_string_escape(s: String) -> String:
         ch := s[i]
         if ch == "\"":
             result = result + "\\\""
-        elif ch == "\\":
+        elif ch == chr(92):
             result = result + "\\\\"
-        elif ch == "\n":
+        elif ch == chr(10):
             result = result + "\\n"
         else:
             result = result + ch

@@ -177,7 +177,7 @@ fn check_doc_comment(name: String, node_idx: Int, source: String):
     # since self-hosted AST nodes don't have line numbers,
     # search source for "fn <name>" or "pub fn <name>" to find
     # the declaration line, then check for a comment above it.
-    lines := source.split("\n")
+    lines := source.split(chr(10))
     # search for the function declaration by looking for "fn name("
     search := "fn " + name + "("
     mut found_line := 0 - 1

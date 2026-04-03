@@ -3,15 +3,19 @@
 fn main():
     # TCP listen and close
     server := tcp_listen("127.0.0.1", 18438)
-    print("listen fd: " + (server > 0).to_string())
-    tcp_close(server)
+    print("listen ok: " + server.is_ok.to_string())
+    if server.is_ok:
+        tcp_close(server.ok)
 
     # TCP connect to non-existent server
     bad := tcp_connect("127.0.0.1", 18439)
-    print("bad connect: " + (bad < 0).to_string())
+    print("bad connect failed: " + bad.is_err.to_string())
 
     # DNS resolve
     ip := dns_resolve("localhost")
-    print("localhost: " + ip)
+    if ip.is_ok:
+        print("localhost: " + ip.ok)
+    else:
+        print("localhost lookup failed")
 
     print("net basics work")

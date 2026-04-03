@@ -67,8 +67,11 @@ pub fn add_positional(name: String, description: String):
 
 fn get_field(record: String, idx: Int) -> String:
     parts := record.split("|")
-    if idx < parts.len():
-        return parts[idx]
+    mut i := 0
+    for part in parts:
+        if i == idx:
+            return part
+        i = i + 1
     return ""
 
 fn get_records(data: String) -> List[String]:
@@ -78,43 +81,37 @@ fn find_record(data: String, count: Int, name: String) -> String:
     if count == 0:
         return ""
     recs := get_records(data)
-    mut i := 0
-    while i < recs.len():
-        if get_field(recs[i], 0) == name:
-            return recs[i]
-        i = i + 1
+    for rec in recs:
+        if get_field(rec, 0) == name:
+            return rec
     return ""
 
 fn find_by_short(data: String, count: Int, short: String) -> String:
     if count == 0:
         return ""
     recs := get_records(data)
-    mut i := 0
-    while i < recs.len():
-        if get_field(recs[i], 1) == short:
-            return get_field(recs[i], 0)
-        i = i + 1
+    for rec in recs:
+        if get_field(rec, 1) == short:
+            return get_field(rec, 0)
     return ""
 
 fn rebuild_with_update(data: String, name: String, field_idx: Int, new_val: String) -> String:
     recs := get_records(data)
     mut result := ""
-    n := recs.len()
     mut i := 0
-    while i < n:
-        rec := recs[i]
+    for current_rec in recs:
+        mut rec := current_rec
         if get_field(rec, 0) == name:
             parts := rec.split("|")
             mut rebuilt := ""
-            np := parts.len()
             mut j := 0
-            while j < np:
+            for part in parts:
                 if j > 0:
                     rebuilt = rebuilt + "|"
                 if j == field_idx:
                     rebuilt = rebuilt + new_val
                 else:
-                    rebuilt = rebuilt + parts[j]
+                    rebuilt = rebuilt + part
                 j = j + 1
             rec = rebuilt
         if i > 0:
@@ -132,21 +129,29 @@ fn rebuild_with_update(data: String, name: String, field_idx: Int, new_val: Stri
 pub fn parse():
     a := args()
     mut argv: List[String] := []
-    mut i := 1
-    while i < a.len():
-        argv.push(a[i])
-        i = i + 1
+    mut skipped_program := false
+    for arg in a:
+        if skipped_program:
+            argv.push(arg)
+        else:
+            skipped_program = true
     parse_list(argv)
 
 pub fn parse_list(argv: List[String]):
     mut pi := 0
-    mut i := 0
-    while i < argv.len():
-        # Copy arg to local var so string methods work
-        arg := "" + argv[i]
+    mut pending_long := ""
+    mut pending_short := ""
+    for arg in argv:
+        if pending_long != "":
+            opts_data = rebuild_with_update(opts_data, pending_long, 3, arg)
+            pending_long = ""
+            continue
+        if pending_short != "":
+            opts_data = rebuild_with_update(opts_data, pending_short, 3, arg)
+            pending_short = ""
+            continue
         if arg == "--help" or arg == "-h":
             print(help_text())
-            i = i + 1
         elif arg.starts_with("--"):
             name := arg.substring(2, arg.len())
             eq := find_eq(name)
@@ -160,14 +165,9 @@ pub fn parse_list(argv: List[String]):
             elif find_record(flags_data, flag_count, name) != "":
                 flags_data = rebuild_with_update(flags_data, name, 3, "1")
             elif find_record(opts_data, opt_count, name) != "":
-                if i + 1 < argv.len():
-                    i = i + 1
-                    opts_data = rebuild_with_update(opts_data, name, 3, "" + argv[i])
-                else:
-                    add_error("--" + name + " requires a value")
+                pending_long = name
             else:
                 add_error("unknown option: --" + name)
-            i = i + 1
         elif arg.starts_with("-") and arg != "-":
             short := arg.substring(1, arg.len())
             lf := find_by_short(flags_data, flag_count, short)
@@ -175,21 +175,19 @@ pub fn parse_list(argv: List[String]):
             if lf != "":
                 flags_data = rebuild_with_update(flags_data, lf, 3, "1")
             elif lo != "":
-                if i + 1 < argv.len():
-                    i = i + 1
-                    opts_data = rebuild_with_update(opts_data, lo, 3, "" + argv[i])
-                else:
-                    add_error("-" + short + " requires a value")
+                pending_short = lo
             else:
                 add_error("unknown option: -" + short)
-            i = i + 1
         else:
             if pi < pos_count:
                 pos_data = rebuild_with_update_by_index(pos_data, pi, 2, arg)
                 pi = pi + 1
             else:
                 add_error("unexpected argument: " + arg)
-            i = i + 1
+    if pending_long != "":
+        add_error("--" + pending_long + " requires a value")
+    if pending_short != "":
+        add_error("-" + pending_short + " requires a value")
 
 fn find_eq(s: String) -> Int:
     mut i := 0
@@ -202,22 +200,20 @@ fn find_eq(s: String) -> Int:
 fn rebuild_with_update_by_index(data: String, rec_idx: Int, field_idx: Int, new_val: String) -> String:
     recs := get_records(data)
     mut result := ""
-    n := recs.len()
     mut i := 0
-    while i < n:
-        rec := recs[i]
+    for current_rec in recs:
+        mut rec := current_rec
         if i == rec_idx:
             parts := rec.split("|")
             mut rebuilt := ""
-            np := parts.len()
             mut j := 0
-            while j < np:
+            for part in parts:
                 if j > 0:
                     rebuilt = rebuilt + "|"
                 if j == field_idx:
                     rebuilt = rebuilt + new_val
                 else:
-                    rebuilt = rebuilt + parts[j]
+                    rebuilt = rebuilt + part
                 j = j + 1
             rec = rebuilt
         if i > 0:
@@ -230,7 +226,7 @@ fn rebuild_with_update_by_index(data: String, rec_idx: Int, field_idx: Int, new_
 
 fn add_error(msg: String):
     if error_count > 0:
-        sep := error_data + "\n"
+        sep := error_data + chr(10)
         error_data = sep + msg
     else:
         error_data = msg
@@ -269,68 +265,56 @@ pub fn get_errors() -> String:
 # ===============================================================
 
 pub fn help_text() -> String:
-    mut lines: List[String] := []
-    lines.push(app_name + " - " + app_desc)
-    lines.push("")
+    nl := chr(10)
+    mut out := app_name + " - " + app_desc + nl + nl
 
     mut usage := "Usage: " + app_name
-    if flag_count > 0 or opt_count > 0:
+    mut has_options := false
+    if flag_count > 0:
+        has_options = true
+    if opt_count > 0:
+        has_options = true
+    if has_options:
         usage = usage + " [options]"
     if pos_count > 0:
         precs := get_records(pos_data)
-        mut i := 0
-        while i < precs.len():
-            usage = usage + " <" + get_field(precs[i], 0) + ">"
-            i = i + 1
-    lines.push(usage)
+        for rec in precs:
+            usage = usage + " <" + get_field(rec, 0) + ">"
+    out = out + usage
 
     if pos_count > 0:
-        lines.push("")
-        lines.push("Arguments:")
+        out = out + nl + nl + "Arguments:"
         precs := get_records(pos_data)
-        mut i := 0
-        while i < precs.len():
-            pn := get_field(precs[i], 0)
-            pd := get_field(precs[i], 1)
-            lines.push("  " + pn.pad_right(20, " ") + pd)
-            i = i + 1
+        for rec in precs:
+            pn := get_field(rec, 0)
+            pd := get_field(rec, 1)
+            out = out + nl + "  " + pn + " - " + pd
 
-    if flag_count > 0 or opt_count > 0:
-        lines.push("")
-        lines.push("Options:")
+    if has_options:
+        out = out + nl + nl + "Options:"
         if flag_count > 0:
             frecs := get_records(flags_data)
-            mut i := 0
-            while i < frecs.len():
-                fn_name := get_field(frecs[i], 0)
-                fs := get_field(frecs[i], 1)
-                fd := get_field(frecs[i], 2)
-                mut label := "  "
+            for rec in frecs:
+                fn_name := get_field(rec, 0)
+                fs := get_field(rec, 1)
+                fd := get_field(rec, 2)
+                mut label := "  --" + fn_name
                 if fs != "":
-                    label = label + "-" + fs + ", "
-                else:
-                    label = label + "    "
-                label = label + "--" + fn_name
-                lines.push(label.pad_right(24, " ") + fd)
-                i = i + 1
+                    label = "  -" + fs + ", --" + fn_name
+                out = out + nl + label + " - " + fd
         if opt_count > 0:
             orecs := get_records(opts_data)
-            mut i := 0
-            while i < orecs.len():
-                on := get_field(orecs[i], 0)
-                os := get_field(orecs[i], 1)
-                od := get_field(orecs[i], 2)
-                odef := get_field(orecs[i], 3)
-                mut label := "  "
+            for rec in orecs:
+                on := get_field(rec, 0)
+                os := get_field(rec, 1)
+                od := get_field(rec, 2)
+                odef := get_field(rec, 3)
+                mut label := "  --" + on + " <value>"
                 if os != "":
-                    label = label + "-" + os + ", "
-                else:
-                    label = label + "    "
-                label = label + "--" + on + " <value>"
-                mut line := label.pad_right(24, " ") + od
+                    label = "  -" + os + ", --" + on + " <value>"
+                mut line := label + " - " + od
                 if odef != "":
                     line = line + " (default: " + odef + ")"
-                lines.push(line)
-                i = i + 1
+                out = out + nl + line
 
-    return lines.join("\n")
+    return out

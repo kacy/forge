@@ -8,5 +8,5 @@ fn main():
         print("has b")
     if m.contains_key("c"):
         print("has c")
-    print(m.get("a"))
-    print(m.get("b"))
+    print(m["a"].to_string())
+    print(m["b"].to_string())
