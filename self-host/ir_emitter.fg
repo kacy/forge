@@ -36,8 +36,8 @@ from ast import get_node, node_kind, node_value, Node
 # --- type knowledge constants (single source of truth) ---
 FLOAT_RETURNING_FUNCS := "pow,sqrt,floor,ceil,round,to_float,get_float,toml_get_float"
 BOOL_RETURNING_FUNCS := "file_exists,dir_exists,get_bool,object_has,has,toml_get_bool,toml_has"
-INT_RETURNING_FUNCS := "abs,min,max,clamp,len,fnv1a,ord,exec,toml_get_int,toml_array_len"
-STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,from_hex,to_hex,b64_encode,b64_decode,chr,read_file,env,path_join,path_dir,path_base,path_ext,path_stem,scheme,host,query,fragment,decode,exec_output,type_of,get_string,toml_type_of,toml_get_string"
+INT_RETURNING_FUNCS := "abs,min,max,clamp,len,fnv1a,ord,exec,toml_get_int,toml_array_len,url_parse,url_port"
+STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,from_hex,to_hex,b64_encode,b64_decode,chr,read_file,env,path_join,path_dir,path_base,path_ext,path_stem,scheme,host,query,fragment,decode,exec_output,type_of,get_string,toml_type_of,toml_get_string,url_scheme,url_host,url_path,url_query,url_fragment,url_to_string,url_encode,url_decode"
 LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks"
 LIST_STRING_RETURNING_FUNCS := "sort_strings,zip,enumerate,toml_keys"
 BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_is_empty,list_contains,list_is_empty"
@@ -1578,6 +1578,8 @@ fn ir_collect_imports(root_idx: Int):
                     prefix = "toml"
                 elif mod_path == "std.os.path":
                     prefix = "path"
+                elif mod_path == "std.net.url":
+                    prefix = "url"
                 if prefix.len() > 0:
                     mut pi := 1
                     while pi < parts.len():
