@@ -1062,9 +1062,12 @@ fn parse_for_stmt() -> Int:
     binding_tok := expect("identifier")
 
     mut label := binding_tok.value
+    mut loop_var := add_leaf_with_position("loop_var", binding_tok.value)
+    mut loop_idx := -1
     if match_tok("comma"):
         idx_tok := expect("identifier")
         label = binding_tok.value + ", " + idx_tok.value
+        loop_idx = add_leaf_with_position("loop_index", idx_tok.value)
 
     expect("kw_in")
     iterable := parse_expression()
@@ -1072,6 +1075,9 @@ fn parse_for_stmt() -> Int:
     body := parse_block()
 
     mut children: List[Int] := [iterable, body]
+    children.push(loop_var)
+    if loop_idx >= 0:
+        children.push(loop_idx)
     return add_node_with_position("for_stmt", label, children)
 
 fn parse_while_stmt() -> Int:
@@ -1252,19 +1258,6 @@ fn parse_fn_decl() -> Int:
 
     mut children: List[Int] := []
 
-    # add generic params to name
-    mut name := name_tok.value
-    if generics.len() > 0:
-        name = name + "["
-        mut first := true
-        for g in generics:
-            gnode := get_node(g)
-            if not first:
-                name = name + ", "
-            name = name + gnode.value
-            first = false
-        name = name + "]"
-
     # store generic_param nodes so checker can access bounds
     for g in generics:
         children.push(g)
@@ -1282,7 +1275,7 @@ fn parse_fn_decl() -> Int:
     mut body_children: List[Int] := [body]
     children.push(add_node_with_position("body", "", body_children))
 
-    return add_node_with_position("fn_decl", name, children)
+    return add_node_with_position("fn_decl", name_tok.value, children)
 
 fn parse_test_decl() -> Int:
     advance_token()
@@ -1358,18 +1351,6 @@ fn parse_struct_decl() -> Int:
     name_tok := expect("identifier")
     generics := parse_optional_generic_params()
 
-    mut name := name_tok.value
-    if generics.len() > 0:
-        name = name + "["
-        mut first := true
-        for g in generics:
-            gnode := get_node(g)
-            if not first:
-                name = name + ", "
-            name = name + gnode.value
-            first = false
-        name = name + "]"
-
     expect("colon")
     expect("newline")
     expect("indent")
@@ -1387,7 +1368,7 @@ fn parse_struct_decl() -> Int:
         skip_newlines()
     expect("dedent")
 
-    return add_node_with_position("struct_decl", name, children)
+    return add_node_with_position("struct_decl", name_tok.value, children)
 
 fn parse_struct_field() -> Int:
     mut modifiers := ""
@@ -1414,18 +1395,6 @@ fn parse_enum_decl() -> Int:
     name_tok := expect("identifier")
     generics := parse_optional_generic_params()
 
-    mut name := name_tok.value
-    if generics.len() > 0:
-        name = name + "["
-        mut first := true
-        for g in generics:
-            gnode := get_node(g)
-            if not first:
-                name = name + ", "
-            name = name + gnode.value
-            first = false
-        name = name + "]"
-
     expect("colon")
     expect("newline")
     expect("indent")
@@ -1443,7 +1412,7 @@ fn parse_enum_decl() -> Int:
         skip_newlines()
     expect("dedent")
 
-    return add_node_with_position("enum_decl", name, children)
+    return add_node_with_position("enum_decl", name_tok.value, children)
 
 fn parse_enum_variant() -> Int:
     name_tok := expect("identifier")
