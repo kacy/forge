@@ -220,7 +220,7 @@ fn ir_collect_strings(idx: Int):
             ir_str(node.value)
         kids := node.children
         mut i := 0
-        while i < kids.len():
+        while i < node.children.len():
             stack.push(kids[i])
             i = i + 1
 
@@ -255,13 +255,23 @@ fn ir_retkind(type_name: String) -> String:
 fn ir_emit_func_header(name: String, param_count: Int, ret_type: String):
     ir_emit("func " + name + " " + param_count.to_string() + " " + ir_retkind(ret_type))
 
-fn ir_emit_call(result_reg: Int, fname: String, ret_type: String, arg_regs: List[Int]):
-    mut call_line := "call " + result_reg.to_string() + " " + fname + " " + ir_retkind(ret_type) + " " + arg_regs.len().to_string()
-    mut i := 0
-    while i < arg_regs.len():
-        call_line = call_line + " " + arg_regs[i].to_string()
-        i = i + 1
+fn ir_emit_call_text(result_reg: Int, fname: String, ret_type: String, arg_count: Int, arg_text: String):
+    mut call_line := "call " + result_reg.to_string() + " " + fname + " " + ir_retkind(ret_type) + " " + arg_count.to_string()
+    if arg_text.len() > 0:
+        call_line = call_line + arg_text
     ir_emit(call_line)
+
+fn ir_emit_call0(result_reg: Int, fname: String, ret_type: String):
+    ir_emit_call_text(result_reg, fname, ret_type, 0, "")
+
+fn ir_emit_call1(result_reg: Int, fname: String, ret_type: String, arg0: Int):
+    ir_emit_call_text(result_reg, fname, ret_type, 1, " " + arg0.to_string())
+
+fn ir_emit_call2(result_reg: Int, fname: String, ret_type: String, arg0: Int, arg1: Int):
+    ir_emit_call_text(result_reg, fname, ret_type, 2, " " + arg0.to_string() + " " + arg1.to_string())
+
+fn ir_emit_call3(result_reg: Int, fname: String, ret_type: String, arg0: Int, arg1: Int, arg2: Int):
+    ir_emit_call_text(result_reg, fname, ret_type, 3, " " + arg0.to_string() + " " + arg1.to_string() + " " + arg2.to_string())
 
 fn ir_unpack_field_index(meta: String) -> Int:
     mut value := 0
@@ -354,6 +364,12 @@ fn ir_infer_type(idx: Int) -> String:
                 fname = ir_import_renames[fname]
             if ir_struct_names.contains_key(fname):
                 return fname
+            if fname == "get_node":
+                return "Node"
+            if fname == "advance_token" or fname == "expect":
+                return "Token"
+            if fname == "ti_primitive" or fname == "ti_struct" or fname == "ti_enum" or fname == "ti_function" or fname == "ti_optional" or fname == "ti_result" or fname == "ti_tuple" or fname == "ti_list" or fname == "ti_map" or fname == "ti_set" or fname == "ti_task" or fname == "ti_channel" or fname == "get_type_info":
+                return "TypeInfo"
             if FLOAT_RETURNING_FUNCS.contains(fname):
                 return "float"
             if BOOL_RETURNING_FUNCS.contains(fname):
@@ -440,7 +456,7 @@ fn ir_emit_value_for_target(val_idx: Int, target_type: String) -> Int:
     vn := get_node(val_idx)
     if vn.kind == "map" and vn.children.len() == 0 and target_type == "map_int":
         r := ir_reg()
-        ir_emit_call(r, "__map_new_int", "map_int", [])
+        ir_emit_call0(r, "__map_new_int", "map_int")
         return r
     return ir_expr(val_idx)
 
@@ -490,7 +506,7 @@ fn ir_emit_method_call(idx: Int) -> Int:
                 recv_name := recv_node.value
                 if recv_name == "source" or recv_name == "KEYWORDS" or recv_name == "LBRACE" or recv_name == "RBRACE" or recv_name.ends_with("_kind") or recv_name.ends_with("_value") or recv_name.ends_with("_text"):
                     emit_name = "string_len"
-                elif recv_name == "tokens" or recv_name == "sub_tokens" or recv_name.ends_with("_tokens") or recv_name.ends_with("_stack") or recv_name.starts_with("pending_") or recv_name.starts_with("_tok_") or recv_name == "args" or recv_name == "params" or recv_name == "param_nodes" or recv_name == "types" or recv_name == "parts" or recv_name == "fields" or recv_name == "patterns" or recv_name == "entries" or recv_name == "elements" or recv_name == "children" or recv_name == "stmts" or recv_name == "imports" or recv_name == "decls" or recv_name == "generics" or recv_name == "bounds" or recv_name == "names" or recv_name.ends_with("_types") or recv_name.ends_with("_fields") or recv_name.ends_with("_entries") or recv_name.ends_with("_elements") or recv_name.ends_with("_patterns") or recv_name.ends_with("_children") or recv_name.ends_with("_params") or recv_name.ends_with("_bounds") or recv_name.ends_with("_names") or recv_name.ends_with("_variants"):
+                elif recv_name == "tokens" or recv_name == "sub_tokens" or recv_name == "items" or recv_name.ends_with("_tokens") or recv_name.ends_with("_stack") or recv_name.starts_with("pending_") or recv_name.starts_with("_tok_") or recv_name.starts_with("_kids") or recv_name == "args" or recv_name == "params" or recv_name == "param_nodes" or recv_name == "types" or recv_name == "parts" or recv_name == "fields" or recv_name == "patterns" or recv_name == "entries" or recv_name == "elements" or recv_name == "children" or recv_name == "kids" or recv_name == "stmts" or recv_name == "imports" or recv_name == "decls" or recv_name == "generics" or recv_name == "bounds" or recv_name == "names" or recv_name.ends_with("_types") or recv_name.ends_with("_fields") or recv_name.ends_with("_entries") or recv_name.ends_with("_elements") or recv_name.ends_with("_patterns") or recv_name.ends_with("_children") or recv_name.ends_with("_params") or recv_name.ends_with("_bounds") or recv_name.ends_with("_names") or recv_name.ends_with("_variants"):
                     emit_name = "forge_list_len"
                 else:
                     emit_name = "string_len"
@@ -560,9 +576,9 @@ fn ir_emit_method_call(idx: Int) -> Int:
     mut obj_r := 0 - 1
     mut arg_regs: List[Int] := []
     mut _fi3 := 0
-    _kids3 := node.children
-    while _fi3 < _kids3.len():
-        child := _kids3[_fi3]
+    kids3_children := node.children
+    while _fi3 < kids3_children.len():
+        child := kids3_children[_fi3]
         if obj_r < 0:
             obj_r = ir_expr(child)
         else:
@@ -585,7 +601,12 @@ fn ir_emit_method_call(idx: Int) -> Int:
     mut ret_type := ir_infer_type(idx)
     if VOID_METHODS.contains(emit_name):
         ret_type = "void"
-    ir_emit_call(r, emit_name, ret_type, call_regs)
+    mut call_text := " " + obj_r.to_string()
+    mut ci2 := 0
+    while ci2 < arg_regs.len():
+        call_text = call_text + " " + arg_regs[ci2].to_string()
+        ci2 = ci2 + 1
+    ir_emit_call_text(r, emit_name, ret_type, call_regs.len(), call_text)
     if VOID_METHODS.contains(emit_name):
         return obj_r
     return r
@@ -596,9 +617,9 @@ fn ir_emit_string_interp(idx: Int) -> Int:
     # concatenate literal parts and expression parts
     mut result_r := 0 - 1
     mut _fi4 := 0
-    _kids4 := node.children
-    while _fi4 < _kids4.len():
-        child := _kids4[_fi4]
+    kids4_children := node.children
+    while _fi4 < kids4_children.len():
+        child := kids4_children[_fi4]
         mut cn := get_node(child)
         mut part_r := 0
         if cn.kind == "lit":
@@ -611,20 +632,20 @@ fn ir_emit_string_interp(idx: Int) -> Int:
             expr_type := ir_infer_type(child)
             if expr_type == "bool":
                 br := ir_reg()
-                ir_emit_call(br, "bool_to_string", "string", [part_r])
+                ir_emit_call1(br, "bool_to_string", "string", part_r)
                 part_r = br
             elif expr_type == "float":
                 fr := ir_reg()
-                ir_emit_call(fr, "float_to_string", "string", [part_r])
+                ir_emit_call1(fr, "float_to_string", "string", part_r)
                 part_r = fr
             elif expr_type == "int":
                 ts_r := ir_reg()
-                ir_emit_call(ts_r, "to_string", "string", [part_r])
+                ir_emit_call1(ts_r, "to_string", "string", part_r)
                 part_r = ts_r
             elif expr_type == "":
                 # unknown type — use smart_to_string for safety
                 ts_r := ir_reg()
-                ir_emit_call(ts_r, "smart_to_string", "string", [part_r])
+                ir_emit_call1(ts_r, "smart_to_string", "string", part_r)
                 part_r = ts_r
         if result_r < 0:
             result_r = part_r
@@ -648,9 +669,9 @@ fn ir_emit_lambda(idx: Int) -> Int:
     mut lparams: List[String] := []
     mut lbody_idx := 0 - 1
     mut _fi5 := 0
-    _kids5 := node.children
-    while _fi5 < _kids5.len():
-        child := _kids5[_fi5]
+    kids5_children := node.children
+    while _fi5 < kids5_children.len():
+        child := kids5_children[_fi5]
         mut cn := get_node(child)
         if cn.kind == "param":
             lparams.push(cn.value)
@@ -668,7 +689,7 @@ fn ir_emit_lambda(idx: Int) -> Int:
         ir_emit("load " + cap_val.to_string() + " " + captures[ci])
         slot := ir_reg()
         ir_emit("iconst " + slot.to_string() + " " + ci.to_string())
-        ir_emit_call(ir_reg(), "__closure_set_env", "void", [slot, cap_val])
+        ir_emit_call2(ir_reg(), "__closure_set_env", "void", slot, cap_val)
         ci = ci + 1
 
     # save current state and emit lambda to deferred buffer
@@ -693,7 +714,7 @@ fn ir_emit_lambda(idx: Int) -> Int:
         cap_r := ir_reg()
         slot_r := ir_reg()
         ir_emit("iconst " + slot_r.to_string() + " " + ce.to_string())
-        ir_emit_call(cap_r, "__closure_get_env", "unknown", [slot_r])
+        ir_emit_call1(cap_r, "__closure_get_env", "unknown", slot_r)
         ir_var_regs.insert(captures[ce], cap_r)
         ir_emit("store " + captures[ce] + " " + cap_r.to_string())
         ce = ce + 1
@@ -807,14 +828,14 @@ fn ir_expr(idx: Int) -> Int:
             ir_emit("mod " + r.to_string() + " " + left_r.to_string() + " " + right_r.to_string())
         elif op == "eq":
             if is_str_op:
-                ir_emit_call(r, "__str_eq", "bool", [left_r, right_r])
+                ir_emit_call2(r, "__str_eq", "bool", left_r, right_r)
             else:
                 ir_emit("eq " + r.to_string() + " " + left_r.to_string() + " " + right_r.to_string())
         elif op == "neq":
             if is_str_op:
                 # str_neq = 1 - str_eq
                 eq_r := ir_reg()
-                ir_emit_call(eq_r, "__str_eq", "bool", [left_r, right_r])
+                ir_emit_call2(eq_r, "__str_eq", "bool", left_r, right_r)
                 one_r := ir_reg()
                 ir_emit("iconst " + one_r.to_string() + " 1")
                 ir_emit("sub " + r.to_string() + " " + one_r.to_string() + " " + eq_r.to_string())
@@ -851,9 +872,9 @@ fn ir_expr(idx: Int) -> Int:
         mut fname := "unknown"
         mut arg_regs: List[Int] := []
         mut _fi6 := 0
-        _kids6 := node.children
-        while _fi6 < _kids6.len():
-            child := _kids6[_fi6]
+        kids6_children := node.children
+        while _fi6 < kids6_children.len():
+            child := kids6_children[_fi6]
             child_kind := node_kind(child)
             if child_kind == "ident" and fname == "unknown":
                 cn := get_node(child)
@@ -870,7 +891,12 @@ fn ir_expr(idx: Int) -> Int:
             fname = ir_import_renames[fname]
 
         r := ir_reg()
-        ir_emit_call(r, fname, ir_infer_type(idx), arg_regs)
+        mut call_text := ""
+        mut ai := 0
+        while ai < arg_regs.len():
+            call_text = call_text + " " + arg_regs[ai].to_string()
+            ai = ai + 1
+        ir_emit_call_text(r, fname, ir_infer_type(idx), arg_regs.len(), call_text)
         return r
 
     else:
@@ -896,44 +922,44 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
                 if k_node.kind == "int_lit" or k_node.kind == "int":
                     has_int_keys = true
         if has_int_keys:
-            ir_emit_call(map_r, "__map_new_int", "map_int", [])
+            ir_emit_call0(map_r, "__map_new_int", "map_int")
         else:
-            ir_emit_call(map_r, "__map_new", "map", [])
+            ir_emit_call0(map_r, "__map_new", "map")
         # insert each entry (children are entry nodes with key/value pairs)
         mut _fi7 := 0
-        _kids7 := node.children
-        while _fi7 < _kids7.len():
-            child := _kids7[_fi7]
+        kids7_children := node.children
+        while _fi7 < kids7_children.len():
+            child := kids7_children[_fi7]
             entry := get_node(child)
             if entry.kind == "entry" and entry.children.len() >= 2:
                 k_r := ir_expr(entry.children[0])
                 v_r := ir_expr(entry.children[1])
-                ir_emit_call(ir_reg(), "insert", "void", [map_r, k_r, v_r])
+                ir_emit_call3(ir_reg(), "insert", "void", map_r, k_r, v_r)
             _fi7 = _fi7 + 1
         return map_r
 
     if kind == "set":
         set_r := ir_reg()
-        ir_emit_call(set_r, "__set_new", "set", [])
+        ir_emit_call0(set_r, "__set_new", "set")
         mut _fi8 := 0
-        _kids8 := node.children
-        while _fi8 < _kids8.len():
-            child := _kids8[_fi8]
+        kids8_children := node.children
+        while _fi8 < kids8_children.len():
+            child := kids8_children[_fi8]
             elem_r := ir_expr(child)
-            ir_emit_call(ir_reg(), "set_add", "void", [set_r, elem_r])
+            ir_emit_call2(ir_reg(), "set_add", "void", set_r, elem_r)
             _fi8 = _fi8 + 1
         return set_r
 
     if kind == "list":
         # list literal: create list, push each element
         list_r := ir_reg()
-        ir_emit_call(list_r, "__list_new", "list", [])
+        ir_emit_call0(list_r, "__list_new", "list")
         mut _fi9 := 0
-        _kids9 := node.children
-        while _fi9 < _kids9.len():
-            child := _kids9[_fi9]
+        kids9_children := node.children
+        while _fi9 < kids9_children.len():
+            child := kids9_children[_fi9]
             elem_r := ir_expr(child)
-            ir_emit_call(ir_reg(), "__list_push", "void", [list_r, elem_r])
+            ir_emit_call2(ir_reg(), "__list_push", "void", list_r, elem_r)
             _fi9 = _fi9 + 1
         return list_r
 
@@ -941,15 +967,15 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         # tuple literal: allocate struct and store elements
         mut elem_regs: List[Int] := []
         mut _fi10 := 0
-        _kids10 := node.children
-        while _fi10 < _kids10.len():
-            child := _kids10[_fi10]
+        kids10_children := node.children
+        while _fi10 < kids10_children.len():
+            child := kids10_children[_fi10]
             elem_regs.push(ir_expr(child))
             _fi10 = _fi10 + 1
         r := ir_reg()
         nf := ir_reg()
         ir_emit("iconst " + nf.to_string() + " " + elem_regs.len().to_string())
-        ir_emit_call(r, "__struct_alloc", "struct:tuple", [nf])
+        ir_emit_call1(r, "__struct_alloc", "struct:tuple", nf)
         mut ti := 0
         while ti < elem_regs.len():
             ir_emit("sstore " + r.to_string() + " " + ti.to_string() + " " + elem_regs[ti].to_string())
@@ -962,9 +988,9 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         # count fields
         mut field_regs: List[Int] := []
         mut _fi11 := 0
-        _kids11 := node.children
-        while _fi11 < _kids11.len():
-            child := _kids11[_fi11]
+        kids11_children := node.children
+        while _fi11 < kids11_children.len():
+            child := kids11_children[_fi11]
             cn := get_node(child)
             if cn.kind == "field_init":
                 if cn.children.len() > 0:
@@ -976,7 +1002,7 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
             _fi11 = _fi11 + 1
         # emit struct alloc + field stores
         r := ir_reg()
-        ir_emit_call(r, "__struct_alloc", "struct:" + sname, [field_regs.len()])
+        ir_emit_call1(r, "__struct_alloc", "struct:" + sname, field_regs.len())
         mut fi := 0
         while fi < field_regs.len():
             ir_emit("sstore " + r.to_string() + " " + fi.to_string() + " " + field_regs[fi].to_string())
@@ -1015,9 +1041,9 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
                 mut spawn_fname := "unknown"
                 mut spawn_arg_r := 0 - 1
                 mut _fi12 := 0
-                _kids12 := inner.children
-                while _fi12 < _kids12.len():
-                    sc := _kids12[_fi12]
+                kids12_children := inner.children
+                while _fi12 < kids12_children.len():
+                    sc := kids12_children[_fi12]
                     scn := get_node(sc)
                     if scn.kind == "ident" and spawn_fname == "unknown":
                         spawn_fname = scn.value
@@ -1031,7 +1057,7 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
                 fn_r := ir_reg()
                 ir_emit("funcref " + fn_r.to_string() + " " + spawn_fname)
                 r := ir_reg()
-                ir_emit_call(r, "spawn", "unknown", [fn_r, spawn_arg_r])
+                ir_emit_call2(r, "spawn", "unknown", fn_r, spawn_arg_r)
                 return r
         r := ir_reg()
         ir_emit("iconst " + r.to_string() + " 0")
@@ -1041,7 +1067,7 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         if node.children.len() > 0:
             task_r := ir_expr(node.children[0])
             r := ir_reg()
-            ir_emit_call(r, "await", "unknown", [task_r])
+            ir_emit_call1(r, "await", "unknown", task_r)
             return r
         r := ir_reg()
         ir_emit("iconst " + r.to_string() + " 0")
@@ -1121,13 +1147,13 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
             elif ir_global_map_int_names.contains(oname):
                 is_map_int_idx = true
         if is_str_idx:
-            ir_emit_call(r, "char_at", "string", [obj_r, idx_r])
+            ir_emit_call2(r, "char_at", "string", obj_r, idx_r)
         elif is_map_int_idx:
-            ir_emit_call(r, "map_get_ikey", "int", [obj_r, idx_r])
+            ir_emit_call2(r, "map_get_ikey", "int", obj_r, idx_r)
         elif is_map_idx:
-            ir_emit_call(r, "map_get", "unknown", [obj_r, idx_r])
+            ir_emit_call2(r, "map_get", "unknown", obj_r, idx_r)
         else:
-            ir_emit_call(r, "__list_get", ir_infer_type(idx), [obj_r, idx_r])
+            ir_emit_call2(r, "__list_get", ir_infer_type(idx), obj_r, idx_r)
         return r
 
     # fallback
@@ -1176,9 +1202,9 @@ fn ir_stmt(idx: Int):
         mut val_idx := 0 - 1
         mut type_idx := 0 - 1
         mut _fi13 := 0
-        _kids13 := node.children
-        while _fi13 < _kids13.len():
-            child := _kids13[_fi13]
+        kids13_children := node.children
+        while _fi13 < kids13_children.len():
+            child := kids13_children[_fi13]
             cn := get_node(child)
             if cn.kind == "type" or cn.kind == "generic_type":
                 type_idx = child
@@ -1245,9 +1271,9 @@ fn ir_stmt_control(idx: Int, node: Node):
         mut elif_indices: List[Int] := []
         mut else_idx := 0 - 1
         mut _fi15 := 0
-        _kids15 := node.children
-        while _fi15 < _kids15.len():
-            child := _kids15[_fi15]
+        kids15_children := node.children
+        while _fi15 < kids15_children.len():
+            child := kids15_children[_fi15]
             cn := get_node(child)
             if cond_idx < 0 and cn.kind != "then" and cn.kind != "else" and cn.kind != "elif":
                 cond_idx = child
@@ -1283,9 +1309,9 @@ fn ir_stmt_control(idx: Int, node: Node):
             mut elif_cond := 0 - 1
             mut elif_body := 0 - 1
             mut _fi16 := 0
-            _kids16 := elif_node.children
-            while _fi16 < _kids16.len():
-                ec := _kids16[_fi16]
+            kids16_children := elif_node.children
+            while _fi16 < kids16_children.len():
+                ec := kids16_children[_fi16]
                 ecn := get_node(ec)
                 if elif_cond < 0 and ecn.kind != "block" and ecn.kind != "then":
                     elif_cond = ec
@@ -1358,9 +1384,9 @@ fn ir_stmt_control(idx: Int, node: Node):
             # __len = len(iter)
             len_r := ir_reg()
             if is_string_iter:
-                ir_emit_call(len_r, "string_len", "int", [iter_r])
+                ir_emit_call1(len_r, "string_len", "int", iter_r)
             else:
-                ir_emit_call(len_r, "len", "int", [iter_r])
+                ir_emit_call1(len_r, "len", "int", iter_r)
             # __i = 0
             idx_r := ir_reg()
             ir_emit("iconst " + idx_r.to_string() + " 0")
@@ -1388,10 +1414,10 @@ fn ir_stmt_control(idx: Int, node: Node):
             ir_emit("load " + idx2.to_string() + " " + fi)
             elem_r := ir_reg()
             if is_string_iter:
-                ir_emit_call(elem_r, "char_at", "string", [it_r, idx2])
+                ir_emit_call2(elem_r, "char_at", "string", it_r, idx2)
                 ir_var_types.insert(var_name, "string")
             else:
-                ir_emit_call(elem_r, "__list_get", "unknown", [it_r, idx2])
+                ir_emit_call2(elem_r, "__list_get", "unknown", it_r, idx2)
             ir_emit("store " + var_name + " " + elem_r.to_string())
             # store index variable if present
             if idx_var_name.len() > 0:
@@ -1462,9 +1488,9 @@ fn ir_block(idx: Int):
             mut val_idx := 0 - 1
             mut type_ann := ""
             mut _bi1 := 0
-            _bkids1 := node.children
-            while _bi1 < _bkids1.len():
-                child := _bkids1[_bi1]
+            bkids1_children := node.children
+            while _bi1 < bkids1_children.len():
+                child := bkids1_children[_bi1]
                 cn := get_node(child)
                 if cn.kind == "type":
                     type_ann = cn.value
@@ -1476,9 +1502,9 @@ fn ir_block(idx: Int):
             mut is_int_key_map := false
             if type_ann == "Map":
                 mut _bi2 := 0
-                _bkids2 := node.children
-                while _bi2 < _bkids2.len():
-                    child2 := _bkids2[_bi2]
+                bkids2_children := node.children
+                while _bi2 < bkids2_children.len():
+                    child2 := bkids2_children[_bi2]
                     cn2 := get_node(child2)
                     if cn2.kind == "generic_type" and cn2.children.len() > 0:
                         first_type := get_node(cn2.children[0])
@@ -1674,16 +1700,16 @@ pub fn emit_ir(root_idx: Int) -> String:
     # collect type aliases
     ir_type_aliases = {}
     mut _fi21 := 0
-    _kids21 := root.children
-    while _fi21 < _kids21.len():
-        child := _kids21[_fi21]
+    kids21_children := root.children
+    while _fi21 < kids21_children.len():
+        child := kids21_children[_fi21]
         mut cn := get_node(child)
         if cn.kind == "type_alias":
             mut target := ""
             mut _fi33 := 0
-            _kids33 := cn.children
-            while _fi33 < _kids33.len():
-                tc := _kids33[_fi33]
+            kids33_children := cn.children
+            while _fi33 < kids33_children.len():
+                tc := kids33_children[_fi33]
                 tn := get_node(tc)
                 if tn.kind == "type":
                     target = tn.value
@@ -1697,9 +1723,9 @@ pub fn emit_ir(root_idx: Int) -> String:
     ir_struct_field_lookup = {}
     ir_struct_field_index_lookup = {}
     mut _fi22 := 0
-    _kids22 := root.children
-    while _fi22 < _kids22.len():
-        child := _kids22[_fi22]
+    kids22_children := root.children
+    while _fi22 < kids22_children.len():
+        child := kids22_children[_fi22]
         mut cn := get_node(child)
         if cn.kind == "pub" and cn.children.len() > 0:
             cn = get_node(cn.children[0])
@@ -1710,9 +1736,9 @@ pub fn emit_ir(root_idx: Int) -> String:
                 sname = sname.substring(0, sname.index_of("["))
             mut field_names: List[String] := []
             mut _fi34 := 0
-            _kids34 := cn.children
-            while _fi34 < _kids34.len():
-                fc := _kids34[_fi34]
+            kids34_children := cn.children
+            while _fi34 < kids34_children.len():
+                fc := kids34_children[_fi34]
                 fn_node := get_node(fc)
                 if fn_node.kind == "field":
                     mut field_name := fn_node.value
@@ -1732,9 +1758,9 @@ pub fn emit_ir(root_idx: Int) -> String:
         _fi22 = _fi22 + 1
     # register type aliases that point to structs
     mut _fi23 := 0
-    _kids23 := root.children
-    while _fi23 < _kids23.len():
-        child := _kids23[_fi23]
+    kids23_children := root.children
+    while _fi23 < kids23_children.len():
+        child := kids23_children[_fi23]
         mut cn := get_node(child)
         if cn.kind == "type_alias":
             aname := cn.value
@@ -1752,23 +1778,23 @@ pub fn emit_ir(root_idx: Int) -> String:
     # collect function return types (unwrap pub wrappers)
     ir_func_returns = {}
     mut _fi24 := 0
-    _kids24 := root.children
-    while _fi24 < _kids24.len():
-        child := _kids24[_fi24]
+    kids24_children := root.children
+    while _fi24 < kids24_children.len():
+        child := kids24_children[_fi24]
         mut cn := get_node(child)
         if cn.kind == "pub" and cn.children.len() > 0:
             cn = get_node(cn.children[0])
         if cn.kind == "fn" or cn.kind == "fn_decl":
             mut _fi35 := 0
-            _kids35 := cn.children
-            while _fi35 < _kids35.len():
-                fc := _kids35[_fi35]
+            kids35_children := cn.children
+            while _fi35 < kids35_children.len():
+                fc := kids35_children[_fi35]
                 fcn := get_node(fc)
                 if fcn.kind == "returns":
                     mut _fi40 := 0
-                    _kids40 := fcn.children
-                    while _fi40 < _kids40.len():
-                        rc := _kids40[_fi40]
+                    kids40_children := fcn.children
+                    while _fi40 < kids40_children.len():
+                        rc := kids40_children[_fi40]
                         rn := get_node(rc)
                         if rn.kind == "type" or rn.kind == "generic_type":
                             ir_func_returns.insert(cn.value, ir_resolve_type_node(rc))
@@ -1778,9 +1804,9 @@ pub fn emit_ir(root_idx: Int) -> String:
         _fi24 = _fi24 + 1
     # emit global variables (unwrap pub)
     mut _fi25 := 0
-    _kids25 := root.children
-    while _fi25 < _kids25.len():
-        child := _kids25[_fi25]
+    kids25_children := root.children
+    while _fi25 < kids25_children.len():
+        child := kids25_children[_fi25]
         mut cn := get_node(child)
         if cn.kind == "pub" and cn.children.len() > 0:
             cn = get_node(cn.children[0])
@@ -1794,9 +1820,9 @@ pub fn emit_ir(root_idx: Int) -> String:
             mut init_val := "0"
             mut global_type := ""
             mut _fi36 := 0
-            _kids36 := cn.children
-            while _fi36 < _kids36.len():
-                gc := _kids36[_fi36]
+            kids36_children := cn.children
+            while _fi36 < kids36_children.len():
+                gc := kids36_children[_fi36]
                 gcn := get_node(gc)
                 if gcn.kind == "type" or gcn.kind == "generic_type":
                     global_type = ir_resolve_type_node(gc)
@@ -1852,17 +1878,17 @@ pub fn emit_ir(root_idx: Int) -> String:
     # emit __init_globals to initialize list/map/set globals
     mut has_collection_globals := false
     mut _fi26 := 0
-    _kids26 := root.children
-    while _fi26 < _kids26.len():
-        child := _kids26[_fi26]
+    kids26_children := root.children
+    while _fi26 < kids26_children.len():
+        child := kids26_children[_fi26]
         mut cn := get_node(child)
         if cn.kind == "pub" and cn.children.len() > 0:
             cn = get_node(cn.children[0])
         if cn.kind == "bind" or cn.kind == "binding":
             mut _fi37 := 0
-            _kids37 := cn.children
-            while _fi37 < _kids37.len():
-                gc := _kids37[_fi37]
+            kids37_children := cn.children
+            while _fi37 < kids37_children.len():
+                gc := kids37_children[_fi37]
                 gcn := get_node(gc)
                 if gcn.kind == "list" or gcn.kind == "map" or gcn.kind == "set":
                     has_collection_globals = true
@@ -1871,9 +1897,9 @@ pub fn emit_ir(root_idx: Int) -> String:
     if has_collection_globals:
         ir_emit_func_header("__init_globals", 0, "int")
         mut _fi27 := 0
-        _kids27 := root.children
-        while _fi27 < _kids27.len():
-            child := _kids27[_fi27]
+        kids27_children := root.children
+        while _fi27 < kids27_children.len():
+            child := kids27_children[_fi27]
             mut cn := get_node(child)
             if cn.kind == "pub" and cn.children.len() > 0:
                 cn = get_node(cn.children[0])
@@ -1884,24 +1910,24 @@ pub fn emit_ir(root_idx: Int) -> String:
                 elif gname.contains(" "):
                     gname = gname.split(" ")[0]
                 mut _fi38 := 0
-                _kids38 := cn.children
-                while _fi38 < _kids38.len():
-                    gc := _kids38[_fi38]
+                kids38_children := cn.children
+                while _fi38 < kids38_children.len():
+                    gc := kids38_children[_fi38]
                     gcn := get_node(gc)
                     if gcn.kind == "list":
                         list_r := ir_reg()
-                        ir_emit_call(list_r, "__list_new", "list", [])
+                        ir_emit_call0(list_r, "__list_new", "list")
                         ir_emit("store " + gname + " " + list_r.to_string())
                     elif gcn.kind == "map":
                         map_r := ir_reg()
                         if ir_global_map_int_names.contains(gname):
-                            ir_emit_call(map_r, "__map_new_int", "map_int", [])
+                            ir_emit_call0(map_r, "__map_new_int", "map_int")
                         else:
-                            ir_emit_call(map_r, "__map_new", "map", [])
+                            ir_emit_call0(map_r, "__map_new", "map")
                         ir_emit("store " + gname + " " + map_r.to_string())
                     elif gcn.kind == "set":
                         set_r := ir_reg()
-                        ir_emit_call(set_r, "__set_new", "set", [])
+                        ir_emit_call0(set_r, "__set_new", "set")
                         ir_emit("store " + gname + " " + set_r.to_string())
                     _fi38 = _fi38 + 1
             _fi27 = _fi27 + 1
@@ -1912,9 +1938,9 @@ pub fn emit_ir(root_idx: Int) -> String:
 
     # emit functions (unwrap pub wrappers)
     mut _fi28 := 0
-    _kids28 := root.children
-    while _fi28 < _kids28.len():
-        child := _kids28[_fi28]
+    kids28_children := root.children
+    while _fi28 < kids28_children.len():
+        child := kids28_children[_fi28]
         cn := get_node(child)
         mut actual := child
         mut actual_node := cn
@@ -1927,18 +1953,18 @@ pub fn emit_ir(root_idx: Int) -> String:
             # emit methods from impl blocks
             mut impl_type := ""
             mut _fi39 := 0
-            _kids39 := cn.children
-            while _fi39 < _kids39.len():
-                ic := _kids39[_fi39]
+            kids39_children := cn.children
+            while _fi39 < kids39_children.len():
+                ic := kids39_children[_fi39]
                 icn := get_node(ic)
                 if icn.kind == "type":
                     impl_type = icn.value
                 elif icn.kind == "for_type":
                     # impl X for TYPE — get type from for_type child
                     mut _fi41 := 0
-                    _kids41 := icn.children
-                    while _fi41 < _kids41.len():
-                        ftc := _kids41[_fi41]
+                    kids41_children := icn.children
+                    while _fi41 < kids41_children.len():
+                        ftc := kids41_children[_fi41]
                         ftn := get_node(ftc)
                         if ftn.kind == "type":
                             impl_type = ftn.value

@@ -1338,8 +1338,22 @@ fn parse_call_shape<'a>(parts: &'a [&'a str]) -> Option<(&'a str, &'a str, usize
     }
 
     let fname = parts[2];
-    let looks_like_retkind = matches!(
-        parts[3],
+    let looks_like_retkind = parts[3].parse::<usize>().is_err();
+    if looks_like_retkind && parts.len() >= 5 {
+        if let Ok(nargs) = parts[4].parse::<usize>() {
+            return Some((fname, parts[3], nargs, 5));
+        }
+    }
+
+    Some((fname, "unknown", parts[3].parse().unwrap_or(0), 4))
+}
+
+fn explicit_struct_name_from_retkind(retkind: &str) -> Option<&str> {
+    if let Some(name) = retkind.strip_prefix("struct:") {
+        return Some(name);
+    }
+    if !matches!(
+        retkind,
         "unknown"
             | "void"
             | "int"
@@ -1351,18 +1365,10 @@ fn parse_call_shape<'a>(parts: &'a [&'a str]) -> Option<(&'a str, &'a str, usize
             | "map"
             | "map_int"
             | "set"
-    ) || parts[3].starts_with("struct:");
-    if looks_like_retkind && parts.len() >= 5 {
-        if let Ok(nargs) = parts[4].parse::<usize>() {
-            return Some((fname, parts[3], nargs, 5));
-        }
+    ) {
+        return Some(retkind);
     }
-
-    Some((fname, "unknown", parts[3].parse().unwrap_or(0), 4))
-}
-
-fn explicit_struct_name_from_retkind(retkind: &str) -> Option<&str> {
-    retkind.strip_prefix("struct:")
+    None
 }
 
 fn parse_call_arg_regs(parts: &[&str], nargs: usize) -> Vec<usize> {
@@ -2065,9 +2071,14 @@ mod tests {
     fn parse_call_shape_distinguishes_old_and_new_formats() {
         let old = vec!["call", "7", "print", "1", "3"];
         let new = vec!["call", "8", "char_at", "string", "2", "1", "2"];
+        let imported_struct = vec!["call", "9", "advance_token", "Token", "0"];
 
         assert_eq!(parse_call_shape(&old), Some(("print", "unknown", 1, 4)));
         assert_eq!(parse_call_shape(&new), Some(("char_at", "string", 2, 5)));
+        assert_eq!(
+            parse_call_shape(&imported_struct),
+            Some(("advance_token", "Token", 0, 5))
+        );
     }
 
     #[test]
