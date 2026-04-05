@@ -665,6 +665,38 @@ pub unsafe extern "C" fn forge_list_contains_string(list: ForgeList, s: ForgeStr
     false
 }
 
+/// Check if a list of C-string pointers contains the given C-string.
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_contains_cstr(list_handle: i64, s: *const i8) -> i64 {
+    if list_handle == 0 || s.is_null() {
+        return 0;
+    }
+
+    let impl_ref = &*(list_handle as *const ListImpl);
+    let needle_len = crate::string::forge_cstring_len(s) as usize;
+    let needle = std::slice::from_raw_parts(s as *const u8, needle_len);
+
+    for elem in &impl_ref.elements {
+        if elem.len() < 8 {
+            continue;
+        }
+        let ptr_val = i64::from_ne_bytes(elem[..8].try_into().unwrap_or([0; 8])) as *const i8;
+        if ptr_val.is_null() {
+            continue;
+        }
+        let elem_len = crate::string::forge_cstring_len(ptr_val) as usize;
+        if elem_len != needle_len {
+            continue;
+        }
+        let elem_bytes = std::slice::from_raw_parts(ptr_val as *const u8, elem_len);
+        if elem_bytes == needle {
+            return 1;
+        }
+    }
+
+    0
+}
+
 /// Find index of string in list
 #[no_mangle]
 pub unsafe extern "C" fn forge_list_index_of_string(list: ForgeList, s: ForgeString) -> i64 {
@@ -682,6 +714,38 @@ pub unsafe extern "C" fn forge_list_index_of_string(list: ForgeList, s: ForgeStr
         let elem = impl_ref.get(i).unwrap();
         let elem_s = elem.as_ptr() as *const ForgeString;
         if crate::string::forge_string_eq(*elem_s, s) {
+            return i as i64;
+        }
+    }
+
+    -1
+}
+
+/// Find the index of a C-string in a list of C-string pointers.
+#[no_mangle]
+pub unsafe extern "C" fn forge_list_index_of_cstr(list_handle: i64, s: *const i8) -> i64 {
+    if list_handle == 0 || s.is_null() {
+        return -1;
+    }
+
+    let impl_ref = &*(list_handle as *const ListImpl);
+    let needle_len = crate::string::forge_cstring_len(s) as usize;
+    let needle = std::slice::from_raw_parts(s as *const u8, needle_len);
+
+    for (i, elem) in impl_ref.elements.iter().enumerate() {
+        if elem.len() < 8 {
+            continue;
+        }
+        let ptr_val = i64::from_ne_bytes(elem[..8].try_into().unwrap_or([0; 8])) as *const i8;
+        if ptr_val.is_null() {
+            continue;
+        }
+        let elem_len = crate::string::forge_cstring_len(ptr_val) as usize;
+        if elem_len != needle_len {
+            continue;
+        }
+        let elem_bytes = std::slice::from_raw_parts(ptr_val as *const u8, elem_len);
+        if elem_bytes == needle {
             return i as i64;
         }
     }

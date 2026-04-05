@@ -143,7 +143,7 @@ pub fn compile_from_ir(
                         .map_err(|e| CompileError::ModuleError(e.to_string()))?;
                     let mut desc = DataDescription::new();
                     let init_val: i64 =
-                        if init_kind == "list" || init_kind == "map" || init_kind == "set" {
+                        if init_kind == "list" || init_kind == "map" || init_kind == "set" || init_kind == "set_int" {
                             0
                         } else if init_kind.starts_with("str:") {
                             0 // will be patched in __init_globals
@@ -1287,6 +1287,7 @@ fn explicit_struct_name_from_retkind(retkind: &str) -> Option<&str> {
             | "map"
             | "map_int"
             | "set"
+            | "set_int"
     ) {
         return Some(retkind);
     }
@@ -1373,7 +1374,9 @@ fn resolve_func_name(name: &str) -> &str {
         "clear" | "list_clear" => "forge_list_clear_value",
         "list_reverse" => "forge_list_reverse_value",
         "list_contains" => "forge_list_contains_int",
+        "list_contains_string" => "forge_list_contains_cstr",
         "list_index_of" => "forge_list_index_of_int",
+        "list_index_of_string" => "forge_list_index_of_cstr",
         "set" => "forge_list_set_value",
         "map" | "list_map" => "forge_list_map",
         "filter" | "list_filter" => "forge_list_filter",
@@ -1394,13 +1397,17 @@ fn resolve_func_name(name: &str) -> &str {
         "keys" | "map_keys" => "forge_map_keys_cstr",
         "map_values" => "forge_map_values_handle",
         "map_remove" => "forge_map_remove_cstr",
+        "map_remove_ikey" => "forge_map_remove_ikey",
         "map_clear" => "forge_map_clear_handle",
         "map_is_empty" => "forge_map_is_empty_handle",
         "map_len" => "forge_map_len_handle",
         // Set operations
         "set_add" => "forge_set_add_cstr",
+        "set_add_int" => "forge_set_add_int_handle",
         "set_contains" => "forge_set_contains_cstr",
+        "set_contains_int" => "forge_set_contains_int_handle",
         "set_remove" => "forge_set_remove_cstr",
+        "set_remove_int" => "forge_set_remove_int_handle",
         "set_clear" => "forge_set_clear_handle",
         "set_is_empty" => "forge_set_is_empty_handle",
         "set_len" => "forge_set_len_handle",
@@ -1411,6 +1418,7 @@ fn resolve_func_name(name: &str) -> &str {
         "__map_new" => "forge_map_new_default",
         "__map_new_int" => "forge_map_new_int",
         "__set_new" => "forge_set_new_default",
+        "__set_new_int" => "forge_set_new_int",
         "__struct_alloc" => "forge_struct_alloc",
         "__closure_set_env" => "forge_closure_set_env",
         "__closure_get_env" => "forge_closure_get_env",
