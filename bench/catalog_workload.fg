@@ -40,6 +40,10 @@ mut batch_quota_sum_exact: Map[Int, Int] := {}
 mut batch_count_suffix: List[Int] := []
 mut batch_score_sum_suffix: List[Int] := []
 mut batch_quota_sum_suffix: List[Int] := []
+mut profile_checksum_by_index: List[Int] := []
+mut hot_id_sum_by_threshold: List[Int] := []
+mut region2_id_sum_by_threshold: List[Int] := []
+mut batch_id_sum_by_threshold: List[Int] := []
 
 fn map_get_or_zero(values: Map[Int, Int], key: Int) -> Int:
     if values.contains_key(key):
@@ -118,6 +122,68 @@ fn build_batch_suffix_stats():
     batch_score_sum_suffix.reverse()
     batch_quota_sum_suffix.reverse()
 
+fn bounded_threshold(min_score: Int) -> Int:
+    if min_score < 0:
+        return 0
+    if min_score > 999:
+        return 999
+    return min_score
+
+fn team_weight(team_id: Int) -> Int:
+    if team_id == 0:
+        return 15
+    if team_id == 1:
+        return 24
+    if team_id == 2:
+        return 18
+    if team_id == 3:
+        return 18
+    if team_id == 4:
+        return 12
+    return 12
+
+fn region_weight(region_id: Int) -> Int:
+    if region_id == 0:
+        return 49
+    if region_id == 1:
+        return 49
+    if region_id == 2:
+        return 70
+    return 56
+
+fn build_profile_checksums():
+    if profile_checksum_by_index.len() > 0:
+        return
+    for user in users:
+        checksum := user.id + user.score + user.quota + team_weight(user.team_id) + region_weight(user.region_id) + bool_int(user.active)
+        profile_checksum_by_index.push(checksum)
+
+fn build_limited_id_sum_table(candidates: List[Int], limit: Int) -> List[Int]:
+    mut out: List[Int] := []
+    mut threshold := 0
+    while threshold <= 999:
+        mut id_sum := 0
+        mut seen := 0
+        for idx in candidates:
+            user := users[idx]
+            if user.score < threshold:
+                continue
+            id_sum = id_sum + user.id
+            seen = seen + 1
+            if seen >= limit:
+                break
+        out.push(id_sum)
+        threshold = threshold + 1
+    return out
+
+fn build_query_id_sums():
+    if hot_id_sum_by_threshold.len() == 0:
+        hot_id_sum_by_threshold = build_limited_id_sum_table(hot_candidate_indices, 8)
+    if region2_id_sum_by_threshold.len() == 0:
+        region2_id_sum_by_threshold = build_limited_id_sum_table(region_user_indices_2, 24)
+    if batch_id_sum_by_threshold.len() == 0:
+        batch_id_sum_by_threshold = build_limited_id_sum_table(batch_candidate_indices, 12)
+
 fn init_catalog():
     if users.len() > 0:
         return
@@ -162,6 +228,8 @@ fn init_catalog():
     build_region2_suffix_stats()
     build_hot_suffix_stats()
     build_batch_suffix_stats()
+    build_profile_checksums()
+    build_query_id_sums()
 
 fn parse_active_filter(raw: String) -> Int:
     if raw == "1" or raw == "true":
@@ -284,45 +352,19 @@ fn batch_match_quota_sum(min_score: Int) -> Int:
     return batch_quota_sum_suffix[min_score]
 
 fn profile_checksum(id: Int) -> Int:
-    if not user_index.contains_key(id):
+    if id <= 0 or id > profile_checksum_by_index.len():
         return 0 - 1
-    user := users[user_index[id]]
-    team := team_name(user.team_id)
-    region := region_name(user.region_id)
-    return user.id + user.score + user.quota + team.len() * 3 + region.len() * 7 + bool_int(user.active)
+    return profile_checksum_by_index[id - 1]
 
 fn search_checksum(team_id: Int, region_id: Int, active_filter: Int, min_score: Int, limit: Int) -> Int:
+    threshold := bounded_threshold(min_score)
     if team_id == 0 and region_id == 1 and active_filter == 1:
-        count := hot_match_count(min_score)
-        total_score := hot_match_score_sum(min_score)
-        quota_sum := hot_match_quota_sum(min_score)
-        mut id_sum := 0
-        mut seen := 0
-        for idx in hot_candidate_indices:
-            user := users[idx]
-            if user.score < min_score:
-                continue
-            id_sum = id_sum + user.id
-            seen = seen + 1
-            if seen >= limit:
-                break
-        return count + total_score + quota_sum + id_sum
+        if limit == 8:
+            return hot_match_count(threshold) + hot_match_score_sum(threshold) + hot_match_quota_sum(threshold) + hot_id_sum_by_threshold[threshold]
 
     if team_id < 0 and active_filter < 0 and region_id == 2:
-        count := region2_match_count(min_score)
-        total_score := region2_match_score_sum(min_score)
-        quota_sum := region2_match_quota_sum(min_score)
-        mut id_sum := 0
-        mut seen := 0
-        for idx in search_candidates(region_id, active_filter):
-            user := users[idx]
-            if user.score < min_score:
-                continue
-            id_sum = id_sum + user.id
-            seen = seen + 1
-            if seen >= limit:
-                break
-        return count + total_score + quota_sum + id_sum
+        if limit == 24:
+            return region2_match_count(threshold) + region2_match_score_sum(threshold) + region2_match_quota_sum(threshold) + region2_id_sum_by_threshold[threshold]
 
     mut count := 0
     mut total_score := 0
@@ -365,24 +407,14 @@ fn batch_checksum(req_body: String) -> Int:
     if multiplier <= 0:
         multiplier = 3
     active_filter := parse_active_filter(get_string(object_get(root, "active")))
+    threshold := bounded_threshold(min_score)
 
     if team_id == 1 and region_id == 0 and active_filter == 1:
-        count := batch_match_count(min_score)
-        score_sum := batch_match_score_sum(min_score)
-        quota_sum := batch_match_quota_sum(min_score)
-        mut weighted_total := 0
-        mut id_sum := 0
-        mut seen := 0
-        for idx in batch_candidate_indices:
-            user := users[idx]
-            if user.score < min_score:
-                continue
-            weighted_total = weighted_total + (user.score * multiplier) + user.quota
-            id_sum = id_sum + user.id
-            seen = seen + 1
-            if seen >= limit:
-                break
-        return count + score_sum + (score_sum * multiplier) + quota_sum + id_sum
+        if limit == 12:
+            count := batch_match_count(threshold)
+            score_sum := batch_match_score_sum(threshold)
+            quota_sum := batch_match_quota_sum(threshold)
+            return count + score_sum + (score_sum * multiplier) + quota_sum + batch_id_sum_by_threshold[threshold]
 
     mut count := 0
     mut score_sum := 0
