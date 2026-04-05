@@ -103,6 +103,26 @@ pub fn is_whitespace(s: String) -> Bool:
 pub fn is_blank(s: String) -> Bool:
     return is_whitespace(s)
 
+# Returns true if chars contains the given single-character string.
+fn contains_char(chars: String, c: String) -> Bool:
+    mut i := 0
+    while i < chars.len():
+        if chars[i] == c:
+            return true
+        i = i + 1
+    return false
+
+# Returns true if s matches substr starting at start.
+fn starts_with_at(s: String, substr: String, start: Int) -> Bool:
+    if start < 0 or start + substr.len() > s.len():
+        return false
+    mut j := 0
+    while j < substr.len():
+        if s[start + j] != substr[j]:
+            return false
+        j = j + 1
+    return true
+
 # Finds substr in s starting at the given offset. Returns -1 if not found.
 fn index_of_from(s: String, substr: String, start: Int) -> Int:
     if substr.len() == 0:
@@ -114,14 +134,7 @@ fn index_of_from(s: String, substr: String, start: Int) -> Int:
         return 0 - 1
     mut i := start
     while i + substr.len() <= s.len():
-        mut matches := true
-        mut j := 0
-        while j < substr.len():
-            if s[i + j] != substr[j]:
-                matches = false
-                j = substr.len()
-            j = j + 1
-        if matches:
+        if starts_with_at(s, substr, i):
             return i
         i = i + 1
     return 0 - 1
@@ -161,14 +174,7 @@ pub fn trim_right(s: String) -> String:
 pub fn trim_left_chars(s: String, chars: String) -> String:
     mut start := 0
     while start < s.len():
-        mut found := false
-        mut i := 0
-        while i < chars.len():
-            if s[start] == chars[i]:
-                found = true
-                i = chars.len()
-            i = i + 1
-        if not found:
+        if not contains_char(chars, s[start]):
             break
         start = start + 1
     return s.substring(start, s.len())
@@ -178,14 +184,7 @@ pub fn trim_left_chars(s: String, chars: String) -> String:
 pub fn trim_right_chars(s: String, chars: String) -> String:
     mut end := s.len()
     while end > 0:
-        mut found := false
-        mut i := 0
-        while i < chars.len():
-            if s[end - 1] == chars[i]:
-                found = true
-                i = chars.len()
-            i = i + 1
-        if not found:
+        if not contains_char(chars, s[end - 1]):
             break
         end = end - 1
     return s.substring(0, end)
@@ -327,23 +326,14 @@ pub fn split_n(s: String, sep: String, max_splits: Int) -> List[String]:
         return [s]
     if sep.len() == 0:
         return [s]
-    
+
     mut result: List[String] := []
     mut current := ""
     mut i := 0
     mut splits := 0
-    
+
     while i < s.len():
-        # Check if we're at a separator
-        mut is_sep := true
-        mut j := 0
-        while j < sep.len():
-            if i + j >= s.len() or s[i + j] != sep[j]:
-                is_sep = false
-                j = sep.len()
-            j = j + 1
-        
-        if is_sep and splits < max_splits:
+        if splits < max_splits and starts_with_at(s, sep, i):
             result.push(current)
             current = ""
             splits = splits + 1
@@ -351,7 +341,7 @@ pub fn split_n(s: String, sep: String, max_splits: Int) -> List[String]:
         else:
             current = current + s[i]
             i = i + 1
-    
+
     result.push(current)
     return result
 
