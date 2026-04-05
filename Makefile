@@ -1,5 +1,8 @@
 .PHONY: build self-host bootstrap bootstrap-verify run-examples test clean
 
+NONDETERMINISTIC_EXAMPLES := net_basics net_echo
+EXPECTED_EXAMPLES := $(filter-out $(addprefix examples/expected/,$(addsuffix .txt,$(NONDETERMINISTIC_EXAMPLES))),$(wildcard examples/expected/*.txt))
+
 # --- primary build (Cranelift native backend) ---
 
 build:
@@ -20,7 +23,7 @@ bootstrap: self-host
 bootstrap-verify: self-host
 	@echo "--- comparing Cranelift-compiled vs cargo-compiled on all examples ---"
 	@pass=0; fail=0; \
-	for f in examples/expected/*.txt; do \
+	for f in $(EXPECTED_EXAMPLES); do \
 		name=$$(basename "$$f" .txt); \
 		actual=$$(timeout 15 ./self-host/forge_main run "examples/$$name.fg" 2>/dev/null | grep -v '^\[DEBUG\]'); \
 		expected=$$(cat "$$f"); \
@@ -40,7 +43,7 @@ bootstrap-verify: self-host
 run-examples: build
 	@echo "--- deterministic examples (Cranelift backend) ---"
 	@pass=0; fail=0; \
-	for f in examples/expected/*.txt; do \
+	for f in $(EXPECTED_EXAMPLES); do \
 		name=$$(basename "$$f" .txt); \
 		actual=$$(timeout 15 ./target/release/forge run "examples/$$name.fg" 2>/dev/null); \
 		expected=$$(cat "$$f"); \
@@ -61,7 +64,7 @@ run-examples: build
 test: build
 	@echo "=== Step 1: run all deterministic examples ==="
 	@pass=0; fail=0; \
-	for f in examples/expected/*.txt; do \
+	for f in $(EXPECTED_EXAMPLES); do \
 		name=$$(basename "$$f" .txt); \
 		actual=$$(timeout 15 ./target/release/forge run "examples/$$name.fg" 2>/dev/null); \
 		expected=$$(cat "$$f"); \

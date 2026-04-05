@@ -539,9 +539,16 @@ fn ir_infer_type(idx: Int) -> String:
         return ""
     if kind == "field_access":
         if node.children.len() > 0:
+            fname := node_value(idx)
+            if fname == "is_ok" or fname == "is_err":
+                return "bool"
+            if fname == "ok":
+                checked := ir_checked_type(node.children[0])
+                if checked.len() > 0:
+                    return checked
             obj_type := ir_infer_type(node.children[0])
             if obj_type.len() > 0:
-                lookup_key := obj_type + "." + node_value(idx)
+                lookup_key := obj_type + "." + fname
                 if ir_struct_field_lookup.contains_key(lookup_key):
                     return ir_struct_field_lookup[lookup_key]
         return ""
@@ -1154,6 +1161,32 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         fname := node_value(idx)
         if node.children.len() > 0:
             obj_r := ir_expr(node.children[0])
+            obj_tid := c_get_expr_type(node.children[0])
+            if obj_tid >= 0:
+                obj_info := get_type_info(obj_tid)
+                if obj_info.kind == "result":
+                    if fname == "ok":
+                        return obj_r
+                    if fname == "is_ok" or fname == "is_err":
+                        zero := ir_reg()
+                        ir_emit("iconst " + zero.to_string() + " 0")
+                        r := ir_reg()
+                        if fname == "is_ok":
+                            ir_emit("neq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
+                        else:
+                            ir_emit("eq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
+                        return r
+            if fname == "ok":
+                return obj_r
+            if fname == "is_ok" or fname == "is_err":
+                zero := ir_reg()
+                ir_emit("iconst " + zero.to_string() + " 0")
+                r := ir_reg()
+                if fname == "is_ok":
+                    ir_emit("neq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
+                else:
+                    ir_emit("eq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
+                return r
             r := ir_reg()
             obj_type := ir_infer_type(node.children[0])
             lookup_key := obj_type + "." + fname
@@ -1289,6 +1322,15 @@ fn ir_stmt(idx: Int):
         ir_expr(idx)
         return
     if kind == "spawn":
+        ir_expr(idx)
+        return
+    if kind == "await":
+        ir_expr(idx)
+        return
+    if kind == "try" or kind == "try_expr":
+        ir_expr(idx)
+        return
+    if kind == "fail":
         ir_expr(idx)
         return
 

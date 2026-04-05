@@ -9,7 +9,7 @@ fn run_server(port: Int) -> Int!:
     tcp_close(s)
     return 0
 
-fn main() -> String!:
+fn run() -> String!:
     port := 18440
 
     # spawn server — MUST capture task handle (expression form)
@@ -26,3 +26,6 @@ fn main() -> String!:
     await task
     print("net echo works")
     return ""
+
+fn main():
+    run()
