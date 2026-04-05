@@ -26,7 +26,7 @@ mut d_header_end: Int := 0
 fn d_trim_left(s: String) -> String:
     mut i := 0
     while i < s.len():
-        if s[i] == " " or s[i] == "\t":
+        if s[i] == " " or s[i] == chr(9):
             i = i + 1
         else:
             break
@@ -37,7 +37,7 @@ fn d_trim_right(s: String) -> String:
     mut end := s.len()
     while end > 0:
         ch := s[end - 1]
-        if ch == " " or ch == "\t" or ch == "\r":
+        if ch == " " or ch == chr(9) or ch == chr(13):
             end = end - 1
         else:
             break
@@ -93,11 +93,11 @@ fn d_escape_json_string(s: String) -> String:
         ch := s[i]
         if ch == "\"":
             output = output + "\\\""
-        elif ch == "\\":
+        elif ch == chr(92):
             output = output + "\\\\"
-        elif ch == "\n":
+        elif ch == chr(10):
             output = output + "\\n"
-        elif ch == "\t":
+        elif ch == chr(9):
             output = output + "\\t"
         else:
             output = output + ch
@@ -195,7 +195,7 @@ fn reset_docgen_state():
 # populates module-level state with items found.
 pub fn doc_extract(source: String):
     reset_docgen_state()
-    lines := source.split("\n")
+    lines := source.split(chr(10))
     mut i := 0
 
     # collect module header — leading comment block

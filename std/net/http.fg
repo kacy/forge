@@ -23,6 +23,19 @@ pub MIME_TEXT := "text/plain"
 pub MIME_HTML := "text/html"
 pub MIME_JSON := "application/json"
 
+fn str_eq(a: String, b: String) -> Bool:
+    if a.len() != b.len():
+        return false
+    mut i := 0
+    while i < a.len():
+        if ord(a[i]) != ord(b[i]):
+            return false
+        i = i + 1
+    return true
+
+fn char_eq(s: String, idx: Int, ch: String) -> Bool:
+    return ord(s[idx]) == ord(ch)
+
 # ===============================================================
 # Request Parsing
 # ===============================================================
@@ -36,35 +49,46 @@ pub fn parse_request(raw: String) -> String:
     mut header_part := raw
     mut req_body := ""
 
-    # find blank line separating headers from body
-    mut i := 0
     raw_len := raw.len()
-    while i < raw_len - 1:
-        if raw[i] == nl:
-            if i + 1 < raw_len and raw[i + 1] == nl:
-                header_part = raw.substring(0, i)
-                req_body = raw.substring(i + 2, raw_len)
-                break
-            elif i + 2 < raw_len and raw[i + 1] == cr and raw[i + 2] == nl:
-                header_part = raw.substring(0, i)
-                req_body = raw.substring(i + 3, raw_len)
-                break
-        i = i + 1
+    double_crlf := cr + nl + cr + nl
+    double_lf := nl + nl
+    mut sep_pos := raw.index_of(double_crlf)
+    if sep_pos >= 0:
+        header_part = raw.substring(0, sep_pos)
+        req_body = raw.substring(sep_pos + double_crlf.len(), raw_len)
+    else:
+        sep_pos = raw.index_of(double_lf)
+        if sep_pos >= 0:
+            header_part = raw.substring(0, sep_pos)
+            req_body = raw.substring(sep_pos + double_lf.len(), raw_len)
 
-    lines := header_part.split(nl)
     mut meth := "GET"
     mut full_path := "/"
     mut ver := "HTTP/1.1"
+    mut request_line := header_part.trim()
     mut hdrs := ""
 
-    if lines.len() > 0:
-        request_line := lines[0].trim()
+    mut first_nl := -1
+    mut line_pos := 0
+    header_len := header_part.len()
+    while line_pos < header_len:
+        if ord(header_part[line_pos]) == 10:
+            first_nl = line_pos
+            break
+        line_pos = line_pos + 1
+
+    if first_nl >= 0:
+        request_line = header_part.substring(0, first_nl).trim()
+        if first_nl + 1 < header_len:
+            hdrs = header_part.substring(first_nl + 1, header_len).trim()
+
+    if request_line.len() > 0:
         mut sp1 := -1
         mut sp2 := -1
         mut ri := 0
         rl_len := request_line.len()
         while ri < rl_len:
-            if request_line[ri] == " ":
+            if char_eq(request_line, ri, " "):
                 if sp1 < 0:
                     sp1 = ri
                 elif sp2 < 0:
@@ -79,25 +103,13 @@ pub fn parse_request(raw: String) -> String:
         elif sp1 >= 0:
             full_path = request_line.substring(sp1 + 1, rl_len).trim()
 
-        mut hi := 1
-        hdr_n := lines.len()
-        while hi < hdr_n:
-            line := lines[hi].trim()
-            if line.len() > 0:
-                if hdrs.len() > 0:
-                    tmp := hdrs + nl
-                    hdrs = tmp + line
-                else:
-                    hdrs = line
-            hi = hi + 1
-
     # split path?query
     mut route := full_path
     mut req_query := ""
     mut qi := 0
     fp_len := full_path.len()
     while qi < fp_len:
-        if full_path[qi] == "?":
+        if char_eq(full_path, qi, "?"):
             route = full_path.substring(0, qi)
             if qi + 1 < fp_len:
                 req_query = full_path.substring(qi + 1, fp_len)
@@ -129,7 +141,7 @@ fn req_field(req: String, n: Int) -> String:
     mut pos := 0
     req_len := req.len()
     while pos < req_len:
-        if req[pos] == sep:
+        if char_eq(req, pos, sep):
             if field == n:
                 return req.substring(start, pos)
             field = field + 1
@@ -169,20 +181,20 @@ pub fn get_header(req: String, name: String) -> String:
     while pos <= h_len:
         mut at_end := pos == h_len
         if not at_end:
-            at_end = h[pos] == nl
+            at_end = ord(h[pos]) == 10
         if at_end and pos > start:
             line := h.substring(start, pos).trim()
             mut colon := -1
             mut ci := 0
             line_len := line.len()
             while ci < line_len:
-                if line[ci] == ":":
+                if char_eq(line, ci, ":"):
                     colon = ci
                     break
                 ci = ci + 1
             if colon > 0:
                 hname := line.substring(0, colon).trim().to_lower()
-                if hname == target:
+                if str_eq(hname, target):
                     if colon + 1 < line_len:
                         return line.substring(colon + 1, line_len).trim()
                     return ""
@@ -204,24 +216,24 @@ pub fn get_query_param(req: String, name: String) -> String:
     while pos <= qs_len:
         mut at_end := pos == qs_len
         if not at_end:
-            at_end = qs[pos] == "&"
+            at_end = char_eq(qs, pos, "&")
         if at_end and pos > start:
             pair := qs.substring(start, pos)
             mut eq := -1
             mut ei := 0
             pair_len := pair.len()
             while ei < pair_len:
-                if pair[ei] == "=":
+                if char_eq(pair, ei, "="):
                     eq = ei
                     break
                 ei = ei + 1
             if eq >= 0:
                 key := pair.substring(0, eq)
-                if key == name:
+                if str_eq(key, name):
                     if eq + 1 < pair_len:
                         return pair.substring(eq + 1, pair_len)
                     return ""
-            elif pair == name:
+            elif str_eq(pair, name):
                 return ""
             if at_end and pos == qs_len:
                 break
@@ -323,22 +335,21 @@ pub fn redirect(url: String) -> String:
 # Server Helpers
 # ===============================================================
 
-pub fn read_request(fd: Int) -> String:
-    raw := tcp_read(fd)
+pub fn read_request(fd: Int) -> String!:
+    raw := tcp_read(fd, 65536)!
     return parse_request(raw)
 
-pub fn send_response(fd: Int, response: String):
-    tcp_write(fd, response)
+pub fn send_response(fd: Int, response: String) -> Int!:
+    written := tcp_write(fd, response)!
     tcp_close(fd)
+    return written
 
 # ===============================================================
 # HTTP Client
 # ===============================================================
 
-pub fn get(host: String, port: Int, url_path: String) -> String:
-    conn := tcp_connect(host, port)
-    if conn < 0:
-        return ""
+pub fn get(host: String, port: Int, url_path: String) -> String!:
+    conn := tcp_connect(host, port)!
     crlf := chr(13) + chr(10)
     mut req := "GET " + url_path
     req = req + " HTTP/1.1"
@@ -349,19 +360,19 @@ pub fn get(host: String, port: Int, url_path: String) -> String:
     req = req + "Connection: close"
     req = req + crlf
     req = req + crlf
-    tcp_write(conn, req)
+    tcp_write(conn, req)!
     mut response := ""
-    mut chunk := tcp_read(conn)
+    mut chunk := tcp_read(conn, 4096)!
     while chunk.len() > 0:
         tmp := response + chunk
         response = tmp
-        chunk = tcp_read(conn)
+        chunk = tcp_read(conn, 4096)!
     tcp_close(conn)
     cr := chr(13)
     mut hi := 0
     resp_len := response.len()
     while hi < resp_len - 3:
-        if response[hi] == cr and response[hi + 2] == cr:
+        if ord(response[hi]) == 13 and ord(response[hi + 2]) == 13:
             return response.substring(hi + 4, resp_len)
         hi = hi + 1
     return response

@@ -2,5 +2,5 @@ fn main():
     mut m: Map[String, String] := {}
     m.insert("a", "hello")
     m.insert("b", "world")
-    print(m.len())
+    print(m.len().to_string())
     print(m["a"])

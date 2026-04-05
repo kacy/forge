@@ -1,4 +1,4 @@
-listen fd: true
-bad connect: true
+listen ok: true
+bad connect failed: true
 localhost: ::1
 net basics work

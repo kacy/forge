@@ -280,14 +280,14 @@ pub fn split_lines(s: String) -> List[String]:
     mut i := 0
     while i < s.len():
         mut c := s[i]
-        if c == "\n":
+        if c == chr(10):
             result.push(current)
             current = ""
-        elif c == "\r":
+        elif c == chr(13):
             # Check for \r\n (Windows line ending)
             result.push(current)
             current = ""
-            if i + 1 < s.len() and s[i + 1] == "\n":
+            if i + 1 < s.len() and s[i + 1] == chr(10):
                 i = i + 1  # Skip the \n
         else:
             current = current + c
@@ -540,7 +540,7 @@ pub fn dedent(s: String) -> String:
         else:
             result.push(line)
     
-    return result.join("\n")
+    return result.join(chr(10))
 
 # Adds a prefix to the beginning of each line
 # Useful for adding indentation or comment markers
@@ -549,7 +549,7 @@ pub fn indent(s: String, prefix: String) -> String:
     mut result: List[String] := []
     for line in lines:
         result.push(prefix + line)
-    return result.join("\n")
+    return result.join(chr(10))
 
 # ---------------------------------------------------------------
 # Replace with Count Limit

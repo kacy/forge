@@ -36,7 +36,7 @@ fn render_single_diagnostic(d: Diagnostic, source: String) -> String:
 
     # source line + underline (only if we have line info)
     if d.line > 0:
-        lines := source.split("\n")
+        lines := source.split(chr(10))
         line_idx := d.line - 1
         if line_idx >= 0 and line_idx < lines.len():
             source_line := lines[line_idx]
@@ -103,11 +103,11 @@ fn escape_json_string(s: String) -> String:
         ch := s[i]
         if ch == "\"":
             output = output + "\\\""
-        elif ch == "\\":
+        elif ch == chr(92):
             output = output + "\\\\"
-        elif ch == "\n":
+        elif ch == chr(10):
             output = output + "\\n"
-        elif ch == "\t":
+        elif ch == chr(9):
             output = output + "\\t"
         else:
             output = output + ch

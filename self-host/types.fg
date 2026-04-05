@@ -86,7 +86,10 @@ pub fn ti_function(param_types: List[Int], return_type: Int) -> TypeInfo:
     mut empty_i: List[Int] := []
     mut empty_b: List[Bool] := []
     mut empty_li: List[List[Int]] := []
-    return TypeInfo("function", "", empty_s, empty_i, empty_b, empty_b, param_types, return_type, -1, -1, -1, empty_i, empty_s, empty_li)
+    mut copied_params: List[Int] := []
+    for param_type in param_types:
+        copied_params.push(param_type)
+    return TypeInfo("function", "", empty_s, empty_i, empty_b, empty_b, copied_params, return_type, -1, -1, -1, empty_i, empty_s, empty_li)
 
 pub fn ti_optional(inner: Int) -> TypeInfo:
     mut empty_s: List[String] := []
@@ -248,55 +251,76 @@ pub fn get_type_name(tid: Int) -> String:
 # ---------------------------------------------------------------
 
 pub fn is_numeric_type(tid: Int) -> Bool:
-    if tid == TID_INT:
+    tid_int := lookup_type_id("Int")
+    tid_uint := lookup_type_id("UInt")
+    tid_float := lookup_type_id("Float")
+    tid_int8 := lookup_type_id("Int8")
+    tid_int16 := lookup_type_id("Int16")
+    tid_int32 := lookup_type_id("Int32")
+    tid_int64 := lookup_type_id("Int64")
+    tid_uint8 := lookup_type_id("UInt8")
+    tid_uint16 := lookup_type_id("UInt16")
+    tid_uint32 := lookup_type_id("UInt32")
+    tid_uint64 := lookup_type_id("UInt64")
+    if tid == tid_int:
         return true
-    if tid == TID_UINT:
+    if tid == tid_uint:
         return true
-    if tid == TID_FLOAT:
+    if tid == tid_float:
         return true
-    if tid == TID_INT8:
+    if tid == tid_int8:
         return true
-    if tid == TID_INT16:
+    if tid == tid_int16:
         return true
-    if tid == TID_INT32:
+    if tid == tid_int32:
         return true
-    if tid == TID_INT64:
+    if tid == tid_int64:
         return true
-    if tid == TID_UINT8:
+    if tid == tid_uint8:
         return true
-    if tid == TID_UINT16:
+    if tid == tid_uint16:
         return true
-    if tid == TID_UINT32:
+    if tid == tid_uint32:
         return true
-    if tid == TID_UINT64:
+    if tid == tid_uint64:
         return true
     return false
 
 pub fn is_integer_type(tid: Int) -> Bool:
-    if tid == TID_INT:
+    tid_int := lookup_type_id("Int")
+    tid_uint := lookup_type_id("UInt")
+    tid_int8 := lookup_type_id("Int8")
+    tid_int16 := lookup_type_id("Int16")
+    tid_int32 := lookup_type_id("Int32")
+    tid_int64 := lookup_type_id("Int64")
+    tid_uint8 := lookup_type_id("UInt8")
+    tid_uint16 := lookup_type_id("UInt16")
+    tid_uint32 := lookup_type_id("UInt32")
+    tid_uint64 := lookup_type_id("UInt64")
+    if tid == tid_int:
         return true
-    if tid == TID_UINT:
+    if tid == tid_uint:
         return true
-    if tid == TID_INT8:
+    if tid == tid_int8:
         return true
-    if tid == TID_INT16:
+    if tid == tid_int16:
         return true
-    if tid == TID_INT32:
+    if tid == tid_int32:
         return true
-    if tid == TID_INT64:
+    if tid == tid_int64:
         return true
-    if tid == TID_UINT8:
+    if tid == tid_uint8:
         return true
-    if tid == TID_UINT16:
+    if tid == tid_uint16:
         return true
-    if tid == TID_UINT32:
+    if tid == tid_uint32:
         return true
-    if tid == TID_UINT64:
+    if tid == tid_uint64:
         return true
     return false
 
 pub fn is_error_type(tid: Int) -> Bool:
-    return tid == TID_ERR
+    return tid == lookup_type_id("<error>")
 
 # ---------------------------------------------------------------
 # initialization — register all 16 builtin types

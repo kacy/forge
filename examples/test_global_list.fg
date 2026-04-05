@@ -6,6 +6,6 @@ fn add(s: String):
 fn main():
     add("hello")
     add("world")
-    print(names.len())
+    print(names.len().to_string())
     for n in names:
         print(n)

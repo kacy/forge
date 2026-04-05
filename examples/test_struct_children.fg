@@ -22,6 +22,6 @@ fn main():
 
     node := get_node(parent)
     print("kind: " + node.kind)
-    print("children count: " + to_string(node.children.len()))
+    print("children count: " + node.children.len().to_string())
     for child in node.children:
-        print("child: " + to_string(child))
+        print("child: " + child.to_string())

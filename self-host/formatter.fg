@@ -16,7 +16,7 @@
 
 # format forge source code, returning a new string with canonical formatting.
 pub fn fmt_source(source: String) -> String:
-    lines := source.split("\n")
+    lines := source.split(chr(10))
     mut output := ""
     mut consecutive_blank := 0
 
@@ -54,15 +54,15 @@ pub fn fmt_source(source: String) -> String:
 
     # ensure exactly one trailing newline
     while output.len() > 1:
-        if output[output.len() - 1] == "\n":
-            if output[output.len() - 2] == "\n":
+        if output[output.len() - 1] == chr(10):
+            if output[output.len() - 2] == chr(10):
                 output = output.substring(0, output.len() - 1)
                 continue
         break
 
     # ensure at least one trailing newline
     if output.len() > 0:
-        if output[output.len() - 1] != "\n":
+        if output[output.len() - 1] != chr(10):
             output = output + "\n"
 
     return output
@@ -87,7 +87,7 @@ fn format_code_line(line: String) -> String:
 
     # preserve leading whitespace (indentation)
     while i < line.len():
-        if line[i] == " " or line[i] == "\t":
+        if line[i] == " " or line[i] == chr(9):
             output = output + line[i]
             i = i + 1
         else:
@@ -105,7 +105,7 @@ fn format_code_line(line: String) -> String:
                 continue
 
         if in_string:
-            if ch == "\\":
+            if ch == chr(92):
                 if i + 1 < line.len():
                     # escape sequence — copy both chars
                     output = output + ch + line[i + 1]
@@ -212,7 +212,7 @@ fn format_code_line(line: String) -> String:
             output = output + ":"
             i = i + 1
             if i < line.len():
-                if line[i] != "\n":
+                if line[i] != chr(10):
                     i = skip_leading_spaces(line, i)
                     if i < line.len():
                         output = output + " "
@@ -367,7 +367,7 @@ fn trim_right(s: String) -> String:
     mut end := s.len()
     while end > 0:
         ch := s[end - 1]
-        if ch == " " or ch == "\t" or ch == "\r":
+        if ch == " " or ch == chr(9) or ch == chr(13):
             end = end - 1
         else:
             break
@@ -377,7 +377,7 @@ fn trim_right(s: String) -> String:
 fn trim_left(s: String) -> String:
     mut start := 0
     while start < s.len():
-        if s[start] == " " or s[start] == "\t":
+        if s[start] == " " or s[start] == chr(9):
             start = start + 1
         else:
             break

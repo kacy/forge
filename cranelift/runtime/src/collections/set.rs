@@ -422,6 +422,11 @@ pub unsafe extern "C" fn forge_set_new_default() -> i64 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn forge_set_new_int() -> i64 {
+    forge_set_new_handle(0)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn forge_set_new_handle(elem_type: i32) -> i64 {
     let etype = match elem_type {
         1 => ElemType::String,
@@ -453,6 +458,19 @@ pub unsafe extern "C" fn forge_set_add_cstr(set_handle: i64, elem: *const i8) ->
     if impl_ref.insert(set_elem) { 1 } else { 0 }
 }
 
+/// Insert an integer element into the set. Returns 1 if newly inserted, 0 if already present.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_add_int_handle(set_handle: i64, elem: i64) -> i64 {
+    if set_handle == 0 {
+        return 0;
+    }
+    let impl_ref = &mut *(set_handle as *mut SetImpl);
+    if !matches!(impl_ref.elem_type, ElemType::Int) {
+        return 0;
+    }
+    if impl_ref.insert(SetElement::Int(elem)) { 1 } else { 0 }
+}
+
 /// Check if a C-string element exists in the set. Returns 1 if present, 0 otherwise.
 #[no_mangle]
 pub unsafe extern "C" fn forge_set_contains_cstr(set_handle: i64, elem: *const i8) -> i64 {
@@ -464,6 +482,19 @@ pub unsafe extern "C" fn forge_set_contains_cstr(set_handle: i64, elem: *const i
     if impl_ref.contains(&set_elem) { 1 } else { 0 }
 }
 
+/// Check if an integer element exists in the set. Returns 1 if present, 0 otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_contains_int_handle(set_handle: i64, elem: i64) -> i64 {
+    if set_handle == 0 {
+        return 0;
+    }
+    let impl_ref = &*(set_handle as *const SetImpl);
+    if !matches!(impl_ref.elem_type, ElemType::Int) {
+        return 0;
+    }
+    if impl_ref.contains(&SetElement::Int(elem)) { 1 } else { 0 }
+}
+
 /// Remove a C-string element from the set.
 #[no_mangle]
 pub unsafe extern "C" fn forge_set_remove_cstr(set_handle: i64, elem: *const i8) {
@@ -473,6 +504,19 @@ pub unsafe extern "C" fn forge_set_remove_cstr(set_handle: i64, elem: *const i8)
     let impl_ref = &mut *(set_handle as *mut SetImpl);
     let set_elem = cstr_to_set_element(elem);
     impl_ref.remove(&set_elem);
+}
+
+/// Remove an integer element from the set.
+#[no_mangle]
+pub unsafe extern "C" fn forge_set_remove_int_handle(set_handle: i64, elem: i64) {
+    if set_handle == 0 {
+        return;
+    }
+    let impl_ref = &mut *(set_handle as *mut SetImpl);
+    if !matches!(impl_ref.elem_type, ElemType::Int) {
+        return;
+    }
+    impl_ref.remove(&SetElement::Int(elem));
 }
 
 /// Clear all elements from set (handle-based).

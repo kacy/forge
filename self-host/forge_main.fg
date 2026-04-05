@@ -32,8 +32,33 @@ from errors import render_diagnostics, render_diagnostics_json, count_errors, ha
 from docgen import doc_extract, doc_format, doc_format_json, doc_check, doc_search
 
 # ---------------------------------------------------------------
-# note: build/run/test are handled by the Cranelift native backend (the forge binary).
-# this module provides the frontend: lex, parse, check, fmt, lint, doc.
+# native backend passthrough
+# build/run/test still go through the Rust backend, but this CLI now forwards
+# those commands so the self-hosted binary is usable in bootstrap verification.
+
+fn backend_command(command: String, path: String) -> String:
+    if path.contains(" "):
+        print("error: paths with spaces are not supported by self-hosted " + command)
+        exit(1)
+    parts := ["./target/release/forge", command, path]
+    return parts.join(" ")
+
+fn cmd_build(path: String) -> String!:
+    status := exec(backend_command("build", path))
+    if status != 0:
+        exit(status)
+    return ""
+
+fn cmd_run(path: String) -> String!:
+    output := exec_output(backend_command("run", path))
+    print(output!)
+    return ""
+
+fn cmd_test(path: String) -> String!:
+    status := exec(backend_command("test", path))
+    if status != 0:
+        exit(status)
+    return ""
 
 # ---------------------------------------------------------------
 # check command
@@ -310,10 +335,16 @@ fn run_cli() -> String!:
     command := a[1]
 
     # commands that don't need a file argument
-    if command == "version" or command == "--version":
+    if command == "version":
         print_version()
         return ""
-    if command == "help" or command == "--help":
+    if command == "--version":
+        print_version()
+        return ""
+    if command == "help":
+        print_help()
+        return ""
+    if command == "--help":
         print_help()
         return ""
 
@@ -326,9 +357,9 @@ fn run_cli() -> String!:
             if a.len() < 4:
                 print("usage: forge check --json <file.fg>")
                 exit(1)
-            cmd_check(a[3], true)!
+            _result := cmd_check(a[3], true)!
         else:
-            cmd_check(a[2], false)!
+            _result := cmd_check(a[2], false)!
         return ""
 
     if command == "fmt":
@@ -339,9 +370,9 @@ fn run_cli() -> String!:
             if a.len() < 4:
                 print("usage: forge fmt --check <file.fg>")
                 exit(1)
-            cmd_fmt(a[3], true)!
+            _result := cmd_fmt(a[3], true)!
         else:
-            cmd_fmt(a[2], false)!
+            _result := cmd_fmt(a[2], false)!
         return ""
 
     if command == "lint":
@@ -352,9 +383,9 @@ fn run_cli() -> String!:
             if a.len() < 4:
                 print("usage: forge lint --json <file.fg>")
                 exit(1)
-            cmd_lint(a[3], true)!
+            _result := cmd_lint(a[3], true)!
         else:
-            cmd_lint(a[2], false)!
+            _result := cmd_lint(a[2], false)!
         return ""
 
     if command == "doc":
@@ -366,20 +397,20 @@ fn run_cli() -> String!:
             if a.len() < 4:
                 print("usage: forge doc search <query>")
                 exit(1)
-            cmd_doc_search(a[3])!
+            _result := cmd_doc_search(a[3])!
             return ""
         if a[2] == "--json":
             if a.len() < 4:
                 print("usage: forge doc --json <file.fg>")
                 exit(1)
-            cmd_doc(a[3], false, true)!
+            _result := cmd_doc(a[3], false, true)!
         elif a[2] == "--check":
             if a.len() < 4:
                 print("usage: forge doc --check <file.fg>")
                 exit(1)
-            cmd_doc(a[3], true, false)!
+            _result := cmd_doc(a[3], true, false)!
         else:
-            cmd_doc(a[2], false, false)!
+            _result := cmd_doc(a[2], false, false)!
         return ""
 
     # scaffold new package
@@ -387,7 +418,7 @@ fn run_cli() -> String!:
         if a.len() < 3:
             print("usage: forge new <name>")
             exit(1)
-        cmd_new(a[2])!
+        _result := cmd_new(a[2])!
         return ""
 
     # commands that need exactly one file argument
@@ -398,10 +429,19 @@ fn run_cli() -> String!:
     path := a[2]
 
     if command == "lex":
-        cmd_lex(path)!
+        _result := cmd_lex(path)!
+
+    elif command == "build":
+        _result := cmd_build(path)!
+
+    elif command == "run":
+        _result := cmd_run(path)!
+
+    elif command == "test":
+        _result := cmd_test(path)!
 
     elif command == "parse":
-        cmd_parse(path)!
+        _result := cmd_parse(path)!
 
     else:
         print("unknown command: " + command)

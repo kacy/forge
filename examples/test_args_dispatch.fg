@@ -1,8 +1,11 @@
 fn main():
     a := args()
-    print(a.len())
+    print(a.len().to_string())
     if a.len() >= 2:
-        cmd := a[1]
+        mut cmd := ""
+        for arg, i in a:
+            if i == 1:
+                cmd = arg
         print(cmd)
         if cmd == "hello":
             print("matched hello")

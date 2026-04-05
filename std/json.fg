@@ -282,7 +282,7 @@ pub fn parse(input: String) -> Int:
     # skip trailing whitespace and verify no garbage remains
     while parser_position < parser_input.len():
         c := parser_input[parser_position]
-        if c == " " or c == "\t" or c == "\n" or c == "\r":
+        if c == " " or c == chr(9) or c == chr(10) or c == chr(13):
             parser_position = parser_position + 1
         else:
             # trailing non-whitespace characters = error

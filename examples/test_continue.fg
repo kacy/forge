@@ -13,6 +13,6 @@ fn main():
             continue
         result.push(item)
 
-    print("result len: " + to_string(result.len()))
+    print("result len: " + result.len().to_string())
     for r in result:
-        print(to_string(r))
+        print(r.to_string())
