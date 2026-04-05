@@ -1,0 +1,25 @@
+# Forge in 15 lines: async, error propagation, enums, and pattern matching
+
+enum Mood:
+    Happy(String)
+    Sad(String)
+
+fn analyze(name: String, score: Int) -> Mood!:
+    if score < 0 or score > 100:
+        fail "invalid score for {name}"
+    match score > 60:
+        true => return Mood.Happy(name)
+        false => return Mood.Sad(name)
+
+fn report(names: List[String], scores: List[Int]) -> String!:
+    mut lines: List[String] := []
+    for name, i in names:
+        mood := await spawn analyze(name, scores[i])!
+        line := match mood:
+            Mood.Happy(n) => "{n} is thriving"
+            Mood.Sad(n) => "{n} needs support"
+        lines.push(line)
+    return lines.join("\n")
+
+fn main():
+    print(report(["alice", "bob"], [85, 40])!)
