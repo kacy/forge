@@ -10,7 +10,6 @@
 from std.net.http import read_request, send_response
 from std.net.http import method, path, body, get_query_param
 from std.net.http import text_response, json_response, not_found, method_not_allowed, respond
-from std.json import parse, object_get, get_string, get_int
 from std.env import get_args
 
 struct CatalogUser:
@@ -385,14 +384,14 @@ fn search_json(team_id: Int, region_id: Int, active_filter: Int, min_score: Int,
     return body + rb
 
 fn batch_score_json(req_body: String) -> String:
-    root := parse(req_body)
+    root := json_parse(req_body)
     if root < 0:
         return ""
-    team_id := find_team_id(get_string(object_get(root, "team")))
-    region_id := find_region_id(get_string(object_get(root, "region")))
-    mut min_score := get_int(object_get(root, "min_score"))
-    mut limit := get_int(object_get(root, "limit"))
-    mut multiplier := get_int(object_get(root, "multiplier"))
+    team_id := find_team_id(json_get_string(json_object_get(root, "team")))
+    region_id := find_region_id(json_get_string(json_object_get(root, "region")))
+    mut min_score := json_get_int(json_object_get(root, "min_score"))
+    mut limit := json_get_int(json_object_get(root, "limit"))
+    mut multiplier := json_get_int(json_object_get(root, "multiplier"))
 
     if min_score < 0:
         min_score = 0
@@ -401,7 +400,7 @@ fn batch_score_json(req_body: String) -> String:
     if multiplier <= 0:
         multiplier = 3
 
-    active_filter := parse_active_filter(get_string(object_get(root, "active")))
+    active_filter := parse_active_filter(json_get_string(json_object_get(root, "active")))
     mut ids: List[Int] := []
     mut count := 0
     mut weighted_total := 0

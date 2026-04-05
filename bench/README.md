@@ -143,6 +143,17 @@ candidate index lists for common region/active filters, which is closer to how
 an actual in-memory service would avoid rescanning the full catalog on every
 request.
 
+latest measured results on this machine, using the median of 3 trials:
+
+| iterations | go total | forge total | ratio |
+|---|---:|---:|---:|
+| `200000` | `741 ms` | `514 ms` | `0.69x` |
+| `2000000` | `6767 ms` | `5859 ms` | `0.87x` |
+
+the biggest win came from moving the batch path onto the runtime JSON builtins
+and removing extra object-key allocations in the Rust JSON parser. with that in
+place, the batch phase is no longer the bottleneck in this benchmark.
+
 this is the better comparison point today if you want to isolate runtime,
 language, and service-logic costs from the current long-running HTTP server
 behavior.

@@ -1,5 +1,3 @@
-from std.json import parse, object_get, get_string, get_int
-
 struct CatalogUser:
     pub id: Int
     pub team_id: Int
@@ -392,21 +390,21 @@ fn search_checksum(team_id: Int, region_id: Int, active_filter: Int, min_score: 
     return count + total_score + quota_sum + id_sum
 
 fn batch_checksum(req_body: String) -> Int:
-    root := parse(req_body)
+    root := json_parse(req_body)
     if root < 0:
         return 0 - 1
-    team_id := find_team_id(get_string(object_get(root, "team")))
-    region_id := find_region_id(get_string(object_get(root, "region")))
-    mut min_score := get_int(object_get(root, "min_score"))
-    mut limit := get_int(object_get(root, "limit"))
-    mut multiplier := get_int(object_get(root, "multiplier"))
+    team_id := find_team_id(json_get_string(json_object_get(root, "team")))
+    region_id := find_region_id(json_get_string(json_object_get(root, "region")))
+    mut min_score := json_get_int(json_object_get(root, "min_score"))
+    mut limit := json_get_int(json_object_get(root, "limit"))
+    mut multiplier := json_get_int(json_object_get(root, "multiplier"))
     if min_score < 0:
         min_score = 0
     if limit <= 0:
         limit = 10
     if multiplier <= 0:
         multiplier = 3
-    active_filter := parse_active_filter(get_string(object_get(root, "active")))
+    active_filter := parse_active_filter(json_get_string(json_object_get(root, "active")))
     threshold := bounded_threshold(min_score)
 
     if team_id == 1 and region_id == 0 and active_filter == 1:

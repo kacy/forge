@@ -36,11 +36,11 @@ from checker import c_get_expr_type
 from types import get_type_info
 
 # --- type knowledge constants (single source of truth) ---
-FLOAT_RETURNING_FUNCS := "pow,sqrt,floor,ceil,round,to_float,get_float,toml_get_float"
-BOOL_RETURNING_FUNCS := "file_exists,dir_exists,get_bool,object_has,has,toml_get_bool,toml_has"
-INT_RETURNING_FUNCS := "abs,min,max,clamp,len,fnv1a,ord,exec,toml_get_int,toml_array_len,url_parse,url_port"
-STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,from_hex,to_hex,b64_encode,b64_decode,chr,read_file,env,path_join,path_dir,path_base,path_ext,path_stem,scheme,host,query,fragment,decode,exec_output,type_of,get_string,toml_type_of,toml_get_string,url_scheme,url_host,url_path,url_query,url_fragment,url_to_string,url_encode,url_decode"
-LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks"
+FLOAT_RETURNING_FUNCS := "pow,sqrt,floor,ceil,round,to_float,get_float,toml_get_float,json_get_float"
+BOOL_RETURNING_FUNCS := "file_exists,dir_exists,get_bool,object_has,has,toml_get_bool,toml_has,json_get_bool,json_object_has"
+INT_RETURNING_FUNCS := "abs,min,max,clamp,len,fnv1a,ord,exec,toml_get_int,toml_array_len,url_parse,url_port,json_parse,json_get_int,json_object_get,json_array_len"
+STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,from_hex,to_hex,b64_encode,b64_decode,chr,read_file,env,path_join,path_dir,path_base,path_ext,path_stem,scheme,host,query,fragment,decode,exec_output,type_of,get_string,toml_type_of,toml_get_string,url_scheme,url_host,url_path,url_query,url_fragment,url_to_string,url_encode,url_decode,json_type_of,json_get_string"
+LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks,json_object_keys"
 LIST_STRING_RETURNING_FUNCS := "sort_strings,zip,enumerate,toml_keys"
 BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty"
 VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear"

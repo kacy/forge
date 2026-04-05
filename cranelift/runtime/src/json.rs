@@ -96,7 +96,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_string(&mut self) -> Option<i64> {
+    fn parse_string_contents(&mut self) -> Option<String> {
         self.advance(); // skip "
         let mut s = String::new();
         loop {
@@ -118,7 +118,11 @@ impl<'a> Parser<'a> {
                 s.push(b as char);
             }
         }
-        Some(alloc_node(JsonValue::Str(s)))
+        Some(s)
+    }
+
+    fn parse_string(&mut self) -> Option<i64> {
+        Some(alloc_node(JsonValue::Str(self.parse_string_contents()?)))
     }
 
     fn parse_number(&mut self) -> Option<i64> {
@@ -171,11 +175,7 @@ impl<'a> Parser<'a> {
             if self.peek() != Some(b'"') {
                 return None;
             }
-            let key_handle = self.parse_string()?;
-            let key = with_node(key_handle, |node| match node {
-                JsonValue::Str(s) => Some(s.clone()),
-                _ => None,
-            })??;
+            let key = self.parse_string_contents()?;
             self.skip_ws();
             if !self.expect(b':') {
                 return None;
