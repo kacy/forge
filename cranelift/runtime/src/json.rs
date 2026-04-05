@@ -26,6 +26,14 @@ fn get_node(handle: i64) -> Option<JsonValue> {
     a.get((handle - 1) as usize).cloned()
 }
 
+fn with_node<R>(handle: i64, f: impl FnOnce(&JsonValue) -> R) -> Option<R> {
+    if handle <= 0 {
+        return None;
+    }
+    let a = arena().lock().unwrap();
+    a.get((handle - 1) as usize).map(f)
+}
+
 #[derive(Clone, Debug)]
 pub enum JsonValue {
     Null,
@@ -164,10 +172,10 @@ impl<'a> Parser<'a> {
                 return None;
             }
             let key_handle = self.parse_string()?;
-            let key = match get_node(key_handle) {
-                Some(JsonValue::Str(s)) => s,
-                _ => return None,
-            };
+            let key = with_node(key_handle, |node| match node {
+                JsonValue::Str(s) => Some(s.clone()),
+                _ => None,
+            })??;
             self.skip_ws();
             if !self.expect(b':') {
                 return None;
@@ -252,14 +260,16 @@ pub unsafe extern "C" fn forge_json_type_of(handle: i64) -> *mut i8 {
     if handle < -1 {
         return crate::toml::forge_toml_type_of(-handle);
     }
-    let ty = match get_node(handle) {
-        Some(JsonValue::Null) => "null",
-        Some(JsonValue::Bool(_)) => "bool",
-        Some(JsonValue::Int(_)) => "int",
-        Some(JsonValue::Float(_)) => "float",
-        Some(JsonValue::Str(_)) => "string",
-        Some(JsonValue::Array(_)) => "array",
-        Some(JsonValue::Object(_)) => "object",
+    let ty = match with_node(handle, |node| match node {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "bool",
+        JsonValue::Int(_) => "int",
+        JsonValue::Float(_) => "float",
+        JsonValue::Str(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }) {
+        Some(ty) => ty,
         None => "null",
     };
     alloc_cstring(ty)
@@ -267,36 +277,44 @@ pub unsafe extern "C" fn forge_json_type_of(handle: i64) -> *mut i8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_get_string(handle: i64) -> *mut i8 {
-    match get_node(handle) {
-        Some(JsonValue::Str(s)) => alloc_cstring(&s),
+    match with_node(handle, |node| match node {
+        JsonValue::Str(s) => Some(alloc_cstring(s)),
+        _ => None,
+    }) {
+        Some(Some(s)) => s,
         _ => alloc_cstring(""),
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_get_int(handle: i64) -> i64 {
-    match get_node(handle) {
-        Some(JsonValue::Int(n)) => n,
-        Some(JsonValue::Float(f)) => f as i64,
+    with_node(handle, |node| match node {
+        JsonValue::Int(n) => *n,
+        JsonValue::Float(f) => *f as i64,
         _ => 0,
-    }
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_get_float(handle: i64) -> f64 {
-    match get_node(handle) {
-        Some(JsonValue::Float(f)) => f,
-        Some(JsonValue::Int(n)) => n as f64,
+    with_node(handle, |node| match node {
+        JsonValue::Float(f) => *f,
+        JsonValue::Int(n) => *n as f64,
         _ => 0.0,
-    }
+    })
+    .unwrap_or(0.0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_get_bool(handle: i64) -> i64 {
-    match get_node(handle) {
-        Some(JsonValue::Bool(b)) => if b { 1 } else { 0 },
+    with_node(handle, |node| match node {
+        JsonValue::Bool(b) => {
+            if *b { 1 } else { 0 }
+        }
         _ => 0,
-    }
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -305,10 +323,11 @@ pub unsafe extern "C" fn forge_json_array_len(handle: i64) -> i64 {
     if handle < -1 {
         return crate::toml::forge_toml_array_len(handle);
     }
-    match get_node(handle) {
-        Some(JsonValue::Array(items)) => items.len() as i64,
+    with_node(handle, |node| match node {
+        JsonValue::Array(items) => items.len() as i64,
         _ => 0,
-    }
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -317,20 +336,19 @@ pub unsafe extern "C" fn forge_json_array_get(handle: i64, index: i64) -> i64 {
     if handle < -1 {
         return crate::toml::forge_toml_array_get(handle, index);
     }
-    match get_node(handle) {
-        Some(JsonValue::Array(items)) => {
-            items.get(index as usize).copied().unwrap_or(-1)
-        }
+    with_node(handle, |node| match node {
+        JsonValue::Array(items) => items.get(index as usize).copied().unwrap_or(-1),
         _ => -1,
-    }
+    })
+    .unwrap_or(-1)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_object_get(handle: i64, key: *const i8) -> i64 {
     let k = cstr_to_str(key);
-    match get_node(handle) {
-        Some(JsonValue::Object(entries)) => {
-            for (ek, ev) in &entries {
+    with_node(handle, |node| match node {
+        JsonValue::Object(entries) => {
+            for (ek, ev) in entries {
                 if ek == k {
                     return *ev;
                 }
@@ -338,34 +356,42 @@ pub unsafe extern "C" fn forge_json_object_get(handle: i64, key: *const i8) -> i
             -1
         }
         _ => -1,
-    }
+    })
+    .unwrap_or(-1)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_object_has(handle: i64, key: *const i8) -> i64 {
     let k = cstr_to_str(key);
-    match get_node(handle) {
-        Some(JsonValue::Object(entries)) => {
+    with_node(handle, |node| match node {
+        JsonValue::Object(entries) => {
             if entries.iter().any(|(ek, _)| ek == k) { 1 } else { 0 }
         }
         _ => 0,
-    }
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forge_json_object_keys(handle: i64) -> i64 {
     use crate::collections::list::{forge_list_new, forge_list_push_value};
 
-    match get_node(handle) {
-        Some(JsonValue::Object(entries)) => {
+    match with_node(handle, |node| match node {
+        JsonValue::Object(entries) => {
             let list = forge_list_new(8, 1); // string list
-            for (key, _) in &entries {
+            for (key, _) in entries {
                 let cstr = alloc_cstring(key);
                 forge_list_push_value(list, cstr as i64);
             }
             list.ptr as i64
         }
         _ => {
+            let list = forge_list_new(8, 1);
+            list.ptr as i64
+        }
+    }) {
+        Some(list) => list,
+        None => {
             let list = forge_list_new(8, 1);
             list.ptr as i64
         }

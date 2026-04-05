@@ -217,6 +217,9 @@ pub unsafe extern "C" fn forge_cstring_eq(a: *const i8, b: *const i8) -> i64 {
     if a.is_null() || b.is_null() {
         return 0;
     }
+    if std::ptr::eq(a, b) {
+        return 1;
+    }
 
     // Compare byte by byte
     let mut pa = a;

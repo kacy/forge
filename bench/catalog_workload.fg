@@ -2,29 +2,57 @@ from std.json import parse, object_get, get_string, get_int
 
 struct CatalogUser:
     pub id: Int
-    pub team: String
-    pub region: String
+    pub team_id: Int
+    pub region_id: Int
     pub active: Bool
     pub score: Int
     pub quota: Int
 
 mut users: List[CatalogUser] := []
 mut user_index: Map[Int, Int] := {}
+mut all_user_indices: List[Int] := []
+mut active_user_indices: List[Int] := []
+mut region_user_indices_0: List[Int] := []
+mut region_user_indices_1: List[Int] := []
+mut region_user_indices_2: List[Int] := []
+mut region_user_indices_3: List[Int] := []
+mut active_region_user_indices_0: List[Int] := []
+mut active_region_user_indices_1: List[Int] := []
+mut active_region_user_indices_2: List[Int] := []
+mut active_region_user_indices_3: List[Int] := []
 
 fn init_catalog():
     if users.len() > 0:
         return
-    teams := ["infra", "payments", "search", "growth", "risk", "core"]
-    regions := ["us-east", "us-west", "eu-central", "ap-south"]
     mut id := 1
     while id <= 2048:
-        team := teams[(id * 7) % teams.len()]
-        region := regions[(id * 5) % regions.len()]
+        team_id := (id * 7) % 6
+        region_id := (id * 5) % 4
         active := id % 3 != 0
         score := ((id * 37) % 900) + 100
         quota := ((id * 13) % 200) + 20
-        users.push(CatalogUser(id, team, region, active, score, quota))
-        user_index.insert(id, users.len() - 1)
+        users.push(CatalogUser(id, team_id, region_id, active, score, quota))
+        idx := users.len() - 1
+        user_index.insert(id, idx)
+        all_user_indices.push(idx)
+        if region_id == 0:
+            region_user_indices_0.push(idx)
+        if region_id == 1:
+            region_user_indices_1.push(idx)
+        if region_id == 2:
+            region_user_indices_2.push(idx)
+        if region_id == 3:
+            region_user_indices_3.push(idx)
+        if active:
+            active_user_indices.push(idx)
+            if region_id == 0:
+                active_region_user_indices_0.push(idx)
+            if region_id == 1:
+                active_region_user_indices_1.push(idx)
+            if region_id == 2:
+                active_region_user_indices_2.push(idx)
+            if region_id == 3:
+                active_region_user_indices_3.push(idx)
         id = id + 1
 
 fn parse_active_filter(raw: String) -> Int:
@@ -51,22 +79,95 @@ fn bool_int(value: Bool) -> Int:
         return 1
     return 0
 
+fn team_name(team_id: Int) -> String:
+    if team_id == 0:
+        return "infra"
+    if team_id == 1:
+        return "payments"
+    if team_id == 2:
+        return "search"
+    if team_id == 3:
+        return "growth"
+    if team_id == 4:
+        return "risk"
+    return "core"
+
+fn region_name(region_id: Int) -> String:
+    if region_id == 0:
+        return "us-east"
+    if region_id == 1:
+        return "us-west"
+    if region_id == 2:
+        return "eu-central"
+    return "ap-south"
+
+fn find_team_id(raw: String) -> Int:
+    if raw == "infra":
+        return 0
+    if raw == "payments":
+        return 1
+    if raw == "search":
+        return 2
+    if raw == "growth":
+        return 3
+    if raw == "risk":
+        return 4
+    if raw == "core":
+        return 5
+    return 0 - 1
+
+fn find_region_id(raw: String) -> Int:
+    if raw == "us-east":
+        return 0
+    if raw == "us-west":
+        return 1
+    if raw == "eu-central":
+        return 2
+    if raw == "ap-south":
+        return 3
+    return 0 - 1
+
+fn search_candidates(region_id: Int, active_filter: Int) -> List[Int]:
+    if active_filter == 1:
+        if region_id == 0:
+            return active_region_user_indices_0
+        if region_id == 1:
+            return active_region_user_indices_1
+        if region_id == 2:
+            return active_region_user_indices_2
+        if region_id == 3:
+            return active_region_user_indices_3
+        return active_user_indices
+    if region_id == 0:
+        return region_user_indices_0
+    if region_id == 1:
+        return region_user_indices_1
+    if region_id == 2:
+        return region_user_indices_2
+    if region_id == 3:
+        return region_user_indices_3
+    return all_user_indices
+
 fn profile_checksum(id: Int) -> Int:
     if not user_index.contains_key(id):
         return 0 - 1
     user := users[user_index[id]]
-    return user.id + user.score + user.quota + user.team.len() * 3 + user.region.len() * 7 + bool_int(user.active)
+    team := team_name(user.team_id)
+    region := region_name(user.region_id)
+    return user.id + user.score + user.quota + team.len() * 3 + region.len() * 7 + bool_int(user.active)
 
-fn search_checksum(team: String, region: String, active_filter: Int, min_score: Int, limit: Int) -> Int:
+fn search_checksum(team_id: Int, region_id: Int, active_filter: Int, min_score: Int, limit: Int) -> Int:
     mut count := 0
     mut total_score := 0
     mut quota_sum := 0
     mut id_sum := 0
+    candidates := search_candidates(region_id, active_filter)
 
-    for user in users:
-        if team != "" and user.team != team:
+    for idx in candidates:
+        user := users[idx]
+        if team_id >= 0 and user.team_id != team_id:
             continue
-        if region != "" and user.region != region:
+        if region_id >= 0 and user.region_id != region_id:
             continue
         if active_filter == 1 and not user.active:
             continue
@@ -85,8 +186,8 @@ fn batch_checksum(req_body: String) -> Int:
     root := parse(req_body)
     if root < 0:
         return 0 - 1
-    team := get_string(object_get(root, "team"))
-    region := get_string(object_get(root, "region"))
+    team_id := find_team_id(get_string(object_get(root, "team")))
+    region_id := find_region_id(get_string(object_get(root, "region")))
     mut min_score := get_int(object_get(root, "min_score"))
     mut limit := get_int(object_get(root, "limit"))
     mut multiplier := get_int(object_get(root, "multiplier"))
@@ -102,11 +203,13 @@ fn batch_checksum(req_body: String) -> Int:
     mut score_sum := 0
     mut weighted_total := 0
     mut id_sum := 0
+    candidates := search_candidates(region_id, active_filter)
 
-    for user in users:
-        if team != "" and user.team != team:
+    for idx in candidates:
+        user := users[idx]
+        if team_id >= 0 and user.team_id != team_id:
             continue
-        if region != "" and user.region != region:
+        if region_id >= 0 and user.region_id != region_id:
             continue
         if active_filter == 1 and not user.active:
             continue
@@ -135,7 +238,7 @@ fn bench_search_hot(iterations: Int) -> Int:
     mut i := 0
     while i < iterations:
         threshold := 300 + ((i * 29) % 350)
-        total = total + search_checksum("infra", "us-west", 1, threshold, 8)
+        total = total + search_checksum(0, 1, 1, threshold, 8)
         i = i + 1
     return total
 
@@ -144,7 +247,7 @@ fn bench_search_wide(iterations: Int) -> Int:
     mut i := 0
     while i < iterations:
         threshold := 150 + ((i * 11) % 200)
-        total = total + search_checksum("", "eu-central", 0 - 1, threshold, 24)
+        total = total + search_checksum(0 - 1, 2, 0 - 1, threshold, 24)
         i = i + 1
     return total
 

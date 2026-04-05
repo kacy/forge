@@ -208,6 +208,9 @@ pub extern "C" fn forge_string_eq(a: ForgeString, b: ForgeString) -> bool {
     if a.len == 0 {
         return true;
     }
+    if std::ptr::eq(a.ptr, b.ptr) {
+        return true;
+    }
 
     unsafe {
         let a_slice = std::slice::from_raw_parts(a.ptr, a.len as usize);

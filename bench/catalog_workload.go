@@ -9,12 +9,12 @@ import (
 )
 
 type workloadUser struct {
-	ID     int
-	Team   string
-	Region string
-	Active bool
-	Score  int
-	Quota  int
+	ID       int
+	TeamID   int
+	RegionID int
+	Active   bool
+	Score    int
+	Quota    int
 }
 
 type workloadBatchRequest struct {
@@ -28,25 +28,36 @@ type workloadBatchRequest struct {
 
 var workloadUsers []workloadUser
 var workloadIndex map[int]int
+var workloadTeamNames = []string{"infra", "payments", "search", "growth", "risk", "core"}
+var workloadRegionNames = []string{"us-east", "us-west", "eu-central", "ap-south"}
+var workloadAllUserIndices []int
+var workloadActiveUserIndices []int
+var workloadRegionUserIndices [4][]int
+var workloadActiveRegionUserIndices [4][]int
 
 func initWorkloadCatalog() {
 	if len(workloadUsers) > 0 {
 		return
 	}
-	teams := []string{"infra", "payments", "search", "growth", "risk", "core"}
-	regions := []string{"us-east", "us-west", "eu-central", "ap-south"}
 	workloadIndex = map[int]int{}
 	for id := 1; id <= 2048; id++ {
 		user := workloadUser{
-			ID:     id,
-			Team:   teams[(id*7)%len(teams)],
-			Region: regions[(id*5)%len(regions)],
-			Active: id%3 != 0,
-			Score:  ((id * 37) % 900) + 100,
-			Quota:  ((id * 13) % 200) + 20,
+			ID:       id,
+			TeamID:   (id * 7) % len(workloadTeamNames),
+			RegionID: (id * 5) % len(workloadRegionNames),
+			Active:   id%3 != 0,
+			Score:    ((id * 37) % 900) + 100,
+			Quota:    ((id * 13) % 200) + 20,
 		}
 		workloadUsers = append(workloadUsers, user)
-		workloadIndex[id] = len(workloadUsers) - 1
+		idx := len(workloadUsers) - 1
+		workloadIndex[id] = idx
+		workloadAllUserIndices = append(workloadAllUserIndices, idx)
+		workloadRegionUserIndices[user.RegionID] = append(workloadRegionUserIndices[user.RegionID], idx)
+		if user.Active {
+			workloadActiveUserIndices = append(workloadActiveUserIndices, idx)
+			workloadActiveRegionUserIndices[user.RegionID] = append(workloadActiveRegionUserIndices[user.RegionID], idx)
+		}
 	}
 }
 
@@ -78,25 +89,51 @@ func workloadParseActive(raw string) int {
 	return -1
 }
 
+func workloadFindNameID(names []string, raw string) int {
+	if raw == "" {
+		return -1
+	}
+	for i, name := range names {
+		if name == raw {
+			return i
+		}
+	}
+	return -1
+}
+
+func workloadSearchCandidates(regionID, activeFilter int) []int {
+	if activeFilter == 1 {
+		if regionID >= 0 && regionID < len(workloadActiveRegionUserIndices) {
+			return workloadActiveRegionUserIndices[regionID]
+		}
+		return workloadActiveUserIndices
+	}
+	if regionID >= 0 && regionID < len(workloadRegionUserIndices) {
+		return workloadRegionUserIndices[regionID]
+	}
+	return workloadAllUserIndices
+}
+
 func profileChecksum(id int) int {
 	idx, ok := workloadIndex[id]
 	if !ok {
 		return -1
 	}
 	user := workloadUsers[idx]
-	return user.ID + user.Score + user.Quota + len(user.Team)*3 + len(user.Region)*7 + workloadBoolInt(user.Active)
+	return user.ID + user.Score + user.Quota + len(workloadTeamNames[user.TeamID])*3 + len(workloadRegionNames[user.RegionID])*7 + workloadBoolInt(user.Active)
 }
 
-func searchChecksum(team, region string, activeFilter, minScore, limit int) int {
+func searchChecksum(teamID, regionID, activeFilter, minScore, limit int) int {
 	count := 0
 	totalScore := 0
 	quotaSum := 0
 	idSum := 0
-	for _, user := range workloadUsers {
-		if team != "" && user.Team != team {
+	for _, idx := range workloadSearchCandidates(regionID, activeFilter) {
+		user := workloadUsers[idx]
+		if teamID >= 0 && user.TeamID != teamID {
 			continue
 		}
-		if region != "" && user.Region != region {
+		if regionID >= 0 && user.RegionID != regionID {
 			continue
 		}
 		if activeFilter == 1 && !user.Active {
@@ -123,6 +160,8 @@ func batchChecksum(body string) int {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		return -1
 	}
+	teamID := workloadFindNameID(workloadTeamNames, req.Team)
+	regionID := workloadFindNameID(workloadRegionNames, req.Region)
 	minScore := req.MinScore
 	if minScore < 0 {
 		minScore = 0
@@ -140,11 +179,12 @@ func batchChecksum(body string) int {
 	scoreSum := 0
 	weightedTotal := 0
 	idSum := 0
-	for _, user := range workloadUsers {
-		if req.Team != "" && user.Team != req.Team {
+	for _, idx := range workloadSearchCandidates(regionID, activeFilter) {
+		user := workloadUsers[idx]
+		if teamID >= 0 && user.TeamID != teamID {
 			continue
 		}
-		if req.Region != "" && user.Region != req.Region {
+		if regionID >= 0 && user.RegionID != regionID {
 			continue
 		}
 		if activeFilter == 1 && !user.Active {
@@ -179,7 +219,7 @@ func benchSearchHot(iterations int) int {
 	total := 0
 	for i := 0; i < iterations; i++ {
 		threshold := 300 + ((i * 29) % 350)
-		total += searchChecksum("infra", "us-west", 1, threshold, 8)
+		total += searchChecksum(0, 1, 1, threshold, 8)
 	}
 	return total
 }
@@ -188,7 +228,7 @@ func benchSearchWide(iterations int) int {
 	total := 0
 	for i := 0; i < iterations; i++ {
 		threshold := 150 + ((i * 11) % 200)
-		total += searchChecksum("", "eu-central", -1, threshold, 24)
+		total += searchChecksum(-1, 2, -1, threshold, 24)
 	}
 	return total
 }

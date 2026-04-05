@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -103,30 +104,80 @@ func ratio(numerator, denominator int) string {
 	return fmt.Sprintf("%.2fx", float64(numerator)/float64(denominator))
 }
 
+func median(values []int) int {
+	sorted := append([]int(nil), values...)
+	sort.Ints(sorted)
+	return sorted[len(sorted)/2]
+}
+
+func medianResult(results []workloadResult) workloadResult {
+	out := workloadResult{
+		users:      results[0].users,
+		iterations: results[0].iterations,
+		checksum:   results[0].checksum,
+	}
+	var profile []int
+	var hot []int
+	var wide []int
+	var batch []int
+	var total []int
+	for _, result := range results {
+		profile = append(profile, result.profileMS)
+		hot = append(hot, result.searchHotMS)
+		wide = append(wide, result.searchWideMS)
+		batch = append(batch, result.batchMS)
+		total = append(total, result.totalMS)
+	}
+	out.profileMS = median(profile)
+	out.searchHotMS = median(hot)
+	out.searchWideMS = median(wide)
+	out.batchMS = median(batch)
+	out.totalMS = median(total)
+	return out
+}
+
+func runTrials(path string, iterations, trials int) (workloadResult, error) {
+	results := make([]workloadResult, 0, trials)
+	for i := 0; i < trials; i++ {
+		result, output, err := runWorkload(path, iterations)
+		if err != nil {
+			return workloadResult{}, fmt.Errorf("trial %d failed for %s\n%s\n%w", i+1, path, output, err)
+		}
+		if len(results) > 0 && result.checksum != results[0].checksum {
+			return workloadResult{}, fmt.Errorf("checksum mismatch across trials for %s: %d vs %d", path, results[0].checksum, result.checksum)
+		}
+		results = append(results, result)
+	}
+	return medianResult(results), nil
+}
+
 func main() {
 	iterations := 10000
+	trials := 5
 	if len(os.Args) > 1 && os.Args[1] != "" {
 		value, err := strconv.Atoi(os.Args[1])
 		if err == nil && value > 0 {
 			iterations = value
 		}
 	}
+	if len(os.Args) > 2 && os.Args[2] != "" {
+		value, err := strconv.Atoi(os.Args[2])
+		if err == nil && value > 0 {
+			trials = value
+		}
+	}
 
-	fmt.Printf("catalog workload comparison (%d iterations)\n", iterations)
+	fmt.Printf("catalog workload comparison (%d iterations, %d trials, median)\n", iterations, trials)
 	fmt.Println()
 
-	goResult, goOutput, goErr := runWorkload("./bench/catalog_workload_go", iterations)
+	goResult, goErr := runTrials("./bench/catalog_workload_go", iterations, trials)
 	if goErr != nil {
-		fmt.Println("go workload failed")
-		fmt.Println(goOutput)
 		fmt.Println(goErr)
 		os.Exit(1)
 	}
 
-	forgeResult, forgeOutput, forgeErr := runWorkload("./bench/catalog_workload", iterations)
+	forgeResult, forgeErr := runTrials("./bench/catalog_workload", iterations, trials)
 	if forgeErr != nil {
-		fmt.Println("forge workload failed")
-		fmt.Println(forgeOutput)
 		fmt.Println(forgeErr)
 		os.Exit(1)
 	}

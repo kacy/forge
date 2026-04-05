@@ -15,14 +15,24 @@ from std.env import get_args
 
 struct CatalogUser:
     pub id: Int
-    pub team: String
-    pub region: String
+    pub team_id: Int
+    pub region_id: Int
     pub active: Bool
     pub score: Int
     pub quota: Int
 
 mut users: List[CatalogUser] := []
 mut user_index: Map[Int, Int] := {}
+mut all_user_indices: List[Int] := []
+mut active_user_indices: List[Int] := []
+mut region_user_indices_0: List[Int] := []
+mut region_user_indices_1: List[Int] := []
+mut region_user_indices_2: List[Int] := []
+mut region_user_indices_3: List[Int] := []
+mut active_region_user_indices_0: List[Int] := []
+mut active_region_user_indices_1: List[Int] := []
+mut active_region_user_indices_2: List[Int] := []
+mut active_region_user_indices_3: List[Int] := []
 
 fn bool_json(value: Bool) -> String:
     if value:
@@ -32,17 +42,35 @@ fn bool_json(value: Bool) -> String:
 fn init_catalog():
     if users.len() > 0:
         return
-    teams := ["infra", "payments", "search", "growth", "risk", "core"]
-    regions := ["us-east", "us-west", "eu-central", "ap-south"]
     mut id := 1
     while id <= 2048:
-        team := teams[(id * 7) % teams.len()]
-        region := regions[(id * 5) % regions.len()]
+        team_id := (id * 7) % 6
+        region_id := (id * 5) % 4
         active := id % 3 != 0
         score := ((id * 37) % 900) + 100
         quota := ((id * 13) % 200) + 20
-        users.push(CatalogUser(id, team, region, active, score, quota))
-        user_index.insert(id, users.len() - 1)
+        users.push(CatalogUser(id, team_id, region_id, active, score, quota))
+        idx := users.len() - 1
+        user_index.insert(id, idx)
+        all_user_indices.push(idx)
+        if region_id == 0:
+            region_user_indices_0.push(idx)
+        if region_id == 1:
+            region_user_indices_1.push(idx)
+        if region_id == 2:
+            region_user_indices_2.push(idx)
+        if region_id == 3:
+            region_user_indices_3.push(idx)
+        if active:
+            active_user_indices.push(idx)
+            if region_id == 0:
+                active_region_user_indices_0.push(idx)
+            if region_id == 1:
+                active_region_user_indices_1.push(idx)
+            if region_id == 2:
+                active_region_user_indices_2.push(idx)
+            if region_id == 3:
+                active_region_user_indices_3.push(idx)
         id = id + 1
 
 fn parse_int_or_default(raw: String, default_value: Int) -> Int:
@@ -75,13 +103,84 @@ fn server_port() -> Int:
         return 9102
     return value
 
+fn team_name(team_id: Int) -> String:
+    if team_id == 0:
+        return "infra"
+    if team_id == 1:
+        return "payments"
+    if team_id == 2:
+        return "search"
+    if team_id == 3:
+        return "growth"
+    if team_id == 4:
+        return "risk"
+    return "core"
+
+fn region_name(region_id: Int) -> String:
+    if region_id == 0:
+        return "us-east"
+    if region_id == 1:
+        return "us-west"
+    if region_id == 2:
+        return "eu-central"
+    return "ap-south"
+
+fn find_team_id(raw: String) -> Int:
+    if raw == "infra":
+        return 0
+    if raw == "payments":
+        return 1
+    if raw == "search":
+        return 2
+    if raw == "growth":
+        return 3
+    if raw == "risk":
+        return 4
+    if raw == "core":
+        return 5
+    return 0 - 1
+
+fn find_region_id(raw: String) -> Int:
+    if raw == "us-east":
+        return 0
+    if raw == "us-west":
+        return 1
+    if raw == "eu-central":
+        return 2
+    if raw == "ap-south":
+        return 3
+    return 0 - 1
+
+fn search_candidates(region_id: Int, active_filter: Int) -> List[Int]:
+    if active_filter == 1:
+        if region_id == 0:
+            return active_region_user_indices_0
+        if region_id == 1:
+            return active_region_user_indices_1
+        if region_id == 2:
+            return active_region_user_indices_2
+        if region_id == 3:
+            return active_region_user_indices_3
+        return active_user_indices
+    if region_id == 0:
+        return region_user_indices_0
+    if region_id == 1:
+        return region_user_indices_1
+    if region_id == 2:
+        return region_user_indices_2
+    if region_id == 3:
+        return region_user_indices_3
+    return all_user_indices
+
 fn user_json(user: CatalogUser) -> String:
     lb := chr(123)
     rb := chr(125)
     dq := chr(34)
+    team := team_name(user.team_id)
+    region := region_name(user.region_id)
     mut body := lb + dq + "id" + dq + ":" + user.id.to_string()
-    body = body + "," + dq + "team" + dq + ":" + dq + user.team + dq
-    body = body + "," + dq + "region" + dq + ":" + dq + user.region + dq
+    body = body + "," + dq + "team" + dq + ":" + dq + team + dq
+    body = body + "," + dq + "region" + dq + ":" + dq + region + dq
     body = body + "," + dq + "active" + dq + ":" + bool_json(user.active)
     body = body + "," + dq + "score" + dq + ":" + user.score.to_string()
     body = body + "," + dq + "quota" + dq + ":" + user.quota.to_string()
@@ -93,7 +192,7 @@ fn ids_json(ids: List[Int]) -> String:
         parts.push(id.to_string())
     return "[" + parts.join(",") + "]"
 
-fn search_json(team: String, region: String, active_filter: Int, min_score: Int, limit: Int) -> String:
+fn search_json(team_id: Int, region_id: Int, active_filter: Int, min_score: Int, limit: Int) -> String:
     lb := chr(123)
     rb := chr(125)
     dq := chr(34)
@@ -101,11 +200,13 @@ fn search_json(team: String, region: String, active_filter: Int, min_score: Int,
     mut count := 0
     mut total_score := 0
     mut quota_sum := 0
+    candidates := search_candidates(region_id, active_filter)
 
-    for user in users:
-        if team != "" and user.team != team:
+    for idx in candidates:
+        user := users[idx]
+        if team_id >= 0 and user.team_id != team_id:
             continue
-        if region != "" and user.region != region:
+        if region_id >= 0 and user.region_id != region_id:
             continue
         if active_filter == 1 and not user.active:
             continue
@@ -128,8 +229,8 @@ fn batch_score_json(req_body: String) -> String:
     root := parse(req_body)
     if root < 0:
         return ""
-    team := get_string(object_get(root, "team"))
-    region := get_string(object_get(root, "region"))
+    team_id := find_team_id(get_string(object_get(root, "team")))
+    region_id := find_region_id(get_string(object_get(root, "region")))
     mut min_score := get_int(object_get(root, "min_score"))
     mut limit := get_int(object_get(root, "limit"))
     mut multiplier := get_int(object_get(root, "multiplier"))
@@ -146,11 +247,13 @@ fn batch_score_json(req_body: String) -> String:
     mut count := 0
     mut weighted_total := 0
     mut score_sum := 0
+    candidates := search_candidates(region_id, active_filter)
 
-    for user in users:
-        if team != "" and user.team != team:
+    for idx in candidates:
+        user := users[idx]
+        if team_id >= 0 and user.team_id != team_id:
             continue
-        if region != "" and user.region != region:
+        if region_id >= 0 and user.region_id != region_id:
             continue
         if active_filter == 1 and not user.active:
             continue
@@ -189,12 +292,12 @@ fn handle(fd: Int) -> Int!:
         return send_response(fd, json_response(200, user_json(users[idx])))
 
     if m == "GET" and p == "/search":
-        team := get_query_param(req, "team")
-        region := get_query_param(req, "region")
+        team_id := find_team_id(get_query_param(req, "team"))
+        region_id := find_region_id(get_query_param(req, "region"))
         active_filter := parse_active_filter(get_query_param(req, "active"))
         min_score := parse_int_or_default(get_query_param(req, "min_score"), 0)
         limit := parse_int_or_default(get_query_param(req, "limit"), 10)
-        return send_response(fd, json_response(200, search_json(team, region, active_filter, min_score, limit)))
+        return send_response(fd, json_response(200, search_json(team_id, region_id, active_filter, min_score, limit)))
 
     if m == "POST" and p == "/batch-score":
         response_body := batch_score_json(body(req))

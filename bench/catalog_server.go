@@ -11,12 +11,12 @@ import (
 )
 
 type catalogUser struct {
-	ID     int
-	Team   string
-	Region string
-	Active bool
-	Score  int
-	Quota  int
+	ID       int
+	TeamID   int
+	RegionID int
+	Active   bool
+	Score    int
+	Quota    int
 }
 
 type batchRequest struct {
@@ -30,25 +30,36 @@ type batchRequest struct {
 
 var users []catalogUser
 var userIndex map[int]int
+var teamNames = []string{"infra", "payments", "search", "growth", "risk", "core"}
+var regionNames = []string{"us-east", "us-west", "eu-central", "ap-south"}
+var allUserIndices []int
+var activeUserIndices []int
+var regionUserIndices [4][]int
+var activeRegionUserIndices [4][]int
 
 func initCatalog() {
 	if len(users) > 0 {
 		return
 	}
-	teams := []string{"infra", "payments", "search", "growth", "risk", "core"}
-	regions := []string{"us-east", "us-west", "eu-central", "ap-south"}
 	userIndex = map[int]int{}
 	for id := 1; id <= 2048; id++ {
 		user := catalogUser{
-			ID:     id,
-			Team:   teams[(id*7)%len(teams)],
-			Region: regions[(id*5)%len(regions)],
-			Active: id%3 != 0,
-			Score:  ((id * 37) % 900) + 100,
-			Quota:  ((id * 13) % 200) + 20,
+			ID:       id,
+			TeamID:   (id * 7) % len(teamNames),
+			RegionID: (id * 5) % len(regionNames),
+			Active:   id%3 != 0,
+			Score:    ((id * 37) % 900) + 100,
+			Quota:    ((id * 13) % 200) + 20,
 		}
 		users = append(users, user)
-		userIndex[id] = len(users) - 1
+		idx := len(users) - 1
+		userIndex[id] = idx
+		allUserIndices = append(allUserIndices, idx)
+		regionUserIndices[user.RegionID] = append(regionUserIndices[user.RegionID], idx)
+		if user.Active {
+			activeUserIndices = append(activeUserIndices, idx)
+			activeRegionUserIndices[user.RegionID] = append(activeRegionUserIndices[user.RegionID], idx)
+		}
 	}
 }
 
@@ -73,6 +84,31 @@ func parseActiveFilter(raw string) int {
 	return -1
 }
 
+func findNameID(names []string, raw string) int {
+	if raw == "" {
+		return -1
+	}
+	for i, name := range names {
+		if name == raw {
+			return i
+		}
+	}
+	return -1
+}
+
+func searchCandidates(regionID, activeFilter int) []int {
+	if activeFilter == 1 {
+		if regionID >= 0 && regionID < len(activeRegionUserIndices) {
+			return activeRegionUserIndices[regionID]
+		}
+		return activeUserIndices
+	}
+	if regionID >= 0 && regionID < len(regionUserIndices) {
+		return regionUserIndices[regionID]
+	}
+	return allUserIndices
+}
+
 func idsJSON(ids []int) string {
 	if len(ids) == 0 {
 		return "[]"
@@ -84,16 +120,17 @@ func idsJSON(ids []int) string {
 	return "[" + strings.Join(parts, ",") + "]"
 }
 
-func searchJSON(team, region string, activeFilter, minScore, limit int) string {
+func searchJSON(teamID, regionID, activeFilter, minScore, limit int) string {
 	count := 0
 	totalScore := 0
 	quotaSum := 0
 	ids := make([]int, 0, limit)
-	for _, user := range users {
-		if team != "" && user.Team != team {
+	for _, idx := range searchCandidates(regionID, activeFilter) {
+		user := users[idx]
+		if teamID >= 0 && user.TeamID != teamID {
 			continue
 		}
-		if region != "" && user.Region != region {
+		if regionID >= 0 && user.RegionID != regionID {
 			continue
 		}
 		if activeFilter == 1 && !user.Active {
@@ -117,6 +154,8 @@ func searchJSON(team, region string, activeFilter, minScore, limit int) string {
 }
 
 func batchScoreJSON(req batchRequest) string {
+	teamID := findNameID(teamNames, req.Team)
+	regionID := findNameID(regionNames, req.Region)
 	minScore := req.MinScore
 	if minScore < 0 {
 		minScore = 0
@@ -134,11 +173,12 @@ func batchScoreJSON(req batchRequest) string {
 	scoreSum := 0
 	weightedTotal := 0
 	ids := make([]int, 0, limit)
-	for _, user := range users {
-		if req.Team != "" && user.Team != req.Team {
+	for _, idx := range searchCandidates(regionID, activeFilter) {
+		user := users[idx]
+		if teamID >= 0 && user.TeamID != teamID {
 			continue
 		}
-		if req.Region != "" && user.Region != req.Region {
+		if regionID >= 0 && user.RegionID != regionID {
 			continue
 		}
 		if activeFilter == 1 && !user.Active {
@@ -186,18 +226,18 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Connection", "close")
 		fmt.Fprintf(w, `{"id":%d,"team":"%s","region":"%s","active":%t,"score":%d,"quota":%d}`,
-			user.ID, user.Team, user.Region, user.Active, user.Score, user.Quota)
+			user.ID, teamNames[user.TeamID], regionNames[user.RegionID], user.Active, user.Score, user.Quota)
 	})
 
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
-		team := r.URL.Query().Get("team")
-		region := r.URL.Query().Get("region")
+		teamID := findNameID(teamNames, r.URL.Query().Get("team"))
+		regionID := findNameID(regionNames, r.URL.Query().Get("region"))
 		activeFilter := parseActiveFilter(r.URL.Query().Get("active"))
 		minScore := parseIntOrDefault(r.URL.Query().Get("min_score"), 0)
 		limit := parseIntOrDefault(r.URL.Query().Get("limit"), 10)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Connection", "close")
-		w.Write([]byte(searchJSON(team, region, activeFilter, minScore, limit)))
+		w.Write([]byte(searchJSON(teamID, regionID, activeFilter, minScore, limit)))
 	})
 
 	mux.HandleFunc("/batch-score", func(w http.ResponseWriter, r *http.Request) {

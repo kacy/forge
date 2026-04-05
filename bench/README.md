@@ -127,16 +127,25 @@ forge build bench/catalog_workload.fg
 go run bench/catalog_workload.go 4000
 ```
 
-this is the better comparison point today if you want to isolate runtime and
-language costs from the current long-running HTTP server behavior.
-
 a helper runner is also available once both workload binaries are built:
 
 ```
 go build -o bench/catalog_workload_go bench/catalog_workload.go
 forge build bench/catalog_workload.fg
-go run bench/catalog_workload_bench.go 10000
+go run bench/catalog_workload_bench.go 10000 5
 ```
+
+the second argument is the number of trials. the runner reports median phase
+times, which is more reliable than a single run when the timings are short.
+
+the workload benchmark now also uses internal team/region ids and precomputed
+candidate index lists for common region/active filters, which is closer to how
+an actual in-memory service would avoid rescanning the full catalog on every
+request.
+
+this is the better comparison point today if you want to isolate runtime,
+language, and service-logic costs from the current long-running HTTP server
+behavior.
 
 note: the live HTTP catalog benchmark is still exploratory on the Forge side.
 the Forge service currently exits after its first successful request, so the
