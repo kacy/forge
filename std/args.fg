@@ -95,32 +95,37 @@ fn find_by_short(data: String, count: Int, short: String) -> String:
             return get_field(rec, 0)
     return ""
 
-fn rebuild_with_update(data: String, name: String, field_idx: Int, new_val: String) -> String:
+fn replace_field(record: String, field_idx: Int, new_val: String) -> String:
+    parts := record.split("|")
+    mut rebuilt := ""
+    mut j := 0
+    for part in parts:
+        if j > 0:
+            rebuilt = rebuilt + "|"
+        if j == field_idx:
+            rebuilt = rebuilt + new_val
+        else:
+            rebuilt = rebuilt + part
+        j = j + 1
+    return rebuilt
+
+fn rebuild_with_match(data: String, match_idx: Int, match_val: String, field_idx: Int, new_val: String) -> String:
     recs := get_records(data)
     mut result := ""
     mut i := 0
     for current_rec in recs:
         mut rec := current_rec
-        if get_field(rec, 0) == name:
-            parts := rec.split("|")
-            mut rebuilt := ""
-            mut j := 0
-            for part in parts:
-                if j > 0:
-                    rebuilt = rebuilt + "|"
-                if j == field_idx:
-                    rebuilt = rebuilt + new_val
-                else:
-                    rebuilt = rebuilt + part
-                j = j + 1
-            rec = rebuilt
+        if get_field(rec, match_idx) == match_val:
+            rec = replace_field(rec, field_idx, new_val)
         if i > 0:
-            sep := result + "~"
-            result = sep + rec
+            result = result + "~" + rec
         else:
             result = rec
         i = i + 1
     return result
+
+fn rebuild_with_update(data: String, name: String, field_idx: Int, new_val: String) -> String:
+    return rebuild_with_match(data, 0, name, field_idx, new_val)
 
 # ===============================================================
 # Parsing
@@ -204,21 +209,9 @@ fn rebuild_with_update_by_index(data: String, rec_idx: Int, field_idx: Int, new_
     for current_rec in recs:
         mut rec := current_rec
         if i == rec_idx:
-            parts := rec.split("|")
-            mut rebuilt := ""
-            mut j := 0
-            for part in parts:
-                if j > 0:
-                    rebuilt = rebuilt + "|"
-                if j == field_idx:
-                    rebuilt = rebuilt + new_val
-                else:
-                    rebuilt = rebuilt + part
-                j = j + 1
-            rec = rebuilt
+            rec = replace_field(rec, field_idx, new_val)
         if i > 0:
-            sep := result + "~"
-            result = sep + rec
+            result = result + "~" + rec
         else:
             result = rec
         i = i + 1
