@@ -119,6 +119,11 @@ protocol code starts depending on it.
 move higher stdlib modules onto the shared layer so the design proves itself in
 real code, not just in toy examples.
 
+http is the first real target here because it needs exactly the kind of loops
+that get messy fast when every module rolls its own framing. once `std.net.http`
+reads requests through `std.io`, the same buffered layer can carry over into
+headers, clients, and later protocol code.
+
 ## the long-term version
 
 the long-term version should be bytes-first and protocol-friendly. but the best
