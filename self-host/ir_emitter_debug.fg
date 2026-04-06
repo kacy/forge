@@ -1099,6 +1099,7 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         obj_r := ir_expr(node.children[0])
         idx_r := ir_expr(node.children[1])
         r := ir_reg()
+        mut value_type := ir_infer_type(idx)
         # detect string indexing vs list indexing
         obj_n := get_node(node.children[0])
         idx_n := get_node(node.children[1])
@@ -1129,9 +1130,13 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         if is_str_idx:
             ir_emit_call(r, "char_at", "string", [obj_r, idx_r])
         elif is_map_int_idx:
-            ir_emit_call(r, "map_get_ikey", "int", [obj_r, idx_r])
+            if value_type.len() == 0:
+                value_type = "unknown"
+            ir_emit_call(r, "map_get_ikey", value_type, [obj_r, idx_r])
         elif is_map_idx:
-            ir_emit_call(r, "map_get", "unknown", [obj_r, idx_r])
+            if value_type.len() == 0:
+                value_type = "unknown"
+            ir_emit_call(r, "map_get", value_type, [obj_r, idx_r])
         else:
             ir_emit_call(r, "__list_get", ir_infer_type(idx), [obj_r, idx_r])
         return r
