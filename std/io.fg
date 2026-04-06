@@ -20,6 +20,11 @@ mut string_reader_offsets: Map[Int, Int] := {}
 mut next_string_buffer_handle: Int := 1
 mut string_buffer_data: Map[Int, String] := {}
 
+mut next_buffered_string_reader_handle: Int := 1
+mut buffered_string_reader_sources: Map[Int, Int] := {}
+mut buffered_string_reader_chunk_sizes: Map[Int, Int] := {}
+mut buffered_string_reader_cache: Map[Int, String] := {}
+
 interface Reader:
     fn read(max_bytes: Int) -> String!
 
@@ -38,6 +43,9 @@ struct StringReader:
 struct StringBuffer:
     pub handle: Int
 
+struct BufferedStringReader:
+    pub handle: Int
+
 struct TcpStream:
     pub fd: Int
 
@@ -53,6 +61,22 @@ pub fn string_buffer() -> StringBuffer:
     next_string_buffer_handle = next_string_buffer_handle + 1
     string_buffer_data.insert(handle, "")
     return StringBuffer(handle)
+
+pub fn buffered_string_reader(reader: StringReader) -> BufferedStringReader:
+    return buffered_string_reader_chunked(reader, DEFAULT_CHUNK_SIZE)
+
+pub fn buffered_string_reader_chunked(reader: StringReader, chunk_size: Int) -> BufferedStringReader:
+    handle := next_buffered_string_reader_handle
+    next_buffered_string_reader_handle = next_buffered_string_reader_handle + 1
+
+    mut size := chunk_size
+    if size <= 0:
+        size = DEFAULT_CHUNK_SIZE
+
+    buffered_string_reader_sources.insert(handle, reader.handle)
+    buffered_string_reader_chunk_sizes.insert(handle, size)
+    buffered_string_reader_cache.insert(handle, "")
+    return BufferedStringReader(handle)
 
 pub fn tcp_stream_connect(host: String, port: Int) -> TcpStream!:
     return TcpStream(tcp_connect(host, port)!)
@@ -85,6 +109,12 @@ pub fn string_reader_read(reader: StringReader, max_bytes: Int) -> String!:
 
 pub fn string_buffer_write(buf: StringBuffer, data: String) -> Int!:
     return string_buffer_write_internal(buf, data)
+
+pub fn buffered_string_reader_read(reader: BufferedStringReader, max_bytes: Int) -> String!:
+    return buffered_string_reader_read_internal(reader, max_bytes)
+
+pub fn buffered_string_reader_read_line(reader: BufferedStringReader) -> String!:
+    return buffered_string_reader_read_line_internal(reader)
 
 pub fn read_all_string(reader: StringReader) -> String!:
     return read_all_string_chunked(reader, DEFAULT_CHUNK_SIZE)
@@ -157,6 +187,95 @@ fn string_buffer_write_internal(buf: StringBuffer, data: String) -> Int!:
         current = string_buffer_data[buf.handle]
     string_buffer_data.insert(buf.handle, current + data)
     return data.len()
+
+fn buffered_string_reader_read_internal(reader: BufferedStringReader, max_bytes: Int) -> String!:
+    if max_bytes <= 0:
+        return ""
+    if not buffered_string_reader_sources.contains_key(reader.handle):
+        return ""
+
+    mut result := ""
+    while result.len() < max_bytes:
+        mut cached := buffered_string_reader_cache_get(reader.handle)
+        if cached.len() == 0:
+            filled := buffered_string_reader_fill(reader.handle)!
+            if filled <= 0:
+                return result
+            cached = buffered_string_reader_cache_get(reader.handle)
+        mut take := max_bytes - result.len()
+        if take > cached.len():
+            take = cached.len()
+        result = result + cached.substring(0, take)
+        buffered_string_reader_consume(reader.handle, take)
+    return result
+
+fn buffered_string_reader_read_line_internal(reader: BufferedStringReader) -> String!:
+    if not buffered_string_reader_sources.contains_key(reader.handle):
+        return ""
+
+    mut result := ""
+    while true:
+        mut cached := buffered_string_reader_cache_get(reader.handle)
+        if cached.len() == 0:
+            filled := buffered_string_reader_fill(reader.handle)!
+            if filled <= 0:
+                return result
+            cached = buffered_string_reader_cache_get(reader.handle)
+        newline := buffered_string_reader_find_newline(cached)
+        if newline >= 0:
+            result = result + cached.substring(0, newline)
+            buffered_string_reader_consume(reader.handle, newline + 1)
+            if result.len() > 0:
+                end := result.len()
+                if result.substring(end - 1, end) == chr(13):
+                    return result.substring(0, end - 1)
+            return result
+        result = result + cached
+        buffered_string_reader_cache.insert(reader.handle, "")
+
+fn buffered_string_reader_fill(handle: Int) -> Int!:
+    if not buffered_string_reader_sources.contains_key(handle):
+        return 0
+
+    source_handle := buffered_string_reader_sources[handle]
+    mut chunk_size := DEFAULT_CHUNK_SIZE
+    if buffered_string_reader_chunk_sizes.contains_key(handle):
+        chunk_size = buffered_string_reader_chunk_sizes[handle]
+
+    chunk := string_reader_read(StringReader(source_handle), chunk_size)!
+    buffered_string_reader_cache.insert(handle, chunk)
+    return chunk.len()
+
+fn buffered_string_reader_cache_get(handle: Int) -> String:
+    if buffered_string_reader_cache.contains_key(handle):
+        return buffered_string_reader_cache[handle]
+    return ""
+
+fn buffered_string_reader_consume(handle: Int, consumed: Int):
+    cached := buffered_string_reader_cache_get(handle)
+    if consumed >= cached.len():
+        buffered_string_reader_cache.insert(handle, "")
+    else:
+        buffered_string_reader_cache.insert(handle, cached.substring(consumed, cached.len()))
+
+fn buffered_string_reader_find_newline(data: String) -> Int:
+    mut i := 0
+    while i < data.len():
+        if data.substring(i, i + 1) == chr(10):
+            return i
+        i = i + 1
+    return -1
+
+impl BufferedStringReader:
+    fn read(max_bytes: Int) -> String!:
+        return buffered_string_reader_read(self, max_bytes)
+
+    fn read_line() -> String!:
+        return buffered_string_reader_read_line(self)
+
+impl Reader for BufferedStringReader:
+    fn read(max_bytes: Int) -> String!:
+        return buffered_string_reader_read(self, max_bytes)
 
 impl TcpStream:
     fn read(max_bytes: Int) -> String!:

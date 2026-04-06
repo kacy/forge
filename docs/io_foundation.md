@@ -110,6 +110,10 @@ add higher-level layers:
 - scanner-style helpers
 - framed protocol helpers
 
+the first buffered reader is a good early win here because it exercises the
+state model hard enough to flush out compiler and runtime issues before http or
+protocol code starts depending on it.
+
 ### milestone 5
 
 move higher stdlib modules onto the shared layer so the design proves itself in
