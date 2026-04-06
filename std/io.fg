@@ -73,6 +73,18 @@ struct BufferedTcpWriter:
 struct TcpStream:
     pub fd: Int
 
+struct Process:
+    pub handle: Int
+
+struct ProcessStdin:
+    pub handle: Int
+
+struct ProcessStdout:
+    pub handle: Int
+
+struct ProcessStderr:
+    pub handle: Int
+
 pub fn string_reader(data: String) -> StringReader:
     handle := next_string_reader_handle
     next_string_reader_handle = next_string_reader_handle + 1
@@ -168,6 +180,27 @@ pub fn tcp_stream_set_timeout(stream: TcpStream, ms: Int):
 pub fn tcp_stream_close(stream: TcpStream):
     tcp_close(stream.fd)
 
+pub fn spawn_process(command: String) -> Process!:
+    return Process(process_spawn(command)!)
+
+pub fn process_stdin(process: Process) -> ProcessStdin:
+    return ProcessStdin(process.handle)
+
+pub fn process_stdout(process: Process) -> ProcessStdout:
+    return ProcessStdout(process.handle)
+
+pub fn process_stderr(process: Process) -> ProcessStderr:
+    return ProcessStderr(process.handle)
+
+pub fn wait_process(process: Process) -> Int:
+    return process_wait(process.handle)
+
+pub fn kill_process(process: Process) -> Bool:
+    return process_kill(process.handle)
+
+pub fn close_process(process: Process):
+    process_close(process.handle)
+
 pub fn string_buffer_string(buf: StringBuffer) -> String:
     if string_buffer_data.contains_key(buf.handle):
         return string_buffer_data[buf.handle]
@@ -205,6 +238,15 @@ pub fn buffered_tcp_writer_write(writer: BufferedTcpWriter, data: String) -> Int
 
 pub fn buffered_tcp_writer_flush(writer: BufferedTcpWriter) -> Int!:
     return buffered_tcp_writer_flush_internal(writer)
+
+pub fn process_stdin_write(writer: ProcessStdin, data: String) -> Int!:
+    return process_write(writer.handle, data)
+
+pub fn process_stdout_read(reader: ProcessStdout, max_bytes: Int) -> String!:
+    return process_read(reader.handle, max_bytes)
+
+pub fn process_stderr_read(reader: ProcessStderr, max_bytes: Int) -> String!:
+    return process_read_err(reader.handle, max_bytes)
 
 pub fn read_all_string(reader: StringReader) -> String!:
     return read_all_string_chunked(reader, DEFAULT_CHUNK_SIZE)
@@ -279,6 +321,51 @@ pub fn read_all_tcp_stream_chunked(stream: TcpStream, chunk_size: Int) -> String
     while chunk.len() > 0:
         result = result + chunk
         chunk = tcp_stream_read(stream, size)!
+    return result
+
+pub fn write_all_process_stdin(writer: ProcessStdin, data: String) -> Int!:
+    mut total := 0
+    mut remaining := data
+
+    while remaining.len() > 0:
+        wrote := process_stdin_write(writer, remaining)!
+        if wrote <= 0:
+            fail "write returned 0"
+        total = total + wrote
+        if wrote >= remaining.len():
+            remaining = ""
+        else:
+            remaining = remaining.substring(wrote, remaining.len())
+    return total
+
+pub fn read_all_process_stdout(reader: ProcessStdout) -> String!:
+    return read_all_process_stdout_chunked(reader, DEFAULT_CHUNK_SIZE)
+
+pub fn read_all_process_stdout_chunked(reader: ProcessStdout, chunk_size: Int) -> String!:
+    mut size := chunk_size
+    if size <= 0:
+        size = DEFAULT_CHUNK_SIZE
+
+    mut result := ""
+    mut chunk := process_stdout_read(reader, size)!
+    while chunk.len() > 0:
+        result = result + chunk
+        chunk = process_stdout_read(reader, size)!
+    return result
+
+pub fn read_all_process_stderr(reader: ProcessStderr) -> String!:
+    return read_all_process_stderr_chunked(reader, DEFAULT_CHUNK_SIZE)
+
+pub fn read_all_process_stderr_chunked(reader: ProcessStderr, chunk_size: Int) -> String!:
+    mut size := chunk_size
+    if size <= 0:
+        size = DEFAULT_CHUNK_SIZE
+
+    mut result := ""
+    mut chunk := process_stderr_read(reader, size)!
+    while chunk.len() > 0:
+        result = result + chunk
+        chunk = process_stderr_read(reader, size)!
     return result
 
 fn string_reader_read_internal(reader: StringReader, max_bytes: Int) -> String!:
@@ -577,6 +664,38 @@ impl Writer for BufferedTcpWriter:
 impl Flusher for BufferedTcpWriter:
     fn flush() -> Int!:
         return buffered_tcp_writer_flush(self)
+
+impl ProcessStdin:
+    fn write(data: String) -> Int!:
+        return process_stdin_write(self, data)
+
+impl Writer for ProcessStdin:
+    fn write(data: String) -> Int!:
+        return process_stdin_write(self, data)
+
+impl ProcessStdout:
+    fn read(max_bytes: Int) -> String!:
+        return process_stdout_read(self, max_bytes)
+
+impl Reader for ProcessStdout:
+    fn read(max_bytes: Int) -> String!:
+        return process_stdout_read(self, max_bytes)
+
+impl ProcessStderr:
+    fn read(max_bytes: Int) -> String!:
+        return process_stderr_read(self, max_bytes)
+
+impl Reader for ProcessStderr:
+    fn read(max_bytes: Int) -> String!:
+        return process_stderr_read(self, max_bytes)
+
+impl Process:
+    fn close():
+        close_process(self)
+
+impl Closer for Process:
+    fn close():
+        close_process(self)
 
 impl TcpStream:
     fn read(max_bytes: Int) -> String!:

@@ -92,6 +92,10 @@ string-based runtime. process streams are still worth doing, but if the lowering
 path pushes back, we should treat that as compiler work rather than papering it
 over in the stdlib.
 
+that process path is landing too. the native runtime now keeps real child
+handles around, and `std.io` can wrap stdin/stdout/stderr on the same shared
+reader and writer surface instead of leaving process i/o as a separate world.
+
 the same rule applies to deeper transport tests. if a full spawned tcp roundtrip
 is already shaky in the existing examples, the io branch should not hide that.
 land wrapper-level progress here, then fix the runtime path directly and expand
