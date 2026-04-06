@@ -351,6 +351,36 @@ fn resolve_module_path(mod_path: &str, source_dir: &str, stdlib_root: Option<&st
     None
 }
 
+fn rewrite_call_retkinds(ir: &str) -> String {
+    let mut func_kinds: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for line in ir.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 4 && parts[0] == "func" {
+            func_kinds.insert(parts[1].to_string(), parts[3].to_string());
+        }
+    }
+
+    let mut rewritten = String::new();
+    for line in ir.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 5 && parts[0] == "call" && parts[3] == "unknown" {
+            if let Some(retkind) = func_kinds.get(parts[2]) {
+                rewritten.push_str(&format!("call {} {} {} {}", parts[1], parts[2], retkind, parts[4]));
+                if parts.len() > 5 {
+                    rewritten.push(' ');
+                    rewritten.push_str(&parts[5..].join(" "));
+                }
+                rewritten.push('\n');
+                continue;
+            }
+        }
+        rewritten.push_str(line);
+        rewritten.push('\n');
+    }
+
+    rewritten
+}
+
 /// Get IR text for a file and all its imports (recursive)
 fn get_ir_from_compiler(path: &str) -> Result<String, String> {
     let driver = find_ir_driver()
@@ -428,7 +458,7 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
     }
     all_ir.push_str(&main_ir);
 
-    Ok(all_ir)
+    Ok(rewrite_call_retkinds(&all_ir))
 }
 
 /// Recursively collect imported module file paths in dependency order

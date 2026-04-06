@@ -204,6 +204,9 @@ fn ir_lookup_map_value_type_for_expr(idx: Int) -> String:
     return ""
 
 fn ir_expr_result_kind(idx: Int) -> String:
+    checked_kind := ir_checked_result_kind(idx)
+    if checked_kind.len() > 0:
+        return checked_kind
     node := get_node(idx)
     if node.kind == "call" and node.children.len() > 0:
         fn_node := get_node(node.children[0])
@@ -463,6 +466,20 @@ fn ir_type_from_tid(tid: Int) -> String:
 
 fn ir_checked_type(idx: Int) -> String:
     return ir_type_from_tid(c_get_expr_type(idx))
+
+fn ir_checked_result_kind(idx: Int) -> String:
+    tid := c_get_expr_type(idx)
+    if tid < 0:
+        return ""
+    info := get_type_info(tid)
+    if info.kind != "result":
+        return ""
+    inner_type := ir_type_from_tid(info.inner)
+    if inner_type == "int":
+        return "result_int"
+    if inner_type == "bool":
+        return "result_bool"
+    return "unknown"
 
 fn ir_checked_index_type(idx: Int) -> String:
     node := get_node(idx)
