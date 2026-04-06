@@ -34,6 +34,19 @@ use cranelift::prelude::*;
 use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
 
+#[cfg(forge_cranelift_new_api)]
+fn declare_i64_var(builder: &mut FunctionBuilder<'_>) -> Variable {
+    builder.declare_var(types::I64)
+}
+
+#[cfg(not(forge_cranelift_new_api))]
+fn declare_i64_var(builder: &mut FunctionBuilder<'_>, next_var_id: &mut u32) -> Variable {
+    let var = Variable::new((*next_var_id) as usize);
+    *next_var_id += 1;
+    builder.declare_var(var, types::I64);
+    var
+}
+
 /// Compile IR text to native code via Cranelift
 pub fn compile_from_ir(
     codegen: &mut CodeGen,
@@ -304,6 +317,7 @@ fn compile_ir_function(
     let mut struct_vars: HashMap<String, String> = HashMap::new();
     let mut named_vars: HashMap<String, Variable> = HashMap::new();
     let mut labels: HashMap<String, Block> = HashMap::new();
+    #[cfg(not(forge_cranelift_new_api))]
     let mut next_var_id: u32 = 0;
 
     // Create a zero constant that can be used as fallback for undefined registers
@@ -344,9 +358,10 @@ fn compile_ir_function(
 
     for (i, name) in param_names.iter().enumerate() {
         if i < block_params.len() {
-            let var = Variable::from_u32(next_var_id);
-            next_var_id += 1;
-            builder.declare_var(var, types::I64);
+            #[cfg(forge_cranelift_new_api)]
+            let var = declare_i64_var(&mut builder);
+            #[cfg(not(forge_cranelift_new_api))]
+            let var = declare_i64_var(&mut builder, &mut next_var_id);
             builder.def_var(var, block_params[i]);
             named_vars.insert(name.clone(), var);
             regs.insert(i, block_params[i]);
@@ -448,81 +463,11 @@ fn compile_ir_function(
         }
     }
 
-    // Pre-scan: detect while-loop break targets that incorrectly loop back.
-    // Pattern: brif COND LOOP_BODY LOOP_EXIT → while header
-    //   ... jmp LABEL → break target
-    //   label LABEL → break lands here
-    //   jmp LOOP_HEADER → but this loops back instead of exiting
-    // Fix: redirect LABEL → LOOP_EXIT
-    // Detect `break` inside `while true` loops.
-    //
-    // Pattern: `while true` generates `iconst REG 1; brif REG BODY EXIT`.
-    // The `break` generates `jmp END_IF` where END_IF falls through to
-    // `jmp LOOP_HEADER`. We redirect `jmp END_IF` → EXIT.
-    //
-    // Only handles `while true` (constant-true condition), not general
-    // while-condition loops, to avoid false positives.
-    let mut break_redirects: HashMap<String, String> = HashMap::new();
-    {
-        // Build label position index
-        let mut label_positions: HashMap<&str, usize> = HashMap::new();
-        for (idx, line) in body_lines.iter().enumerate() {
-            let p: Vec<&str> = line.split_whitespace().collect();
-            if p.len() >= 2 && p[0] == "label" {
-                label_positions.insert(p[1], idx);
-            }
-        }
-
-        // Find `while true` headers: iconst REG 1 → brif REG BODY EXIT
-        let mut while_true_exits: HashMap<String, String> = HashMap::new();
-        for (idx, line) in body_lines.iter().enumerate() {
-            let p: Vec<&str> = line.split_whitespace().collect();
-            if p.len() >= 4 && p[0] == "brif" {
-                // Check if the condition is a constant 1 (while true)
-                if idx > 0 {
-                    let prev: Vec<&str> = body_lines[idx - 1].split_whitespace().collect();
-                    if prev.len() >= 3 && prev[0] == "iconst" && prev[2] == "1" {
-                        // Find the header label (2-3 lines back)
-                        let mut back = idx.wrapping_sub(2);
-                        while back < idx && idx - back <= 4 {
-                            let lp: Vec<&str> = body_lines[back].split_whitespace().collect();
-                            if lp.len() >= 2 && lp[0] == "label" {
-                                while_true_exits.insert(lp[1].to_string(), p[3].to_string());
-                                break;
-                            }
-                            back = back.wrapping_sub(1);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Find jmps to while-true headers and mark preceding labels
-        for (idx, line) in body_lines.iter().enumerate() {
-            let p: Vec<&str> = line.split_whitespace().collect();
-            if p.len() >= 2 && p[0] == "jmp" {
-                if let Some(exit) = while_true_exits.get(p[1]) {
-                    let mut li = idx.wrapping_sub(1);
-                    while li < body_lines.len() {
-                        let lp: Vec<&str> = body_lines[li].split_whitespace().collect();
-                        if lp.len() >= 2 && lp[0] == "label" {
-                            break_redirects.insert(lp[1].to_string(), exit.clone());
-                            li = li.wrapping_sub(1);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        // Remove brif THEN targets (loop body, not break)
-        for line in body_lines.iter() {
-            let p: Vec<&str> = line.split_whitespace().collect();
-            if p.len() >= 4 && p[0] == "brif" {
-                break_redirects.remove(p[2]);
-            }
-        }
-    }
+    // Older emitters briefly lowered `break` in `while true` loops through an
+    // extra join label. The current self-hosted emitter already jumps straight
+    // to the loop exit, so redirecting labels here now corrupts valid nested
+    // `if`/`result` joins into early loop exits.
+    let break_redirects: HashMap<String, String> = HashMap::new();
 
     // Compile instructions
     let mut terminated = false;
@@ -1041,9 +986,10 @@ fn compile_ir_function(
                     let var = if let Some(&v) = named_vars.get(&name) {
                         v
                     } else {
-                        let v = Variable::from_u32(next_var_id);
-                        next_var_id += 1;
-                        builder.declare_var(v, types::I64);
+                        #[cfg(forge_cranelift_new_api)]
+                        let v = declare_i64_var(&mut builder);
+                        #[cfg(not(forge_cranelift_new_api))]
+                        let v = declare_i64_var(&mut builder, &mut next_var_id);
                         named_vars.insert(name, v);
                         v
                     };
