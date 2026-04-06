@@ -1,8 +1,141 @@
-## std.io — input/output utilities
-##
-## Functions:
-##   prompt() -> String       Read a line from stdin
-##   prompt_with(msg: String) -> String  Print prompt, then read stdin
+# std.io — io interfaces and generic helpers
+#
+# this is the first pass at a shared io foundation for the stdlib.
+# phase one stays string-oriented because that's what the runtime exposes today,
+# but the shape is meant to grow into a bytes-first layer later.
+#
+# the key idea is simple:
+# - transports implement a small interface surface
+# - generic helpers like read_all and copy do the repetitive work once
+# - higher-level stdlib modules build on the same contracts
+#
+# handle-backed in-memory adapters are included so the helpers are easy to test.
+
+DEFAULT_CHUNK_SIZE := 4096
+
+mut next_string_reader_handle: Int := 1
+mut string_reader_data: Map[Int, String] := {}
+mut string_reader_offsets: Map[Int, Int] := {}
+
+mut next_string_buffer_handle: Int := 1
+mut string_buffer_data: Map[Int, String] := {}
+
+interface Reader:
+    fn read(max_bytes: Int) -> String!
+
+interface Writer:
+    fn write(data: String) -> Int!
+
+interface Closer:
+    fn close()
+
+interface Flusher:
+    fn flush() -> Int!
+
+struct StringReader:
+    pub handle: Int
+
+struct StringBuffer:
+    pub handle: Int
+
+pub fn string_reader(data: String) -> StringReader:
+    handle := next_string_reader_handle
+    next_string_reader_handle = next_string_reader_handle + 1
+    string_reader_data.insert(handle, data)
+    string_reader_offsets.insert(handle, 0)
+    return StringReader(handle)
+
+pub fn string_buffer() -> StringBuffer:
+    handle := next_string_buffer_handle
+    next_string_buffer_handle = next_string_buffer_handle + 1
+    string_buffer_data.insert(handle, "")
+    return StringBuffer(handle)
+
+pub fn string_buffer_string(buf: StringBuffer) -> String:
+    if string_buffer_data.contains_key(buf.handle):
+        return string_buffer_data[buf.handle]
+    return ""
+
+pub fn string_buffer_clear(buf: StringBuffer):
+    string_buffer_data.insert(buf.handle, "")
+
+pub fn string_reader_read(reader: StringReader, max_bytes: Int) -> String!:
+    return string_reader_read_internal(reader, max_bytes)
+
+pub fn string_buffer_write(buf: StringBuffer, data: String) -> Int!:
+    return string_buffer_write_internal(buf, data)
+
+pub fn read_all_string(reader: StringReader) -> String!:
+    return read_all_string_chunked(reader, DEFAULT_CHUNK_SIZE)
+
+pub fn read_all_string_chunked(reader: StringReader, chunk_size: Int) -> String!:
+    mut size := chunk_size
+    if size <= 0:
+        size = DEFAULT_CHUNK_SIZE
+
+    mut result := ""
+    mut chunk := string_reader_read(reader, size)!
+    while chunk.len() > 0:
+        result = result + chunk
+        chunk = string_reader_read(reader, size)!
+    return result
+
+pub fn write_all_string(writer: StringBuffer, data: String) -> Int!:
+    mut total := 0
+    mut remaining := data
+
+    while remaining.len() > 0:
+        wrote := string_buffer_write(writer, remaining)!
+        if wrote <= 0:
+            fail "write returned 0"
+        total = total + wrote
+        if wrote >= remaining.len():
+            remaining = ""
+        else:
+            remaining = remaining.substring(wrote, remaining.len())
+    return total
+
+pub fn copy_string(reader: StringReader, writer: StringBuffer) -> Int!:
+    return copy_string_chunked(reader, writer, DEFAULT_CHUNK_SIZE)
+
+pub fn copy_string_chunked(reader: StringReader, writer: StringBuffer, chunk_size: Int) -> Int!:
+    mut size := chunk_size
+    if size <= 0:
+        size = DEFAULT_CHUNK_SIZE
+
+    mut total := 0
+    mut chunk := string_reader_read(reader, size)!
+    while chunk.len() > 0:
+        total = total + write_all_string(writer, chunk)!
+        chunk = string_reader_read(reader, size)!
+    return total
+
+fn string_reader_read_internal(reader: StringReader, max_bytes: Int) -> String!:
+    if max_bytes <= 0:
+        return ""
+    if not string_reader_data.contains_key(reader.handle):
+        return ""
+
+    data := string_reader_data[reader.handle]
+    mut offset := 0
+    if string_reader_offsets.contains_key(reader.handle):
+        offset = string_reader_offsets[reader.handle]
+    if offset >= data.len():
+        return ""
+
+    mut end := offset + max_bytes
+    if end > data.len():
+        end = data.len()
+    chunk := data.substring(offset, end)
+    string_reader_offsets.insert(reader.handle, end)
+    return chunk
+
+fn string_buffer_write_internal(buf: StringBuffer, data: String) -> Int!:
+    mut current := ""
+    if string_buffer_data.contains_key(buf.handle):
+        current = string_buffer_data[buf.handle]
+    string_buffer_data.insert(buf.handle, current + data)
+    return data.len()
 
 ## Read a line from standard input
 pub fn prompt() -> String:
