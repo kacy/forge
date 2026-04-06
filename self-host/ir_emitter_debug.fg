@@ -1057,11 +1057,15 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         # try expr! — evaluate and check for error
         if node.children.len() > 0:
             val_r := ir_expr(node.children[0])
+            zero_cmp := ir_reg()
+            ir_emit("iconst " + zero_cmp.to_string() + " 0")
+            cond_r := ir_reg()
+            ir_emit("neq " + cond_r.to_string() + " " + val_r.to_string() + " " + zero_cmp.to_string())
             # check if result is 0 (error sentinel)
             ok_l := ir_label()
             err_l := ir_label()
             merge_l := ir_label()
-            ir_emit("brif " + val_r.to_string() + " " + ok_l + " " + err_l)
+            ir_emit("brif " + cond_r.to_string() + " " + ok_l + " " + err_l)
             ir_emit("label " + ok_l)
             ir_emit("jmp " + merge_l)
             ir_emit("label " + err_l)

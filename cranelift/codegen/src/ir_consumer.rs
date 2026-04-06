@@ -1453,6 +1453,13 @@ fn resolve_func_name(name: &str) -> &str {
         "env" => "forge_env",
         "args" => "forge_args_to_list",
         "dns_resolve" => "forge_dns_resolve",
+        "process_spawn" => "forge_process_spawn",
+        "process_write" => "forge_process_write",
+        "process_read" => "forge_process_read",
+        "process_read_err" => "forge_process_read_err",
+        "process_wait" => "forge_process_wait",
+        "process_kill" => "forge_process_kill",
+        "process_close" => "forge_process_close",
         // Crypto / encoding
         "sha256" => "forge_sha256",
         "fnv1a" => "forge_fnv1a",
