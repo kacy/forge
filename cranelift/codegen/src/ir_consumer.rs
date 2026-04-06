@@ -1128,8 +1128,13 @@ fn compile_ir_function(
             }
 
             "ret" if parts.len() >= 2 => {
-                let val = get_reg(&regs, parts[1]);
-                builder.ins().return_(&[val]);
+                if func_name == "main" {
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    builder.ins().return_(&[zero]);
+                } else {
+                    let val = get_reg(&regs, parts[1]);
+                    builder.ins().return_(&[val]);
+                }
                 terminated = true;
             }
 
