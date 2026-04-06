@@ -1,0 +1,10 @@
+from std.io import tcp_stream_from_fd, tcp_stream_set_timeout
+
+fn main() -> Int:
+    stream := tcp_stream_from_fd(7)
+    print(stream.fd.to_string())
+
+    placeholder := tcp_stream_from_fd(-1)
+    tcp_stream_set_timeout(placeholder, 10)
+    print("ok")
+    return 0

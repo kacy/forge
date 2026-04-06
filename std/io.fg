@@ -38,6 +38,9 @@ struct StringReader:
 struct StringBuffer:
     pub handle: Int
 
+struct TcpStream:
+    pub fd: Int
+
 pub fn string_reader(data: String) -> StringReader:
     handle := next_string_reader_handle
     next_string_reader_handle = next_string_reader_handle + 1
@@ -50,6 +53,24 @@ pub fn string_buffer() -> StringBuffer:
     next_string_buffer_handle = next_string_buffer_handle + 1
     string_buffer_data.insert(handle, "")
     return StringBuffer(handle)
+
+pub fn tcp_stream_connect(host: String, port: Int) -> TcpStream!:
+    return TcpStream(tcp_connect(host, port)!)
+
+pub fn tcp_stream_from_fd(fd: Int) -> TcpStream:
+    return TcpStream(fd)
+
+pub fn tcp_stream_read(stream: TcpStream, max_bytes: Int) -> String!:
+    return tcp_read(stream.fd, max_bytes)
+
+pub fn tcp_stream_write(stream: TcpStream, data: String) -> Int!:
+    return tcp_write(stream.fd, data)
+
+pub fn tcp_stream_set_timeout(stream: TcpStream, ms: Int):
+    tcp_set_timeout(stream.fd, ms)
+
+pub fn tcp_stream_close(stream: TcpStream):
+    tcp_close(stream.fd)
 
 pub fn string_buffer_string(buf: StringBuffer) -> String:
     if string_buffer_data.contains_key(buf.handle):
@@ -136,6 +157,28 @@ fn string_buffer_write_internal(buf: StringBuffer, data: String) -> Int!:
         current = string_buffer_data[buf.handle]
     string_buffer_data.insert(buf.handle, current + data)
     return data.len()
+
+impl TcpStream:
+    fn read(max_bytes: Int) -> String!:
+        return tcp_stream_read(self, max_bytes)
+
+    fn write(data: String) -> Int!:
+        return tcp_stream_write(self, data)
+
+    fn close():
+        tcp_stream_close(self)
+
+impl Reader for TcpStream:
+    fn read(max_bytes: Int) -> String!:
+        return tcp_stream_read(self, max_bytes)
+
+impl Writer for TcpStream:
+    fn write(data: String) -> Int!:
+        return tcp_stream_write(self, data)
+
+impl Closer for TcpStream:
+    fn close():
+        tcp_stream_close(self)
 
 ## Read a line from standard input
 pub fn prompt() -> String:

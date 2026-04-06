@@ -87,6 +87,16 @@ then wrap the current runtime surfaces:
 - tcp connections
 - process stdout/stderr/stdin
 
+tcp is a good early target because it already maps cleanly onto the current
+string-based runtime. process streams are still worth doing, but if the lowering
+path pushes back, we should treat that as compiler work rather than papering it
+over in the stdlib.
+
+the same rule applies to deeper transport tests. if a full spawned tcp roundtrip
+is already shaky in the existing examples, the io branch should not hide that.
+land wrapper-level progress here, then fix the runtime path directly and expand
+the transport tests afterward.
+
 ### milestone 3
 
 add real file-handle streaming to the runtime and move `std.fs` beyond
