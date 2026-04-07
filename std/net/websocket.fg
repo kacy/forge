@@ -11,6 +11,7 @@ import std.bytes as bytes
 import std.hash as hash
 import std.encoding as encoding
 from std.bytes import ByteBuffer
+from std.io import BufferedBytesReader
 
 # ===============================================================
 # WebSocket Constants
@@ -73,8 +74,27 @@ impl WebSocketFrame:
     fn is_binary() -> Bool:
         return self.opcode == OP_BINARY
 
+    fn is_close() -> Bool:
+        return self.opcode == OP_CLOSE
+
+    fn is_ping() -> Bool:
+        return self.opcode == OP_PING
+
+    fn is_pong() -> Bool:
+        return self.opcode == OP_PONG
+
     fn payload_text() -> String!:
         return self.payload.to_string_utf8()!
+
+    fn close_code() -> Int!:
+        if self.payload.len() < 2:
+            fail "websocket close frame missing code"
+        return bit_or(bit_shl(self.payload[0], 8), self.payload[1])
+
+    fn close_reason() -> String!:
+        if self.payload.len() <= 2:
+            return ""
+        return self.payload.slice(2, self.payload.len()).to_string_utf8()!
 
 fn append_frame_length(buf: ByteBuffer, payload_len: Int, masked: Bool) -> Int!:
     mut len_byte := payload_len
@@ -156,3 +176,65 @@ pub fn text_frame_bytes(text: String) -> Bytes!:
 
 pub fn binary_frame(payload: Bytes) -> Bytes!:
     return frame_bytes(OP_BINARY, payload)
+
+fn masked_payload(payload: Bytes, mask_key: Bytes) -> Bytes!:
+    if mask_key.len() != 4:
+        fail "websocket mask key must be 4 bytes"
+    buf := bytes.buffer_with_capacity(payload.len())
+    mut i := 0
+    while i < payload.len():
+        buf.write_byte(bit_xor(payload[i], mask_key[i % 4]))!
+        i = i + 1
+    return buf.bytes()
+
+pub fn masked_frame_bytes(opcode: Int, payload: Bytes, mask_key: Bytes) -> Bytes!:
+    first := bit_or(128, bit_and(opcode, 15))
+    buf := bytes.buffer_with_capacity(payload.len() + 14)
+    buf.write_byte(first)!
+    append_frame_length(buf, payload.len(), true)!
+    buf.write(mask_key)!
+    buf.write(masked_payload(payload, mask_key)!)!
+    return buf.bytes()
+
+pub fn client_text_frame_bytes(text: String, mask_key: Bytes) -> Bytes!:
+    return masked_frame_bytes(OP_TEXT, bytes.from_string_utf8(text), mask_key)
+
+pub fn ping_frame(payload: Bytes) -> Bytes!:
+    return frame_bytes(OP_PING, payload)
+
+pub fn pong_frame(payload: Bytes) -> Bytes!:
+    return frame_bytes(OP_PONG, payload)
+
+pub fn close_frame(code: Int, reason: String) -> Bytes!:
+    payload := bytes.buffer_with_capacity(reason.len() + 2)
+    payload.write_byte(bit_and(bit_shr(code, 8), 255))!
+    payload.write_byte(bit_and(code, 255))!
+    payload.write(bytes.from_string_utf8(reason))!
+    return frame_bytes(OP_CLOSE, payload.bytes())
+
+fn read_exact_bytes(reader: BufferedBytesReader, count: Int) -> Bytes!:
+    if count <= 0:
+        return bytes.empty()
+    buf := bytes.buffer_with_capacity(count)
+    while buf.bytes().len() < count:
+        remaining := count - buf.bytes().len()
+        chunk := reader.read_bytes(remaining)!
+        if chunk.is_empty():
+            fail "websocket frame truncated"
+        buf.write(chunk)!
+    return buf.bytes()
+
+pub fn read_frame_buffered(reader: BufferedBytesReader) -> WebSocketFrame!:
+    start := read_exact_bytes(reader, 2)!
+    mut extra_header := 0
+    length_code := bit_and(start[1], 127)
+    if length_code == 126:
+        extra_header = extra_header + 2
+    elif length_code == 127:
+        fail "64-bit websocket lengths not supported yet"
+    if bit_and(start[1], 128) != 0:
+        extra_header = extra_header + 4
+    header := start.concat(read_exact_bytes(reader, extra_header)!)
+    payload_len := frame_payload_length(header)!
+    payload := read_exact_bytes(reader, payload_len)!
+    return parse_frame(header.concat(payload))

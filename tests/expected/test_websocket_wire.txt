@@ -1,0 +1,8 @@
+true
+true
+hi
+true
+ok
+true
+1000
+bye
