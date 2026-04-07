@@ -518,6 +518,7 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
     let mut all_ir = String::new();
     let mut global_renames: Vec<(String, String)> = Vec::new(); // (bare, prefixed)
     let mut function_renames: Vec<(String, String)> = Vec::new(); // (bare, prefixed)
+    let mut imported_init_funcs: Vec<String> = Vec::new();
     let mut imported_function_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     for (i, mod_file) in module_files.iter().enumerate() {
@@ -540,6 +541,9 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
                     if let Some(bare) = prefixed.strip_prefix(&prefix) {
                         imported_function_map.insert(bare.to_string(), prefixed.clone());
                         function_renames.push((bare.to_string(), prefixed.clone()));
+                        if bare.starts_with("__init_globals") {
+                            imported_init_funcs.push(prefixed.clone());
+                        }
                     }
                 }
             }
@@ -610,6 +614,11 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
             main_ir.push_str(line);
         }
         main_ir.push('\n');
+        if parts.len() >= 2 && parts[0] == "func" && parts[1] == "main" {
+            for (idx, init_func) in imported_init_funcs.iter().enumerate() {
+                main_ir.push_str(&format!("call {} {} int 0\n", 900000 + idx, init_func));
+            }
+        }
     }
     all_ir.push_str(&main_ir);
 
