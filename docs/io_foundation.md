@@ -15,6 +15,10 @@ library. every protocol or format layer ends up reinventing the same loops.
 the branch has moved past the raw plumbing now. `std.net.http`, `std.fs`, and
 `std.csv` are starting to share the same read and write path.
 
+buffered file readers and writers now sit on top of `FileStream`, so chunked
+and line-oriented file protocols can reuse the same shape as the tcp and
+process adapters.
+
 ## the target
 
 we want something closer to the best parts of go's `io` package:
