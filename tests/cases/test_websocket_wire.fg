@@ -1,0 +1,31 @@
+import std.bytes as bytes
+import std.io as io
+import std.net.websocket as websocket
+
+fn main() -> Int!:
+    mask := bytes.buffer()
+    mask.write_byte(1)!
+    mask.write_byte(2)!
+    mask.write_byte(3)!
+    mask.write_byte(4)!
+
+    masked := websocket.client_text_frame_bytes("hi", mask.bytes())!
+    parsed := websocket.parse_frame(masked)!
+    print(parsed.is_text().to_string())
+    print(parsed.masked.to_string())
+    print(parsed.payload_text()!)
+
+    wire := bytes.buffer()
+    wire.write(websocket.ping_frame(bytes.from_string_utf8("ok"))!)!
+    wire.write(websocket.close_frame(1000, "bye")!)!
+    reader := io.bytes_reader(wire.bytes()).buffered_chunked(3)
+
+    ping := websocket.read_frame_buffered(reader)!
+    print(ping.is_ping().to_string())
+    print(ping.payload_text()!)
+
+    close := websocket.read_frame_buffered(reader)!
+    print(close.is_close().to_string())
+    print(close.close_code()!.to_string())
+    print(close.close_reason()!)
+    return 0

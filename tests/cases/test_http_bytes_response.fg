@@ -1,0 +1,15 @@
+import std.bytes as bytes
+import std.net.http as http
+
+fn main() -> Int!:
+    response := http.respond_bytes(200, "application/octet-stream", bytes.from_string_utf8("hi"))!
+    text := response.to_string_utf8()!
+    if text.contains("HTTP/1.1 200 OK"):
+        print("status ok")
+    if text.contains("Content-Type: application/octet-stream"):
+        print("mime ok")
+    if text.contains("Content-Length: 2"):
+        print("length ok")
+    if text.ends_with("hi"):
+        print("body ok")
+    return 0

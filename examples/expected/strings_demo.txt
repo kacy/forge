@@ -1,7 +1,7 @@
 === Character Classification ===
-is_digit('5'): 1
-is_alpha('a'): 1
-is_space(' '): 1
+is_digit('5'): true
+is_alpha('a'): true
+is_space(' '): true
 
 === Trim Variants ===
 trim_left('  hello  '): 'hello  '

@@ -1,0 +1,8 @@
+import std.bytes as bytes
+import std.hash as hash
+
+fn main() -> Int!:
+    print(hash.sha1(bytes.from_string_utf8("")))
+    print(hash.sha1(bytes.from_string_utf8("abc")))
+    print(hash.sha1(bytes.from_string_utf8("The quick brown fox jumps over the lazy dog")))
+    return 0

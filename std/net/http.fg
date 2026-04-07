@@ -1,7 +1,7 @@
 # std.net.http — HTTP server and client
 #
-# Request parsing returns a packed string; accessor functions extract fields.
-# No cross-module state needed — all operations are pure string transforms.
+# forge still keeps the original packed-string request api, but the wire-facing
+# path now goes through bytes first so request bodies can stay raw when needed.
 #
 #   import std.net.http as http
 #
@@ -12,7 +12,8 @@
 #       else:
 #           http.send_response(fd, http.not_found())
 
-from std.io import BufferedStringReader, BufferedTcpStream
+import std.bytes as bytes
+from std.io import BufferedBytesReader, BufferedStringReader
 import std.io as io
 
 # ===============================================================
@@ -22,6 +23,10 @@ import std.io as io
 pub MIME_TEXT := "text/plain"
 pub MIME_HTML := "text/html"
 pub MIME_JSON := "application/json"
+
+pub struct HttpRequestBytes:
+    pub head: Bytes
+    pub body: Bytes
 
 fn str_eq(a: String, b: String) -> Bool:
     if a.len() != b.len():
@@ -35,6 +40,47 @@ fn str_eq(a: String, b: String) -> Bool:
 
 fn char_eq(s: String, idx: Int, ch: String) -> Bool:
     return ord(s[idx]) == ord(ch)
+
+fn byte_eq(data: Bytes, idx: Int, value: Int) -> Bool:
+    return data[idx] == value
+
+fn decode_utf8(data: Bytes) -> String!:
+    return data.to_string_utf8()!
+
+fn find_byte(data: Bytes, start: Int, value: Int) -> Int:
+    mut i := start
+    while i < data.len():
+        if data[i] == value:
+            return i
+        i = i + 1
+    return -1
+
+fn trim_ascii_start(data: Bytes, start: Int, end: Int) -> Int:
+    mut i := start
+    while i < end and (data[i] == 32 or data[i] == 9):
+        i = i + 1
+    return i
+
+fn trim_ascii_end(data: Bytes, start: Int, end: Int) -> Int:
+    mut i := end
+    while i > start and (data[i - 1] == 32 or data[i - 1] == 9):
+        i = i - 1
+    return i
+
+fn trim_trailing_cr(data: Bytes, start: Int, end: Int) -> Int:
+    if end > start and data[end - 1] == 13:
+        return end - 1
+    return end
+
+fn header_name_matches(data: Bytes, start: Int, end: Int, name: String) -> Bool:
+    if end - start != name.len():
+        return false
+    mut i := 0
+    while i < name.len():
+        if ascii_lower(data[start + i]) != ascii_lower(ord(name[i])):
+            return false
+        i = i + 1
+    return true
 
 # ===============================================================
 # Request Parsing
@@ -129,6 +175,168 @@ pub fn parse_request(raw: String) -> String:
     p = p + sep
     p = p + req_body
     return p
+
+fn ascii_lower(value: Int) -> Int:
+    if value >= 65 and value <= 90:
+        return value + 32
+    return value
+
+fn request_line_end(raw_head: Bytes) -> Int:
+    mut i := 0
+    while i < raw_head.len():
+        if byte_eq(raw_head, i, 10):
+            if i > 0 and byte_eq(raw_head, i - 1, 13):
+                return i - 1
+            return i
+        i = i + 1
+    return raw_head.len()
+
+fn headers_block_bounds(raw_head: Bytes) -> List[Int]:
+    mut start := request_line_end(raw_head)
+    if start < raw_head.len():
+        start = start + 1
+        if start < raw_head.len() and byte_eq(raw_head, start, 10):
+            start = start + 1
+    mut end := raw_head.len()
+    if end >= 2 and byte_eq(raw_head, end - 2, 13) and byte_eq(raw_head, end - 1, 10):
+        end = end - 2
+    elif end >= 1 and byte_eq(raw_head, end - 1, 10):
+        end = end - 1
+    return [start, end]
+
+fn request_line_field_bytes(raw_head: Bytes, field_index: Int) -> Bytes:
+    line_end := request_line_end(raw_head)
+    mut field_start := 0
+    mut field := 0
+    mut pos := 0
+    while pos <= line_end:
+        at_end := pos == line_end
+        mut at_space := false
+        if not at_end:
+            at_space = byte_eq(raw_head, pos, 32)
+        if at_end or at_space:
+            if field == field_index:
+                return raw_head.slice(field_start, pos)
+            field = field + 1
+            field_start = pos + 1
+        pos = pos + 1
+    return bytes.empty()
+
+fn request_target_bytes(raw_head: Bytes) -> Bytes:
+    return request_line_field_bytes(raw_head, 1)
+
+fn request_target_path_bytes(raw_head: Bytes) -> Bytes:
+    target := request_target_bytes(raw_head)
+    query_pos := find_byte(target, 0, 63)
+    if query_pos >= 0:
+        return target.slice(0, query_pos)
+    return target
+
+fn request_target_query_bytes(raw_head: Bytes) -> Bytes:
+    target := request_target_bytes(raw_head)
+    query_pos := find_byte(target, 0, 63)
+    if query_pos >= 0 and query_pos + 1 < target.len():
+        return target.slice(query_pos + 1, target.len())
+    return bytes.empty()
+
+fn headers_bytes(raw_head: Bytes) -> Bytes:
+    bounds := headers_block_bounds(raw_head)
+    if bounds[0] >= bounds[1]:
+        return bytes.empty()
+    return raw_head.slice(bounds[0], bounds[1])
+
+fn header_value_bounds(line: Bytes, line_start: Int, line_end: Int, name: String) -> List[Int]:
+    colon := find_byte(line, line_start, 58)
+    if colon <= line_start or colon >= line_end:
+        return []
+    if not header_name_matches(line, line_start, colon, name):
+        return []
+    value_start := trim_ascii_start(line, colon + 1, line_end)
+    value_end := trim_ascii_end(line, value_start, line_end)
+    return [value_start, value_end]
+
+fn header_value_bytes(raw_head: Bytes, name: String) -> Bytes:
+    hdrs := headers_bytes(raw_head)
+    mut line_start := 0
+    mut pos := 0
+    while pos <= hdrs.len():
+        at_end := pos == hdrs.len()
+        mut at_nl := false
+        if not at_end:
+            at_nl = hdrs[pos] == 10
+        if at_end or at_nl:
+            line_end := trim_trailing_cr(hdrs, line_start, pos)
+            if line_end > line_start:
+                value_bounds := header_value_bounds(hdrs, line_start, line_end, name)
+                if value_bounds.len() == 2:
+                    return hdrs.slice(value_bounds[0], value_bounds[1])
+            line_start = pos + 1
+        pos = pos + 1
+    return bytes.empty()
+
+fn pack_request(req: HttpRequestBytes) -> String!:
+    sep := chr(31)
+    mut packed := req.method()!
+    packed = packed + sep
+    packed = packed + req.path()!
+    packed = packed + sep
+    packed = packed + req.query()!
+    packed = packed + sep
+    packed = packed + req.version()!
+    packed = packed + sep
+    packed = packed + req.headers()!
+    packed = packed + sep
+    packed = packed + req.body_text()!
+    return packed
+
+impl HttpRequestBytes:
+    fn method_bytes() -> Bytes:
+        return request_line_field_bytes(self.head, 0)
+
+    fn path_bytes() -> Bytes:
+        return request_target_path_bytes(self.head)
+
+    fn query_bytes() -> Bytes:
+        return request_target_query_bytes(self.head)
+
+    fn version_bytes() -> Bytes:
+        return request_line_field_bytes(self.head, 2)
+
+    fn headers_bytes() -> Bytes:
+        return headers_bytes(self.head)
+
+    fn header_bytes(name: String) -> Bytes:
+        return header_value_bytes(self.head, name)
+
+    fn method() -> String!:
+        return decode_utf8(self.method_bytes())
+
+    fn path() -> String!:
+        return decode_utf8(self.path_bytes())
+
+    fn query() -> String!:
+        return decode_utf8(self.query_bytes())
+
+    fn version() -> String!:
+        return decode_utf8(self.version_bytes())
+
+    fn headers() -> String!:
+        return decode_utf8(self.headers_bytes())
+
+    fn header(name: String) -> String!:
+        return decode_utf8(self.header_bytes(name))
+
+    fn body_bytes() -> Bytes:
+        return self.body
+
+    fn body_text() -> String!:
+        return decode_utf8(self.body)
+
+fn content_length_from_head_bytes(raw_head: Bytes) -> Int!:
+    length_text := header_value_bytes(raw_head, "Content-Length")
+    if length_text.is_empty():
+        return 0
+    return parse_int(decode_utf8(length_text)!)
 
 # ===============================================================
 # Request Accessors
@@ -299,6 +507,22 @@ pub fn respond(status: Int, content_type: String, body_text: String) -> String:
     resp = resp + body_text
     return resp
 
+pub fn respond_bytes(status: Int, content_type: String, body_bytes: Bytes) -> Bytes!:
+    crlf := chr(13) + chr(10)
+    bl := body_bytes.len().to_string()
+    mut header := status_line(status)
+    header = header + ct_header(content_type)
+    header = header + "Content-Length: " + bl
+    header = header + crlf
+    header = header + "Connection: close"
+    header = header + crlf
+    header = header + crlf
+    header_bytes := bytes.from_string_utf8(header)
+    buf := bytes.buffer_with_capacity(header_bytes.len() + body_bytes.len())
+    buf.write(header_bytes)!
+    buf.write(body_bytes)!
+    return buf.bytes()
+
 pub fn text_response(status: Int, body_text: String) -> String:
     return respond(status, MIME_TEXT, body_text)
 
@@ -335,91 +559,132 @@ pub fn redirect(url: String) -> String:
 # Server Helpers
 # ===============================================================
 
-fn content_length_from_head(raw_head: String) -> Int!:
-    head_req := parse_request(raw_head)
-    length_text := get_header(head_req, "Content-Length")
-    if length_text == "":
-        return 0
-    return parse_int(length_text)
+fn find_request_head_end(raw: Bytes) -> Int:
+    mut i := 0
+    while i < raw.len() - 3:
+        if raw[i] == 13 and raw[i + 1] == 10 and raw[i + 2] == 13 and raw[i + 3] == 10:
+            return i + 4
+        i = i + 1
+    i = 0
+    while i < raw.len() - 1:
+        if raw[i] == 10 and raw[i + 1] == 10:
+            return i + 2
+        i = i + 1
+    return -1
 
-fn read_request_from_buffered_string(reader: BufferedStringReader) -> String!:
+fn read_request_from_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestBytes!:
+    chunk_size := 1024
+    buf := bytes.buffer_with_capacity(chunk_size)
+    mut body_start := -1
+    while body_start < 0:
+        chunk := reader.read_bytes(chunk_size)!
+        if chunk.is_empty():
+            return HttpRequestBytes(bytes.empty(), bytes.empty())
+        buf.write(chunk)!
+        body_start = find_request_head_end(buf.bytes())
+
+    raw := buf.bytes()
+    head_bytes := raw.slice(0, body_start)
+    content_length := content_length_from_head_bytes(head_bytes)!
+
+    body_buf := bytes.buffer_with_capacity(content_length)
+    if body_start < raw.len():
+        body_buf.write(raw.slice(body_start, raw.len()))!
+
+    while body_buf.bytes().len() < content_length:
+        remaining := content_length - body_buf.bytes().len()
+        chunk := reader.read_bytes(remaining)!
+        if chunk.is_empty():
+            break
+        body_buf.write(chunk)!
+
+    return HttpRequestBytes(head_bytes, body_buf.bytes())
+
+fn read_request_from_buffered_string(reader: BufferedStringReader) -> HttpRequestBytes!:
     crlf := chr(13) + chr(10)
     request_line := reader.read_line()!
     if request_line == "":
-        return parse_request("")
+        return HttpRequestBytes(bytes.empty(), bytes.empty())
 
-    mut raw := request_line + crlf
+    raw := bytes.buffer_with_capacity(1024)
+    raw.write(bytes.from_string_utf8(request_line + crlf))!
     mut line := reader.read_line()!
     while line.len() > 0:
-        raw = raw + line + crlf
+        raw.write(bytes.from_string_utf8(line + crlf))!
         line = reader.read_line()!
-    raw = raw + crlf
+    raw.write(bytes.from_string_utf8(crlf))!
 
-    content_length := content_length_from_head(raw)!
+    content_length := content_length_from_head_bytes(raw.bytes())!
     if content_length > 0:
-        raw = raw + reader.read(content_length)!
-    return parse_request(raw)
+        raw.write(bytes.from_string_utf8(reader.read(content_length)!))!
 
-fn read_request_from_buffered_tcp(reader: BufferedTcpStream) -> String!:
-    crlf := chr(13) + chr(10)
-    request_line := reader.read_line()!
-    if request_line == "":
-        return parse_request("")
-
-    mut raw := request_line + crlf
-    mut line := reader.read_line()!
-    while line.len() > 0:
-        raw = raw + line + crlf
-        line = reader.read_line()!
-    raw = raw + crlf
-
-    content_length := content_length_from_head(raw)!
-    if content_length > 0:
-        raw = raw + reader.read(content_length)!
-    return parse_request(raw)
+    body_start := find_request_head_end(raw.bytes())
+    if body_start < 0:
+        return HttpRequestBytes(raw.bytes(), bytes.empty())
+    return HttpRequestBytes(raw.bytes().slice(0, body_start), raw.bytes().slice(body_start, raw.bytes().len()))
 
 pub fn read_request_buffered(reader: BufferedStringReader) -> String!:
-    return read_request_from_buffered_string(reader)
+    return pack_request(read_request_from_buffered_string(reader)!)
 
 pub fn read_request(fd: Int) -> String!:
-    stream := io.from_fd(fd)
-    reader := stream.buffered_reader()
-    return read_request_from_buffered_tcp(reader)
+    return pack_request(read_request_bytes(fd)!)
 
-pub fn send_response(fd: Int, response: String) -> Int!:
+pub fn read_request_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestBytes!:
+    return read_request_from_buffered_bytes(reader)
+
+pub fn read_request_bytes(fd: Int) -> HttpRequestBytes!:
     stream := io.from_fd(fd)
-    writer := stream.buffered_writer()
-    written := writer.write(response)!
+    reader := stream.buffered_bytes_reader()
+    return read_request_from_buffered_bytes(reader)
+
+pub fn send_response_bytes(fd: Int, response: Bytes) -> Int!:
+    stream := io.from_fd(fd)
+    writer := stream.buffered_bytes_writer()
+    written := writer.write_all_bytes(response)!
     writer.flush()!
     tcp_close(fd)
     return written
+
+pub fn send_response(fd: Int, response: String) -> Int!:
+    return send_response_bytes(fd, bytes.from_string_utf8(response))
+
+fn find_response_body_offset(raw: Bytes) -> Int:
+    mut i := 0
+    while i < raw.len() - 3:
+        if raw[i] == 13 and raw[i + 1] == 10 and raw[i + 2] == 13 and raw[i + 3] == 10:
+            return i + 4
+        i = i + 1
+    i = 0
+    while i < raw.len() - 1:
+        if raw[i] == 10 and raw[i + 1] == 10:
+            return i + 2
+        i = i + 1
+    return 0
 
 # ===============================================================
 # HTTP Client
 # ===============================================================
 
-pub fn get(host: String, port: Int, url_path: String) -> String!:
+pub fn get_bytes(host: String, port: Int, url_path: String) -> Bytes!:
     conn := io.connect(host, port)!
     crlf := chr(13) + chr(10)
     mut req := "GET " + url_path
     req = req + " HTTP/1.1"
     req = req + crlf
-    h := "Host: " + host
-    req = req + h
+    req = req + "Host: " + host
     req = req + crlf
     req = req + "Connection: close"
     req = req + crlf
     req = req + crlf
-    writer := conn.buffered_writer()
-    writer.write_all(req)!
+    writer := conn.buffered_bytes_writer()
+    writer.write_all_bytes(bytes.from_string_utf8(req))!
     writer.flush()!
-    response := conn.read_all_chunked(4096)!
+    response := conn.read_all_bytes_chunked(4096)!
     conn.close()
-    cr := chr(13)
-    mut hi := 0
-    resp_len := response.len()
-    while hi < resp_len - 3:
-        if ord(response[hi]) == 13 and ord(response[hi + 2]) == 13:
-            return response.substring(hi + 4, resp_len)
-        hi = hi + 1
-    return response
+    body_start := find_response_body_offset(response)
+    if body_start <= 0:
+        return response
+    return response.slice(body_start, response.len())
+
+pub fn get(host: String, port: Int, url_path: String) -> String!:
+    return get_bytes(host, port, url_path)!.to_string_utf8()!

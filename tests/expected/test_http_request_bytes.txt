@@ -1,0 +1,14 @@
+POST
+/upload
+mode=raw
+example.com
+3
+3
+65
+0
+66
+POST
+/upload
+mode=raw
+example.com
+3

@@ -1943,6 +1943,12 @@ fn check_function_call(node: Node, scope_id: Int) -> Int:
             return check_assertion_equality(arg_indices, scope_id)
         if name == "assert_ne":
             return check_assertion_equality(arg_indices, scope_id)
+        if name == "map":
+            return check_list_map_builtin(arg_indices, scope_id)
+        if name == "filter":
+            return check_list_filter_builtin(arg_indices, scope_id)
+        if name == "reduce":
+            return check_list_reduce_builtin(arg_indices, scope_id)
         # check if it's a struct constructor
         struct_tid := lookup_type_id(name)
         if struct_tid >= 0:
@@ -2118,6 +2124,104 @@ fn check_assertion_equality(arg_indices: List[Int], scope_id: Int) -> Int:
             if t1 != t2:
                 report_error("E219", "assert_eq arguments must be the same type: " + get_type_name(t1) + " vs " + get_type_name(t2))
     return TID_VOID
+
+fn call_arg_expr_index(arg_idx: Int) -> Int:
+    arg_node := get_node(arg_idx)
+    if arg_node.kind == "arg":
+        if arg_node.children.len() > 0:
+            return arg_node.children[0]
+    return arg_idx
+
+fn check_list_map_builtin(arg_indices: List[Int], scope_id: Int) -> Int:
+    if arg_indices.len() != 2:
+        report_error("E207", "map expects 2 arguments, got " + arg_indices.len().to_string())
+        return TID_ERR
+    list_tid := c_check_expr(call_arg_expr_index(arg_indices[0]), scope_id)
+    fn_tid := c_check_expr(call_arg_expr_index(arg_indices[1]), scope_id)
+    if is_error_type(list_tid):
+        return TID_ERR
+    if is_error_type(fn_tid):
+        return TID_ERR
+    list_info := get_type_info(list_tid)
+    if list_info.kind != "list":
+        report_error("E219", "map expects a List as the first argument, got " + get_type_name(list_tid))
+        return TID_ERR
+    fn_info := get_type_info(fn_tid)
+    if fn_info.kind != "function":
+        report_error("E208", "map expects a function as the second argument")
+        return TID_ERR
+    if fn_info.param_types.len() != 1:
+        report_error("E207", "map callback expects 1 parameter, got " + fn_info.param_types.len().to_string())
+        return TID_ERR
+    if types_structurally_equal(fn_info.param_types[0], list_info.inner) == false:
+        report_error("E219", "map callback parameter mismatch: expected " + get_type_name(list_info.inner) + ", got " + get_type_name(fn_info.param_types[0]))
+        return TID_ERR
+    return intern_list_type(fn_info.return_type)
+
+fn check_list_filter_builtin(arg_indices: List[Int], scope_id: Int) -> Int:
+    if arg_indices.len() != 2:
+        report_error("E207", "filter expects 2 arguments, got " + arg_indices.len().to_string())
+        return TID_ERR
+    list_tid := c_check_expr(call_arg_expr_index(arg_indices[0]), scope_id)
+    fn_tid := c_check_expr(call_arg_expr_index(arg_indices[1]), scope_id)
+    if is_error_type(list_tid):
+        return TID_ERR
+    if is_error_type(fn_tid):
+        return TID_ERR
+    list_info := get_type_info(list_tid)
+    if list_info.kind != "list":
+        report_error("E219", "filter expects a List as the first argument, got " + get_type_name(list_tid))
+        return TID_ERR
+    fn_info := get_type_info(fn_tid)
+    if fn_info.kind != "function":
+        report_error("E208", "filter expects a function as the second argument")
+        return TID_ERR
+    if fn_info.param_types.len() != 1:
+        report_error("E207", "filter callback expects 1 parameter, got " + fn_info.param_types.len().to_string())
+        return TID_ERR
+    if types_structurally_equal(fn_info.param_types[0], list_info.inner) == false:
+        report_error("E219", "filter callback parameter mismatch: expected " + get_type_name(list_info.inner) + ", got " + get_type_name(fn_info.param_types[0]))
+        return TID_ERR
+    if fn_info.return_type != lookup_type_id("Bool"):
+        if is_integer_type(fn_info.return_type) == false:
+            report_error("E219", "filter callback must return Bool or Int-like truthy value, got " + get_type_name(fn_info.return_type))
+            return TID_ERR
+    return list_tid
+
+fn check_list_reduce_builtin(arg_indices: List[Int], scope_id: Int) -> Int:
+    if arg_indices.len() != 3:
+        report_error("E207", "reduce expects 3 arguments, got " + arg_indices.len().to_string())
+        return TID_ERR
+    list_tid := c_check_expr(call_arg_expr_index(arg_indices[0]), scope_id)
+    init_tid := c_check_expr(call_arg_expr_index(arg_indices[1]), scope_id)
+    fn_tid := c_check_expr(call_arg_expr_index(arg_indices[2]), scope_id)
+    if is_error_type(list_tid):
+        return TID_ERR
+    if is_error_type(init_tid):
+        return TID_ERR
+    if is_error_type(fn_tid):
+        return TID_ERR
+    list_info := get_type_info(list_tid)
+    if list_info.kind != "list":
+        report_error("E219", "reduce expects a List as the first argument, got " + get_type_name(list_tid))
+        return TID_ERR
+    fn_info := get_type_info(fn_tid)
+    if fn_info.kind != "function":
+        report_error("E208", "reduce expects a function as the third argument")
+        return TID_ERR
+    if fn_info.param_types.len() != 2:
+        report_error("E207", "reduce callback expects 2 parameters, got " + fn_info.param_types.len().to_string())
+        return TID_ERR
+    if types_structurally_equal(fn_info.param_types[0], init_tid) == false:
+        report_error("E219", "reduce accumulator parameter mismatch: expected " + get_type_name(init_tid) + ", got " + get_type_name(fn_info.param_types[0]))
+        return TID_ERR
+    if types_structurally_equal(fn_info.param_types[1], list_info.inner) == false:
+        report_error("E219", "reduce element parameter mismatch: expected " + get_type_name(list_info.inner) + ", got " + get_type_name(fn_info.param_types[1]))
+        return TID_ERR
+    if types_structurally_equal(fn_info.return_type, init_tid) == false:
+        report_error("E219", "reduce callback return mismatch: expected " + get_type_name(init_tid) + ", got " + get_type_name(fn_info.return_type))
+        return TID_ERR
+    return init_tid
 
 # ---------------------------------------------------------------
 # interface bounds checking

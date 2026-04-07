@@ -6,6 +6,5 @@ max(10, 5) = 10
 clamp(15, 0, 10) = 10
 Direct import tests passed!
 
-Note: import X as Y syntax is parsed but full
-module namespace resolution (Y.func()) requires
-additional infrastructure for qualified name lookup.
+math_lib.abs(-12) = 12
+module alias io
