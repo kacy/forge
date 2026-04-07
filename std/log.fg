@@ -9,7 +9,7 @@
 #   log.warn("this prints")
 #   log.error("connection failed", "host=db.local port=5432")
 
-from std.io import append_file_text
+import std.io as io
 
 # Levels: 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR
 mut min_level: Int := 0
@@ -61,7 +61,7 @@ fn emit_line(line: String):
     print_err(line)
     if sink_path == "":
         return
-    _wrote := append_file_text(sink_path, line + chr(10))
+    _wrote := io.append_file_text(sink_path, line + chr(10))
 
 pub fn debug(msg: String):
     log_debug(msg)

@@ -1,5 +1,6 @@
 # file streams build on std.io's shared handle-backed surface
-from std.io import FileStream, file_stream_open_read, file_stream_open_write, file_stream_open_append
+from std.io import FileStream
+import std.io as io
 
 # std.fs — file system operations
 #
@@ -67,21 +68,21 @@ pub fn open(path: String) -> FileStream!:
     return fs_open(path)
 
 fn fs_open(path: String) -> FileStream!:
-    return file_stream_open_read(path)
+    return io.file_stream_open_read(path)
 
 # creates or truncates a file for streaming writes
 pub fn create(path: String) -> FileStream!:
     return fs_create(path)
 
 fn fs_create(path: String) -> FileStream!:
-    return file_stream_open_write(path)
+    return io.file_stream_open_write(path)
 
 # opens a file for streaming appends
 pub fn open_append(path: String) -> FileStream!:
     return fs_open_append(path)
 
 fn fs_open_append(path: String) -> FileStream!:
-    return file_stream_open_append(path)
+    return io.file_stream_open_append(path)
 
 # ===============================================================
 # File and Directory Management
