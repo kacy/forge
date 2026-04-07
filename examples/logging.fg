@@ -1,6 +1,7 @@
 # structured logging examples
 from std.log import info, warn, error, debug, set_file, clear_file
-from std.fs import read, remove
+from std.io import read_file_text
+from std.fs import remove
 
 fn main() -> String!:
     path := "/tmp/forge_logging.txt"
@@ -10,7 +11,7 @@ fn main() -> String!:
     error("connection refused")
     debug("request payload size: 1024 bytes")
     clear_file()
-    content := read(path)!
+    content := read_file_text(path)!
     print("file has info: " + content.contains("[INFO]").to_string())
     print("file has error: " + content.contains("[ERROR]").to_string())
     remove(path)

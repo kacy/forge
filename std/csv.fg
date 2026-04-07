@@ -47,31 +47,15 @@ pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
 ## Parse CSV text with the first row as headers.
 ## Returns a list of maps, one per data row.
 pub fn parse_with_headers(text: String) -> List[Map[String, String]]:
-    all_rows := parse(text)
-    mut result: List[Map[String, String]] := []
-    if all_rows.len() < 2:
-        return result
-    headers := all_rows[0]
-    mut i := 1
-    while i < all_rows.len():
-        row := all_rows[i]
-        mut record: Map[String, String] := {}
-        mut j := 0
-        while j < headers.len():
-            if j < row.len():
-                record.insert(headers[j], row[j])
-            else:
-                record.insert(headers[j], "")
-            j = j + 1
-        result.push(record)
-        i = i + 1
-    return result
+    return rows_with_headers(parse(text))
 
 pub fn parse_with_headers_file(path: String) -> List[Map[String, String]]!:
     return parse_with_headers_file_chunked(path, CSV_FILE_CHUNK_SIZE)
 
 pub fn parse_with_headers_file_chunked(path: String, chunk_size: Int) -> List[Map[String, String]]!:
-    all_rows := parse_file_chunked(path, chunk_size)!
+    return rows_with_headers(parse_file_chunked(path, chunk_size)!)
+
+fn rows_with_headers(all_rows: List[List[String]]) -> List[Map[String, String]]:
     mut result: List[Map[String, String]] := []
     if all_rows.len() < 2:
         return result

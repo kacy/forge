@@ -1,9 +1,9 @@
 # process management
 
 from std.io import spawn_process, process_stdout, process_stderr
-from std.io import read_all_process_stdout, read_all_process_stderr, close_process
+from std.io import read_all_process_stdout, read_all_process_stderr, wait_process, close_process
 
-fn run() -> String!:
+fn main() -> String!:
     # spawn echo command
     child_process := spawn_process("echo hello from child")!
     output := read_all_process_stdout(process_stdout(child_process))!
@@ -19,8 +19,4 @@ fn run() -> String!:
     close_process(failing_process)
     print("stderr: " + (error_output.len() > 0).to_string())
     print("ls failed: " + (failing_exit_code != 0).to_string())
-    return ""
-
-fn main() -> String!:
-    run()!
     return ""

@@ -154,8 +154,9 @@ both have file-backed helpers on the same foundation.
 
 the main consumer work that still feels worth doing is:
 - keep cleaning up builtin-only shortcuts that still bypass the module path
-- fix the `forge run` / `forge_main run` wrapper weirdness that sometimes drops
-  child stdout even when the built binaries are correct
+- add more real consumers where the shared buffered path makes the code simpler
+- decide whether scanner-style or framed helpers still earn their keep now that
+  http, csv, json, and toml are already using the core path
 
 `std.log` is off the special-case path now too. imported log calls can come
 through the module, and the module can mirror logs into a file sink through the
