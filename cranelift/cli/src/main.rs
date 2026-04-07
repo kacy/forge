@@ -712,6 +712,16 @@ fn build_file(path: &str) {
     }
 }
 
+fn unique_run_artifact_paths() -> (std::path::PathBuf, std::path::PathBuf) {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_nanos();
+    let exe_path = env::temp_dir().join(format!("forge_ir_{}_{}", std::process::id(), stamp));
+    let obj_path = env::temp_dir().join(format!("forge_ir_{}_{}.o", std::process::id(), stamp));
+    (obj_path, exe_path)
+}
+
 fn run_file(path: &str) {
     use forge_codegen::create_codegen;
     use forge_codegen::finalize_module;
@@ -740,18 +750,34 @@ fn run_file(path: &str) {
             match compile_from_ir(&mut codegen, &ir_text, &runtime_funcs) {
                 Ok(_) => match finalize_module(codegen.module) {
                     Ok(bytes) => {
-                        let obj_path = format!("/tmp/forge_ir_{}.o", std::process::id());
-                        let exe_path = format!("/tmp/forge_ir_{}", std::process::id());
-                        if fs::write(&obj_path, &bytes).is_ok() {
-                            if build_executable(&obj_path, &exe_path).is_ok() {
+                        let (obj_path, exe_path) = unique_run_artifact_paths();
+                        let keep_artifacts = std::env::var("FORGE_KEEP_RUN_ARTIFACTS").is_ok();
+                        if let Err(e) = fs::write(&obj_path, &bytes) {
+                            eprintln!("Error writing object: {}", e);
+                            std::process::exit(1);
+                        }
+                        match build_executable(&obj_path.to_string_lossy(), &exe_path.to_string_lossy()) {
+                            Ok(_) => {
                                 let status = Command::new(&exe_path).status();
-                                let _ = fs::remove_file(&obj_path);
-                                let _ = fs::remove_file(&exe_path);
-                                if let Ok(s) = status {
-                                    if !s.success() {
-                                        std::process::exit(s.code().unwrap_or(1));
+                                if !keep_artifacts {
+                                    let _ = fs::remove_file(&obj_path);
+                                    let _ = fs::remove_file(&exe_path);
+                                }
+                                match status {
+                                    Ok(s) => {
+                                        if !s.success() {
+                                            std::process::exit(s.code().unwrap_or(1));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Error running {}: {}", exe_path.display(), e);
+                                        std::process::exit(1);
                                     }
                                 }
+                            }
+                            Err(e) => {
+                                eprintln!("Error linking {}: {}", exe_path.display(), e);
+                                std::process::exit(1);
                             }
                         }
                     }
