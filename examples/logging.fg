@@ -1,6 +1,5 @@
 # structured logging examples
 import std.log as log
-import std.io as io
 import std.fs as fs
 
 fn main() -> String!:
@@ -11,7 +10,7 @@ fn main() -> String!:
     log.error("connection refused")
     log.debug("request payload size: 1024 bytes")
     log.clear_file()
-    content := io.read_file_text(path)!
+    content := fs.read(path)!
     print("file has info: " + content.contains("[INFO]").to_string())
     print("file has error: " + content.contains("[ERROR]").to_string())
     fs.remove(path)

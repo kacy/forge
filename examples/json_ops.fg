@@ -54,9 +54,9 @@ fn main():
     json.array_push(arr, json.make_int(3))
     json.object_set(obj, "items", arr)
     print("encoded = " + json.encode(obj))
-    print("saved = " + json.save_chunked(path, obj, 4).to_string())
+    print("saved = " + json.save(path, obj).to_string())
 
-    loaded := json.parse_file_chunked(path, 3)
+    loaded := json.parse_file(path)
     print("file tool = " + json.get_string(json.object_get(loaded, "tool")))
 
     # null and bool

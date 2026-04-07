@@ -21,8 +21,8 @@ fn main() -> String!:
     print("quoted: " + csv.encode_row(r2))
 
     # file-backed helpers use the same shared io layer now
-    print("saved: " + csv.save_chunked(path, rows, 4)!.to_string())
-    loaded := csv.parse_file_chunked(path, 3)!
+    print("saved: " + csv.save(path, rows)!.to_string())
+    loaded := csv.parse_file(path)!
     print("loaded: " + loaded[1].join("|"))
     fs.remove(path)
 

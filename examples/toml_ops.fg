@@ -1,6 +1,5 @@
 # toml parsing
 import std.toml as toml
-import std.io as io
 import std.fs as fs
 
 fn main() -> String!:
@@ -46,8 +45,8 @@ fn main() -> String!:
     root_keys := toml.keys(root)
     print("key count: " + root_keys.len().to_string())
 
-    io.write_file_text(path, doc)!
-    file_root := toml.parse_file_chunked(path, 3)
+    fs.write(path, doc)!
+    file_root := toml.parse_file(path)
     print("file host: " + toml.get_string(toml.get_table(file_root, "server"), "host"))
     fs.remove(path)
     return ""
