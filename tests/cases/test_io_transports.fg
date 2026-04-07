@@ -1,14 +1,14 @@
 import std.io as io
 
 fn main() -> Int!:
-    stream := io.tcp_stream_from_fd(7)
+    stream := io.from_fd(7)
     print(stream.fd.to_string())
 
     buffered := io.buffered_tcp_stream(stream)
     print(buffered.handle.to_string())
     print("[" + io.buffered_tcp_stream_read(buffered, 0)! + "]")
 
-    placeholder := io.tcp_stream_from_fd(-1)
-    io.tcp_stream_set_timeout(placeholder, 10)
+    placeholder := io.from_fd(-1)
+    io.set_timeout(placeholder, 10)
     print("ok")
     return 0

@@ -2,19 +2,19 @@ import std.io as io
 
 fn main() -> Int!:
     stdout_proc := io.spawn_process("printf 'alpha\nbeta\r\ngamma'")!
-    stdout_reader := io.buffered_process_stdout_chunked(io.process_stdout(stdout_proc), 2)
+    stdout_reader := io.buffered_process_stdout_chunked(io.stdout(stdout_proc), 2)
     print(io.buffered_process_stdout_read(stdout_reader, 3)!)
     print(io.buffered_process_stdout_read_line(stdout_reader)!)
     print(io.buffered_process_stdout_read_line(stdout_reader)!)
     print("[" + io.buffered_process_stdout_read_line(stdout_reader)! + "]")
-    print(io.wait_process(stdout_proc).to_string())
+    print(io.wait(stdout_proc).to_string())
     io.close_process(stdout_proc)
 
     stderr_proc := io.spawn_process("printf 'warn\nfatal' >&2")!
-    stderr_reader := io.buffered_process_stderr_chunked(io.process_stderr(stderr_proc), 1)
+    stderr_reader := io.buffered_process_stderr_chunked(io.stderr(stderr_proc), 1)
     print(io.buffered_process_stderr_read_line(stderr_reader)!)
     print(io.buffered_process_stderr_read_line(stderr_reader)!)
     print("[" + io.buffered_process_stderr_read_line(stderr_reader)! + "]")
-    print(io.wait_process(stderr_proc).to_string())
+    print(io.wait(stderr_proc).to_string())
     io.close_process(stderr_proc)
     return 0

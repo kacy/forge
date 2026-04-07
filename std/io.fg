@@ -261,6 +261,45 @@ pub fn string_reader_read(reader: StringReader, max_bytes: Int) -> String!:
 pub fn string_buffer_write(buf: StringBuffer, data: String) -> Int!:
     return string_buffer_write_internal(buf, data)
 
+pub fn read_all(reader: StringReader) -> String!:
+    return read_all_string(reader)
+
+pub fn read_all_chunked(reader: StringReader, chunk_size: Int) -> String!:
+    return read_all_string_chunked(reader, chunk_size)
+
+pub fn write_all(writer: StringBuffer, data: String) -> Int!:
+    return write_all_string(writer, data)
+
+pub fn copy(reader: StringReader, writer: StringBuffer) -> Int!:
+    return copy_string(reader, writer)
+
+pub fn copy_chunked(reader: StringReader, writer: StringBuffer, chunk_size: Int) -> Int!:
+    return copy_string_chunked(reader, writer, chunk_size)
+
+pub fn connect(host: String, port: Int) -> TcpStream!:
+    return tcp_stream_connect(host, port)
+
+pub fn from_fd(fd: Int) -> TcpStream:
+    return tcp_stream_from_fd(fd)
+
+pub fn set_timeout(stream: TcpStream, ms: Int):
+    tcp_stream_set_timeout(stream, ms)
+
+pub fn stdin(process: Process) -> ProcessStdin:
+    return process_stdin(process)
+
+pub fn stdout(process: Process) -> ProcessStdout:
+    return process_stdout(process)
+
+pub fn stderr(process: Process) -> ProcessStderr:
+    return process_stderr(process)
+
+pub fn wait(process: Process) -> Int:
+    return wait_process(process)
+
+pub fn kill(process: Process) -> Bool:
+    return kill_process(process)
+
 pub fn buffered_string_reader_read(reader: BufferedStringReader, max_bytes: Int) -> String!:
     return buffered_string_reader_read_internal(reader, max_bytes)
 

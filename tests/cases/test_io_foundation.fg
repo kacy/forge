@@ -2,10 +2,10 @@ import std.io as io
 
 fn main() -> Int!:
     reader := io.string_reader("forge io")
-    print(io.read_all_string(reader)!)
+    print(io.read_all(reader)!)
 
     chunked_reader := io.string_reader("abcdef")
-    print(io.read_all_string_chunked(chunked_reader, 2)!)
+    print(io.read_all_chunked(chunked_reader, 2)!)
 
     direct_reader := io.string_reader("xyz")
     print(io.string_reader_read(direct_reader, 2)!)
@@ -16,20 +16,20 @@ fn main() -> Int!:
     print(io.string_buffer_string(buf))
 
     buf2 := io.string_buffer()
-    print(io.write_all_string(buf2, "hello")!.to_string())
+    print(io.write_all(buf2, "hello")!.to_string())
     print(io.string_buffer_string(buf2))
 
     src := io.string_reader("copy me")
     dst := io.string_buffer()
-    print(io.copy_string(src, dst)!.to_string())
+    print(io.copy(src, dst)!.to_string())
     print(io.string_buffer_string(dst))
 
     src2 := io.string_reader("chunked")
     dst2 := io.string_buffer()
-    print(io.copy_string_chunked(src2, dst2, 3)!.to_string())
+    print(io.copy_chunked(src2, dst2, 3)!.to_string())
     print(io.string_buffer_string(dst2))
 
     src3 := io.string_reader("done")
-    print(io.read_all_string(src3)!)
+    print(io.read_all(src3)!)
     print(io.string_buffer_string(buf))
     return 0
