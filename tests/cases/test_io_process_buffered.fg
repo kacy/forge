@@ -2,7 +2,7 @@ import std.io as io
 
 fn main() -> Int!:
     stdout_proc := io.spawn_process("printf 'alpha\nbeta\r\ngamma'")!
-    stdout_reader := io.buffered_process_stdout_chunked(stdout_proc.stdout(), 2)
+    stdout_reader := stdout_proc.stdout().buffered_chunked(2)
     print(stdout_reader.read(3)!)
     print(stdout_reader.read_line()!)
     print(stdout_reader.read_line()!)
@@ -11,7 +11,7 @@ fn main() -> Int!:
     stdout_proc.close()
 
     stderr_proc := io.spawn_process("printf 'warn\nfatal' >&2")!
-    stderr_reader := io.buffered_process_stderr_chunked(stderr_proc.stderr(), 1)
+    stderr_reader := stderr_proc.stderr().buffered_chunked(1)
     print(stderr_reader.read_line()!)
     print(stderr_reader.read_line()!)
     print("[" + stderr_reader.read_line()! + "]")

@@ -383,12 +383,12 @@ pub fn read_request_buffered(reader: BufferedStringReader) -> String!:
 
 pub fn read_request(fd: Int) -> String!:
     stream := io.from_fd(fd)
-    reader := io.buffered_tcp_stream(stream)
+    reader := stream.buffered_reader()
     return read_request_from_buffered_tcp(reader)
 
 pub fn send_response(fd: Int, response: String) -> Int!:
     stream := io.from_fd(fd)
-    writer := io.buffered_tcp_writer(stream)
+    writer := stream.buffered_writer()
     written := writer.write(response)!
     writer.flush()!
     tcp_close(fd)
@@ -410,7 +410,7 @@ pub fn get(host: String, port: Int, url_path: String) -> String!:
     req = req + "Connection: close"
     req = req + crlf
     req = req + crlf
-    writer := io.buffered_tcp_writer(conn)
+    writer := conn.buffered_writer()
     writer.write(req)!
     writer.flush()!
     response := io.read_all_tcp_stream_chunked(conn, 4096)!

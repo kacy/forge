@@ -4,7 +4,7 @@ fn main() -> Int!:
     stream := io.from_fd(7)
     print(stream.fd.to_string())
 
-    buffered := io.buffered_tcp_stream(stream)
+    buffered := stream.buffered_reader()
     print(buffered.handle.to_string())
     print("[" + buffered.read(0)! + "]")
 

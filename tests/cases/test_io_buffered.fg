@@ -1,24 +1,24 @@
 import std.io as io
 
 fn main() -> Int!:
-    buffered := io.buffered_string_reader_chunked(io.string_reader("abcdef"), 2)
+    buffered := io.string_reader("abcdef").buffered_chunked(2)
     print(buffered.read(3)!)
     print(buffered.read(3)!)
     print("[" + buffered.read(3)! + "]")
 
     lines_data := "alpha" + chr(10) + "beta" + chr(13) + chr(10) + "gamma"
-    lines := io.buffered_string_reader_chunked(io.string_reader(lines_data), 2)
+    lines := io.string_reader(lines_data).buffered_chunked(2)
     print(lines.read_line()!)
     print(lines.read_line()!)
     print(lines.read_line()!)
     print("[" + lines.read_line()! + "]")
 
-    direct := io.buffered_string_reader(io.string_reader("xyz"))
+    direct := io.string_reader("xyz").buffered()
     print(direct.read(2)!)
     print(direct.read(2)!)
 
     sink := io.string_buffer()
-    writer := io.buffered_string_writer_chunked(sink, 4)
+    writer := sink.buffered_chunked(4)
     print(writer.write("ab")!.to_string())
     print("[" + sink.string() + "]")
     print(writer.write("cdef")!.to_string())

@@ -124,6 +124,12 @@ impl StringReader:
     fn read(max_bytes: Int) -> String!:
         return string_reader_read(self, max_bytes)
 
+    fn buffered() -> BufferedStringReader:
+        return buffered_string_reader(self)
+
+    fn buffered_chunked(chunk_size: Int) -> BufferedStringReader:
+        return buffered_string_reader_chunked(self, chunk_size)
+
 impl Reader for StringReader:
     fn read(max_bytes: Int) -> String!:
         return string_reader_read(self, max_bytes)
@@ -137,6 +143,12 @@ impl StringBuffer:
 
     fn clear():
         string_buffer_clear(self)
+
+    fn buffered() -> BufferedStringWriter:
+        return buffered_string_writer(self)
+
+    fn buffered_chunked(chunk_size: Int) -> BufferedStringWriter:
+        return buffered_string_writer_chunked(self, chunk_size)
 
 impl Writer for StringBuffer:
     fn write(data: String) -> Int!:
@@ -1204,6 +1216,12 @@ impl ProcessStdout:
     fn read(max_bytes: Int) -> String!:
         return process_stdout_read(self, max_bytes)
 
+    fn buffered() -> BufferedProcessStdout:
+        return buffered_process_stdout(self)
+
+    fn buffered_chunked(chunk_size: Int) -> BufferedProcessStdout:
+        return buffered_process_stdout_chunked(self, chunk_size)
+
 impl Reader for ProcessStdout:
     fn read(max_bytes: Int) -> String!:
         return process_stdout_read(self, max_bytes)
@@ -1211,6 +1229,12 @@ impl Reader for ProcessStdout:
 impl ProcessStderr:
     fn read(max_bytes: Int) -> String!:
         return process_stderr_read(self, max_bytes)
+
+    fn buffered() -> BufferedProcessStderr:
+        return buffered_process_stderr(self)
+
+    fn buffered_chunked(chunk_size: Int) -> BufferedProcessStderr:
+        return buffered_process_stderr_chunked(self, chunk_size)
 
 impl Reader for ProcessStderr:
     fn read(max_bytes: Int) -> String!:
@@ -1246,6 +1270,18 @@ impl TcpStream:
     fn write(data: String) -> Int!:
         return tcp_stream_write(self, data)
 
+    fn buffered_reader() -> BufferedTcpStream:
+        return buffered_tcp_stream(self)
+
+    fn buffered_reader_chunked(chunk_size: Int) -> BufferedTcpStream:
+        return buffered_tcp_stream_chunked(self, chunk_size)
+
+    fn buffered_writer() -> BufferedTcpWriter:
+        return buffered_tcp_writer(self)
+
+    fn buffered_writer_chunked(chunk_size: Int) -> BufferedTcpWriter:
+        return buffered_tcp_writer_chunked(self, chunk_size)
+
     fn set_timeout(ms: Int):
         tcp_stream_set_timeout(self, ms)
 
@@ -1270,6 +1306,18 @@ impl FileStream:
 
     fn write(data: String) -> Int!:
         return file_stream_write(self, data)
+
+    fn buffered_reader() -> BufferedFileReader:
+        return buffered_file_reader(self)
+
+    fn buffered_reader_chunked(chunk_size: Int) -> BufferedFileReader:
+        return buffered_file_reader_chunked(self, chunk_size)
+
+    fn buffered_writer() -> BufferedFileWriter:
+        return buffered_file_writer(self)
+
+    fn buffered_writer_chunked(chunk_size: Int) -> BufferedFileWriter:
+        return buffered_file_writer_chunked(self, chunk_size)
 
     fn close():
         file_stream_close(self)

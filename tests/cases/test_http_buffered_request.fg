@@ -11,7 +11,7 @@ fn main() -> Int!:
     raw = raw + crlf
     raw = raw + "hello world"
 
-    reader := io.buffered_string_reader_chunked(io.string_reader(raw), 3)
+    reader := io.string_reader(raw).buffered_chunked(3)
     req := http.read_request_buffered(reader)!
     print(http.method(req))
     print(http.path(req))
@@ -26,7 +26,7 @@ fn main() -> Int!:
     raw2 = raw2 + "User-Agent: io-foundation" + crlf
     raw2 = raw2 + crlf
 
-    reader2 := io.buffered_string_reader_chunked(io.string_reader(raw2), 2)
+    reader2 := io.string_reader(raw2).buffered_chunked(2)
     req2 := http.read_request_buffered(reader2)!
     print(http.method(req2))
     print(http.path(req2))

@@ -10,7 +10,7 @@ fn main() -> Int!:
     request = request + crlf
     request = request + "hello world"
 
-    reader := io.buffered_string_reader_chunked(io.string_reader(request), 3)
+    reader := io.string_reader(request).buffered_chunked(3)
     request_line := reader.read_line()!
     mut raw := request_line + crlf
     mut line := reader.read_line()!

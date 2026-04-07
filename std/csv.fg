@@ -31,7 +31,7 @@ pub fn parse_file(path: String) -> List[List[String]]!:
 
 pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
     stream := io.file_stream_open_read(path)!
-    reader := io.buffered_file_reader_chunked(stream, chunk_size)
+    reader := stream.buffered_reader_chunked(chunk_size)
     mut rows: List[List[String]] := []
     mut line := reader.read_line()!
     while line.len() > 0:
@@ -87,7 +87,7 @@ pub fn save(path: String, rows: List[List[String]]) -> Int!:
 
 pub fn save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!:
     stream := io.file_stream_open_write(path)!
-    writer := io.buffered_file_writer_chunked(stream, chunk_size)
+    writer := stream.buffered_writer_chunked(chunk_size)
     mut total := 0
     mut i := 0
     while i < rows.len():
