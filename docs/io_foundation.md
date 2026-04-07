@@ -12,8 +12,8 @@ right now the stdlib has a few different styles:
 that works for small modules, but it doesn't scale into a great standard
 library. every protocol or format layer ends up reinventing the same loops.
 
-the branch has moved past the raw plumbing now. `std.net.http`, `std.fs`, and
-`std.csv` are starting to share the same read and write path.
+the branch has moved past the raw plumbing now. `std.net.http`, `std.fs`,
+`std.csv`, `std.toml`, and `std.json` all share pieces of the same io path.
 
 buffered file readers and writers now sit on top of `FileStream`, so chunked
 and line-oriented file protocols can reuse the same shape as the tcp and
@@ -26,9 +26,9 @@ writes instead of dropping back to whole-file string helpers.
 files through buffered file reads instead of staying stuck behind builtin-only
 special handling.
 
-`std.json` is on the same track now: imported calls can resolve through the
-module path, and file-backed parse/save helpers can use the shared buffered
-file layer instead of falling back to one-off whole-file plumbing.
+`std.json` is on that path too: imported calls can resolve through the module
+path, and file-backed parse/save helpers can use the shared buffered file layer
+instead of falling back to one-off whole-file plumbing.
 
 ## the target
 
@@ -89,7 +89,7 @@ the big win is consistency. new stdlib modules stop inventing one-off io loops.
 
 ## staged path
 
-### milestone 1
+### milestone 1: done
 
 land the core interfaces, handle-backed adapters, and concrete helpers in
 `std.io`.
@@ -98,42 +98,34 @@ the concrete helpers matter because they let us prove the state model now,
 without depending on every cross-module interface dispatch edge being perfect
 yet.
 
-### milestone 2
+### milestone 2: mostly done
 
 add generic interface-driven helpers once that path is hardened in real code,
 then wrap the current runtime surfaces:
 - tcp connections
 - process stdout/stderr/stdin
 
-tcp is a good early target because it already maps cleanly onto the current
-string-based runtime. process streams are still worth doing, but if the lowering
-path pushes back, we should treat that as compiler work rather than papering it
-over in the stdlib.
+tcp and process wrappers are both in now, including buffered process output.
+the remaining gap in this milestone is mostly polish: the interface surface is
+real, but the native path still is not trustworthy enough for a heavier
+generic-dispatch cleanup in the implementation.
 
-that process path is landing too. the native runtime now keeps real child
-handles around, and `std.io` can wrap stdin/stdout/stderr on the same shared
-reader and writer surface instead of leaving process i/o as a separate world.
-
-the same rule applies to deeper transport tests. if a full spawned tcp roundtrip
-is already shaky in the existing examples, the io branch should not hide that.
+the same rule still applies to deeper transport tests. if a full spawned tcp
+roundtrip is shaky in the example path, the io branch should not hide that.
 land wrapper-level progress here, then fix the runtime path directly and expand
 the transport tests afterward.
 
-the same shape now applies to process output too. stdout and stderr can sit
-behind buffered readers, which makes line-oriented subprocess protocols feel a
-lot closer to the tcp/http path instead of being a special case.
-
-### milestone 3
+### milestone 3: done
 
 add real file-handle streaming to the runtime and move `std.fs` beyond
 whole-file helpers.
 
-that layer is in place now. open file handles can sit on the same reader and
-writer surface as tcp and process streams, and `std.fs` can expose streaming
+that layer is in place. open file handles sit on the same reader and writer
+surface as tcp and process streams, and `std.fs` exposes streaming
 open/create/append helpers on top of it instead of stopping at whole-file
 reads and writes.
 
-### milestone 4
+### milestone 4: mostly done
 
 add higher-level layers:
 - buffered reader/writer
@@ -141,23 +133,30 @@ add higher-level layers:
 - scanner-style helpers
 - framed protocol helpers
 
-the first buffered reader is a good early win here because it exercises the
-state model hard enough to flush out compiler and runtime issues before http or
-protocol code starts depending on it.
+buffered readers and writers now exist for string, tcp, process, and file.
+line-oriented reads are in too. the remaining work here is the optional stuff:
+scanner-style helpers, framed protocol helpers, and any nicer protocol-facing
+layers that still pay for themselves after more real consumers land.
 
-### milestone 5
+### milestone 5: mostly done
 
 move higher stdlib modules onto the shared layer so the design proves itself in
 real code, not just in toy examples.
 
-http is the first real target here because it needs exactly the kind of loops
-that get messy fast when every module rolls its own framing. once `std.net.http`
-reads requests through `std.io`, the same buffered layer can carry over into
-headers, clients, and later protocol code.
+http was the first real target here because it needs exactly the kind of loops
+that get messy fast when every module rolls its own framing. that path is in
+now. the request reader, response writer, and client fetch path can share the
+same buffered tcp helpers instead of open-coding socket loops in multiple
+places.
 
-that path is now starting to land. the request reader, response writer, and
-client fetch path can share the same buffered tcp helpers instead of
-open-coding socket loops in multiple places.
+csv is in too, now using buffered file reads and writes directly. toml and json
+both have file-backed helpers on the same foundation.
+
+the main consumer work that still feels worth doing is:
+- move `std.log` off the special-case path and onto normal file-backed io
+- keep cleaning up builtin-only shortcuts that still bypass the module path
+- fix the `forge run` / `forge_main run` wrapper weirdness that sometimes drops
+  child stdout even when the built binaries are correct
 
 ## the long-term version
 
