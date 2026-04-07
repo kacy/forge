@@ -368,6 +368,10 @@ fn rewrite_call_retkinds(ir: &str) -> String {
         ("tcp_write", "result_int"),
         ("process_spawn", "result_int"),
         ("process_write", "result_int"),
+        ("file_open_read", "result_int"),
+        ("file_open_write", "result_int"),
+        ("file_open_append", "result_int"),
+        ("file_write", "result_int"),
         ("write_file", "result_bool"),
         ("append_file", "result_bool"),
     ]

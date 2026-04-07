@@ -1,0 +1,10 @@
+from std.io import FileStream, file_stream_open_write, file_stream_open_read, file_stream_open_append
+
+pub fn stream_create(path: String) -> FileStream!:
+    return file_stream_open_write(path)
+
+pub fn stream_open(path: String) -> FileStream!:
+    return file_stream_open_read(path)
+
+pub fn stream_open_append(path: String) -> FileStream!:
+    return file_stream_open_append(path)

@@ -1446,6 +1446,13 @@ fn resolve_func_name(name: &str) -> &str {
         // IO / system
         "read_file" => "forge_read_file",
         "write_file" => "forge_write_file",
+        "append_file" => "forge_append_file",
+        "file_open_read" => "forge_file_open_read",
+        "file_open_write" => "forge_file_open_write",
+        "file_open_append" => "forge_file_open_append",
+        "file_read" => "forge_file_read",
+        "file_write" => "forge_file_write",
+        "file_close" => "forge_file_close",
         "file_exists" => "forge_file_exists",
         "dir_exists" => "forge_dir_exists",
         "exec" => "forge_exec",

@@ -83,6 +83,9 @@ struct BufferedTcpWriter:
 struct TcpStream:
     pub fd: Int
 
+struct FileStream:
+    pub handle: Int
+
 struct Process:
     pub handle: Int
 
@@ -228,6 +231,24 @@ pub fn tcp_stream_set_timeout(stream: TcpStream, ms: Int):
 pub fn tcp_stream_close(stream: TcpStream):
     tcp_close(stream.fd)
 
+pub fn file_stream_open_read(path: String) -> FileStream!:
+    return FileStream(file_open_read(path)!)
+
+pub fn file_stream_open_write(path: String) -> FileStream!:
+    return FileStream(file_open_write(path)!)
+
+pub fn file_stream_open_append(path: String) -> FileStream!:
+    return FileStream(file_open_append(path)!)
+
+pub fn file_stream_read(stream: FileStream, max_bytes: Int) -> String!:
+    return file_read(stream.handle, max_bytes)
+
+pub fn file_stream_write(stream: FileStream, data: String) -> Int!:
+    return file_write(stream.handle, data)
+
+pub fn file_stream_close(stream: FileStream):
+    file_close(stream.handle)
+
 pub fn spawn_process(command: String) -> Process!:
     return Process(process_spawn(command)!)
 
@@ -353,6 +374,21 @@ pub fn write_all_tcp_stream(writer: TcpStream, data: String) -> Int!:
             remaining = remaining.substring(wrote, remaining.len())
     return total
 
+pub fn write_all_file_stream(writer: FileStream, data: String) -> Int!:
+    mut total := 0
+    mut remaining := data
+
+    while remaining.len() > 0:
+        wrote := file_stream_write(writer, remaining)!
+        if wrote <= 0:
+            fail "write returned 0"
+        total = total + wrote
+        if wrote >= remaining.len():
+            remaining = ""
+        else:
+            remaining = remaining.substring(wrote, remaining.len())
+    return total
+
 pub fn copy_string(reader: StringReader, writer: StringBuffer) -> Int!:
     return copy_string_chunked(reader, writer, DEFAULT_CHUNK_SIZE)
 
@@ -381,6 +417,21 @@ pub fn read_all_tcp_stream_chunked(stream: TcpStream, chunk_size: Int) -> String
     while chunk.len() > 0:
         result = result + chunk
         chunk = tcp_stream_read(stream, size)!
+    return result
+
+pub fn read_all_file_stream(stream: FileStream) -> String!:
+    return read_all_file_stream_chunked(stream, DEFAULT_CHUNK_SIZE)
+
+pub fn read_all_file_stream_chunked(stream: FileStream, chunk_size: Int) -> String!:
+    mut size := chunk_size
+    if size <= 0:
+        size = DEFAULT_CHUNK_SIZE
+
+    mut result := ""
+    mut chunk := file_stream_read(stream, size)!
+    while chunk.len() > 0:
+        result = result + chunk
+        chunk = file_stream_read(stream, size)!
     return result
 
 pub fn write_all_process_stdin(writer: ProcessStdin, data: String) -> Int!:
@@ -940,6 +991,28 @@ impl Writer for TcpStream:
 impl Closer for TcpStream:
     fn close():
         tcp_stream_close(self)
+
+impl FileStream:
+    fn read(max_bytes: Int) -> String!:
+        return file_stream_read(self, max_bytes)
+
+    fn write(data: String) -> Int!:
+        return file_stream_write(self, data)
+
+    fn close():
+        file_stream_close(self)
+
+impl Reader for FileStream:
+    fn read(max_bytes: Int) -> String!:
+        return file_stream_read(self, max_bytes)
+
+impl Writer for FileStream:
+    fn write(data: String) -> Int!:
+        return file_stream_write(self, data)
+
+impl Closer for FileStream:
+    fn close():
+        file_stream_close(self)
 
 ## Read a line from standard input
 pub fn prompt() -> String:

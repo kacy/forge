@@ -1,0 +1,20 @@
+from support.io_file_stream_support import stream_create, stream_open, stream_open_append
+from std.io import write_all_file_stream, read_all_file_stream_chunked, file_stream_close
+
+fn main() -> Int!:
+    path := "/tmp/forge_io_stream_test.txt"
+
+    writer := stream_create(path)!
+    print(write_all_file_stream(writer, "hello")!.to_string())
+    file_stream_close(writer)
+
+    appender := stream_open_append(path)!
+    print(write_all_file_stream(appender, " world")!.to_string())
+    file_stream_close(appender)
+
+    reader := stream_open(path)!
+    print(read_all_file_stream_chunked(reader, 4)!)
+    file_stream_close(reader)
+
+    print(file_exists(path).to_string())
+    return 0

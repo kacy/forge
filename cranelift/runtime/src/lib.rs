@@ -22,6 +22,7 @@ pub mod toml;
 use crate::collections::list::ForgeList;
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::fs::File;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::atomic::AtomicUsize;
@@ -40,9 +41,15 @@ struct ProcessHandle {
 
 static PROCESS_HANDLES: OnceLock<Mutex<HashMap<i64, ProcessHandle>>> = OnceLock::new();
 static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+static FILE_HANDLES: OnceLock<Mutex<HashMap<i64, File>>> = OnceLock::new();
+static NEXT_FILE_HANDLE: AtomicI64 = AtomicI64::new(1);
 
 fn process_handles() -> &'static Mutex<HashMap<i64, ProcessHandle>> {
     PROCESS_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn file_handles() -> &'static Mutex<HashMap<i64, File>> {
+    FILE_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Closure environment: a fixed-size array of i64 slots for captured variables.
@@ -819,6 +826,119 @@ pub unsafe extern "C" fn forge_append_file(path: *const i8, content: *const i8) 
         }
     }
     0
+}
+
+unsafe fn forge_open_file_with(path: *const i8, create: bool, write: bool, append: bool) -> i64 {
+    use std::fs::OpenOptions;
+
+    if path.is_null() {
+        return 0;
+    }
+
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    let Ok(path_str) = std::str::from_utf8(slice) else {
+        return 0;
+    };
+
+    let mut options = OpenOptions::new();
+    options.read(!write && !append);
+    options.write(write || append);
+    options.create(create || append);
+    options.truncate(write && !append);
+    options.append(append);
+
+    match options.open(path_str) {
+        Ok(file) => {
+            let handle = NEXT_FILE_HANDLE.fetch_add(1, Ordering::Relaxed);
+            file_handles().lock().insert(handle, file);
+            handle
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Open a file for reading and return a file handle
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_open_read(path: *const i8) -> i64 {
+    forge_open_file_with(path, false, false, false)
+}
+
+/// Open a file for writing and return a file handle
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_open_write(path: *const i8) -> i64 {
+    forge_open_file_with(path, true, true, false)
+}
+
+/// Open a file for appending and return a file handle
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_open_append(path: *const i8) -> i64 {
+    forge_open_file_with(path, true, false, true)
+}
+
+/// Read a chunk from an open file handle
+///
+/// # Safety
+/// handle must be a valid file handle
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_read(handle: i64, max_bytes: i64) -> *mut i8 {
+    use std::io::Read;
+
+    let size = if max_bytes > 0 { max_bytes as usize } else { 4096 };
+    let mut handles = file_handles().lock();
+    let Some(file) = handles.get_mut(&handle) else {
+        return std::ptr::null_mut();
+    };
+
+    let mut buf = vec![0u8; size];
+    match file.read(&mut buf) {
+        Ok(0) => forge_cstring_empty(),
+        Ok(n) => {
+            buf.truncate(n);
+            forge_copy_bytes_to_cstring(&buf)
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Write a chunk to an open file handle
+///
+/// # Safety
+/// handle must be a valid file handle and data must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_write(handle: i64, data: *const i8) -> i64 {
+    use std::io::Write;
+
+    if data.is_null() {
+        return 0;
+    }
+
+    let len = crate::string::forge_cstring_len(data) as usize;
+    let bytes = std::slice::from_raw_parts(data as *const u8, len);
+    let mut handles = file_handles().lock();
+    let Some(file) = handles.get_mut(&handle) else {
+        return 0;
+    };
+
+    match file.write(bytes) {
+        Ok(n) => n as i64,
+        Err(_) => 0,
+    }
+}
+
+/// Close an open file handle
+#[no_mangle]
+pub extern "C" fn forge_file_close(handle: i64) {
+    file_handles().lock().remove(&handle);
 }
 
 /// Exit the program with given status code
