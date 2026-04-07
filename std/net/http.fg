@@ -12,6 +12,7 @@
 #       else:
 #           http.send_response(fd, http.not_found())
 
+import std.bytes as bytes
 from std.io import BufferedStringReader, BufferedTcpStream
 import std.io as io
 
@@ -299,6 +300,22 @@ pub fn respond(status: Int, content_type: String, body_text: String) -> String:
     resp = resp + body_text
     return resp
 
+pub fn respond_bytes(status: Int, content_type: String, body_bytes: Bytes) -> Bytes!:
+    crlf := chr(13) + chr(10)
+    bl := body_bytes.len().to_string()
+    mut header := status_line(status)
+    header = header + ct_header(content_type)
+    header = header + "Content-Length: " + bl
+    header = header + crlf
+    header = header + "Connection: close"
+    header = header + crlf
+    header = header + crlf
+    header_bytes := bytes.from_string_utf8(header)
+    buf := bytes.buffer_with_capacity(header_bytes.len() + body_bytes.len())
+    buf.write(header_bytes)!
+    buf.write(body_bytes)!
+    return buf.bytes()
+
 pub fn text_response(status: Int, body_text: String) -> String:
     return respond(status, MIME_TEXT, body_text)
 
@@ -386,40 +403,54 @@ pub fn read_request(fd: Int) -> String!:
     reader := stream.buffered_reader()
     return read_request_from_buffered_tcp(reader)
 
-pub fn send_response(fd: Int, response: String) -> Int!:
+pub fn send_response_bytes(fd: Int, response: Bytes) -> Int!:
     stream := io.from_fd(fd)
-    writer := stream.buffered_writer()
-    written := writer.write(response)!
+    writer := stream.buffered_bytes_writer()
+    written := writer.write_all_bytes(response)!
     writer.flush()!
     tcp_close(fd)
     return written
+
+pub fn send_response(fd: Int, response: String) -> Int!:
+    return send_response_bytes(fd, bytes.from_string_utf8(response))
+
+fn find_response_body_offset(raw: Bytes) -> Int:
+    mut i := 0
+    while i < raw.len() - 3:
+        if raw[i] == 13 and raw[i + 1] == 10 and raw[i + 2] == 13 and raw[i + 3] == 10:
+            return i + 4
+        i = i + 1
+    i = 0
+    while i < raw.len() - 1:
+        if raw[i] == 10 and raw[i + 1] == 10:
+            return i + 2
+        i = i + 1
+    return 0
 
 # ===============================================================
 # HTTP Client
 # ===============================================================
 
-pub fn get(host: String, port: Int, url_path: String) -> String!:
+pub fn get_bytes(host: String, port: Int, url_path: String) -> Bytes!:
     conn := io.connect(host, port)!
     crlf := chr(13) + chr(10)
     mut req := "GET " + url_path
     req = req + " HTTP/1.1"
     req = req + crlf
-    h := "Host: " + host
-    req = req + h
+    req = req + "Host: " + host
     req = req + crlf
     req = req + "Connection: close"
     req = req + crlf
     req = req + crlf
-    writer := conn.buffered_writer()
-    writer.write_all(req)!
+    writer := conn.buffered_bytes_writer()
+    writer.write_all_bytes(bytes.from_string_utf8(req))!
     writer.flush()!
-    response := conn.read_all_chunked(4096)!
+    response := conn.read_all_bytes_chunked(4096)!
     conn.close()
-    cr := chr(13)
-    mut hi := 0
-    resp_len := response.len()
-    while hi < resp_len - 3:
-        if ord(response[hi]) == 13 and ord(response[hi + 2]) == 13:
-            return response.substring(hi + 4, resp_len)
-        hi = hi + 1
-    return response
+    body_start := find_response_body_offset(response)
+    if body_start <= 0:
+        return response
+    return response.slice(body_start, response.len())
+
+pub fn get(host: String, port: Int, url_path: String) -> String!:
+    return get_bytes(host, port, url_path)!.to_string_utf8()!
