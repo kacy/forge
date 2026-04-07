@@ -110,13 +110,10 @@ lot closer to the tcp/http path instead of being a special case.
 add real file-handle streaming to the runtime and move `std.fs` beyond
 whole-file helpers.
 
-the runtime and `std.io` side of that is landing now. open file handles can
-sit on the same reader and writer surface as tcp and process streams.
-
-the `std.fs` surface is still follow-up work. the current module wrapper path
-isn't a good place to hide a codegen quirk, so it's better to land the real
-streaming foundation first and wire the higher-level file api over it once that
-path is solid.
+that layer is in place now. open file handles can sit on the same reader and
+writer surface as tcp and process streams, and `std.fs` can expose streaming
+open/create/append helpers on top of it instead of stopping at whole-file
+reads and writes.
 
 ### milestone 4
 

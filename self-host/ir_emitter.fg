@@ -1996,6 +1996,8 @@ fn ir_collect_imports(root_idx: Int):
                     prefix = "path"
                 elif mod_path == "std.net.url":
                     prefix = "url"
+                elif mod_path == "std.fs":
+                    prefix = "fs"
                 if prefix.len() > 0:
                     mut pi := 1
                     while pi < parts.len():

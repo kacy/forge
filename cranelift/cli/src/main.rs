@@ -211,6 +211,16 @@ fn run_ir_driver(driver: &str, path: &str, module_index: usize) -> Result<String
             }
         })
         .collect();
+    let function_names: Vec<String> = ir.lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[0] == "func" {
+                Some(parts[1].to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Rename string IDs, __init_globals, and globals
     let mut result = String::new();
@@ -224,6 +234,16 @@ fn run_ir_driver(driver: &str, path: &str, module_index: usize) -> Result<String
         let parts: Vec<&str> = new_line.split_whitespace().collect();
         if !parts.is_empty() {
             match parts[0] {
+                "func" if parts.len() >= 2 => {
+                    let old = parts[1];
+                    let renamed = format!("{}{}", prefix, old);
+                    let suffix = if parts.len() > 2 {
+                        format!(" {}", parts[2..].join(" "))
+                    } else {
+                        String::new()
+                    };
+                    new_line = format!("func {}{}", renamed, suffix);
+                }
                 "global" if parts.len() >= 2 => {
                     let old = parts[1];
                     if !old.starts_with("__for_") { // don't rename loop vars
@@ -250,6 +270,28 @@ fn run_ir_driver(driver: &str, path: &str, module_index: usize) -> Result<String
                         if pos > 0 {
                             new_line = format!("{}{}{}{}", &new_line[..pos], prefix, name, &new_line[pos+name.len()..]);
                         }
+                    }
+                }
+                "call" if parts.len() >= 5 => {
+                    let fname = parts[2];
+                    if function_names.iter().any(|f| f == fname) {
+                        let suffix = if parts.len() > 3 {
+                            format!(" {}", parts[3..].join(" "))
+                        } else {
+                            String::new()
+                        };
+                        new_line = format!("call {} {}{}", parts[1], format!("{}{}", prefix, fname), suffix);
+                    }
+                }
+                "callv" if parts.len() >= 3 => {
+                    let fname = parts[1];
+                    if function_names.iter().any(|f| f == fname) {
+                        let suffix = if parts.len() > 2 {
+                            format!(" {}", parts[2..].join(" "))
+                        } else {
+                            String::new()
+                        };
+                        new_line = format!("callv {}{}{}", prefix, fname, suffix);
                     }
                 }
                 _ => {}
@@ -282,6 +324,46 @@ fn remove_main_from_import(ir: &str) -> String {
         }
     }
     result
+}
+
+fn rewrite_calls_with_function_map(
+    ir: &str,
+    function_map: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut rewritten = String::new();
+    for line in ir.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let mut handled = false;
+        if parts.len() >= 5 && parts[0] == "call" {
+            let fname = parts[2];
+            if let Some(prefixed) = function_map.get(fname) {
+                rewritten.push_str(&format!(
+                    "call {} {} {}",
+                    parts[1],
+                    prefixed,
+                    parts[3..].join(" ")
+                ));
+                rewritten.push('\n');
+                handled = true;
+            }
+        } else if parts.len() >= 3 && parts[0] == "callv" {
+            let fname = parts[1];
+            if let Some(prefixed) = function_map.get(fname) {
+                rewritten.push_str(&format!(
+                    "callv {} {}",
+                    prefixed,
+                    parts[2..].join(" ")
+                ));
+                rewritten.push('\n');
+                handled = true;
+            }
+        }
+        if !handled {
+            rewritten.push_str(line);
+            rewritten.push('\n');
+        }
+    }
+    rewritten
 }
 
 /// Find the stdlib root directory by walking up from the source file and CWD
@@ -435,8 +517,14 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
     // Generate IR: imported modules first, then main file
     let mut all_ir = String::new();
     let mut global_renames: Vec<(String, String)> = Vec::new(); // (bare, prefixed)
+    let mut function_renames: Vec<(String, String)> = Vec::new(); // (bare, prefixed)
+    let mut imported_function_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for (i, mod_file) in module_files.iter().enumerate() {
-        let ir = run_ir_driver(&driver, mod_file, i)?;
+        let mut ir = run_ir_driver(&driver, mod_file, i)?;
+        if !imported_function_map.is_empty() {
+            ir = rewrite_calls_with_function_map(&ir, &imported_function_map);
+        }
         if !ir.is_empty() {
             // Collect global name mappings for main module rewriting
             let prefix = format!("m{}_", i);
@@ -446,6 +534,12 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
                     let prefixed = parts[1].to_string();
                     if let Some(bare) = prefixed.strip_prefix(&prefix) {
                         global_renames.push((bare.to_string(), prefixed.clone()));
+                    }
+                } else if parts.len() >= 2 && parts[0] == "func" {
+                    let prefixed = parts[1].to_string();
+                    if let Some(bare) = prefixed.strip_prefix(&prefix) {
+                        imported_function_map.insert(bare.to_string(), prefixed.clone());
+                        function_renames.push((bare.to_string(), prefixed.clone()));
                     }
                 }
             }
@@ -458,6 +552,19 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
     let mut main_ir = String::new();
     let global_map: std::collections::HashMap<&str, &str> = global_renames.iter()
         .map(|(bare, prefixed)| (bare.as_str(), prefixed.as_str()))
+        .collect();
+    let function_map: std::collections::HashMap<&str, &str> = function_renames.iter()
+        .map(|(bare, prefixed)| (bare.as_str(), prefixed.as_str()))
+        .collect();
+    let main_func_names: std::collections::HashSet<String> = main_ir_raw.lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[0] == "func" {
+                Some(parts[1].to_string())
+            } else {
+                None
+            }
+        })
         .collect();
     for line in main_ir_raw.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -476,6 +583,24 @@ fn get_ir_from_compiler(path: &str) -> Result<String, String> {
                     if let Some(&prefixed) = global_map.get(parts[1]) {
                         main_ir.push_str(&format!("store {} {}", prefixed, parts[2]));
                         rewritten = true;
+                    }
+                }
+                "call" if parts.len() >= 5 => {
+                    let fname = parts[2];
+                    if !main_func_names.contains(fname) {
+                        if let Some(&prefixed) = function_map.get(fname) {
+                            main_ir.push_str(&format!("call {} {} {}", parts[1], prefixed, parts[3..].join(" ")));
+                            rewritten = true;
+                        }
+                    }
+                }
+                "callv" if parts.len() >= 3 => {
+                    let fname = parts[1];
+                    if !main_func_names.contains(fname) {
+                        if let Some(&prefixed) = function_map.get(fname) {
+                            main_ir.push_str(&format!("callv {} {}", prefixed, parts[2..].join(" ")));
+                            rewritten = true;
+                        }
                     }
                 }
                 _ => {}
@@ -503,7 +628,7 @@ fn collect_imports_recursive(
     // their Forge implementations to avoid shadowing with incompatible versions
     let builtin_modules = [
         "std.json", "std.toml", "std.encoding", "std.hash",
-        "std.fmt", "std.log", "std.fs", "std.net.tcp", "std.net.dns",
+        "std.fmt", "std.log", "std.net.tcp", "std.net.dns",
         "std.net.url", "std.os.path", "std.os.process",
     ];
     for mod_path in extract_imports(source) {

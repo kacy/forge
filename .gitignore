@@ -20,8 +20,6 @@ examples/*
 # compiled regression binaries
 tests/cases/*
 !tests/cases/*.fg
-!tests/cases/support/
-!tests/cases/support/*.fg
 
 # compiled self-host binaries
 self-host/check_main
