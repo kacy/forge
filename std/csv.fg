@@ -33,13 +33,13 @@ pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
     stream := io.file_stream_open_read(path)!
     reader := io.buffered_file_reader_chunked(stream, chunk_size)
     mut rows: List[List[String]] := []
-    mut line := io.buffered_file_reader_read_line(reader)!
+    mut line := reader.read_line()!
     while line.len() > 0:
         trimmed := line.trim()
         if trimmed.len() > 0:
             rows.push(parse_row(trimmed))
-        line = io.buffered_file_reader_read_line(reader)!
-    io.file_stream_close(stream)
+        line = reader.read_line()!
+    stream.close()
     return rows
 
 ## Parse CSV text with the first row as headers.
@@ -92,12 +92,12 @@ pub fn save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> 
     mut i := 0
     while i < rows.len():
         line := encode_row(rows[i])
-        total = total + io.buffered_file_writer_write(writer, line)!
+        total = total + writer.write(line)!
         if i + 1 < rows.len():
-            total = total + io.buffered_file_writer_write(writer, chr(10))!
+            total = total + writer.write(chr(10))!
         i = i + 1
-    total = total + io.buffered_file_writer_flush(writer)!
-    io.file_stream_close(stream)
+    total = total + writer.flush()!
+    stream.close()
     return total
 
 ## Encode a single row into a CSV line

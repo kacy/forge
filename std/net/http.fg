@@ -344,38 +344,38 @@ fn content_length_from_head(raw_head: String) -> Int!:
 
 fn read_request_from_buffered_string(reader: BufferedStringReader) -> String!:
     crlf := chr(13) + chr(10)
-    request_line := io.buffered_string_reader_read_line(reader)!
+    request_line := reader.read_line()!
     if request_line == "":
         return parse_request("")
 
     mut raw := request_line + crlf
-    mut line := io.buffered_string_reader_read_line(reader)!
+    mut line := reader.read_line()!
     while line.len() > 0:
         raw = raw + line + crlf
-        line = io.buffered_string_reader_read_line(reader)!
+        line = reader.read_line()!
     raw = raw + crlf
 
     content_length := content_length_from_head(raw)!
     if content_length > 0:
-        raw = raw + io.buffered_string_reader_read(reader, content_length)!
+        raw = raw + reader.read(content_length)!
     return parse_request(raw)
 
 fn read_request_from_buffered_tcp(reader: BufferedTcpStream) -> String!:
     crlf := chr(13) + chr(10)
-    request_line := io.buffered_tcp_stream_read_line(reader)!
+    request_line := reader.read_line()!
     if request_line == "":
         return parse_request("")
 
     mut raw := request_line + crlf
-    mut line := io.buffered_tcp_stream_read_line(reader)!
+    mut line := reader.read_line()!
     while line.len() > 0:
         raw = raw + line + crlf
-        line = io.buffered_tcp_stream_read_line(reader)!
+        line = reader.read_line()!
     raw = raw + crlf
 
     content_length := content_length_from_head(raw)!
     if content_length > 0:
-        raw = raw + io.buffered_tcp_stream_read(reader, content_length)!
+        raw = raw + reader.read(content_length)!
     return parse_request(raw)
 
 pub fn read_request_buffered(reader: BufferedStringReader) -> String!:
@@ -389,8 +389,8 @@ pub fn read_request(fd: Int) -> String!:
 pub fn send_response(fd: Int, response: String) -> Int!:
     stream := io.from_fd(fd)
     writer := io.buffered_tcp_writer(stream)
-    written := io.buffered_tcp_writer_write(writer, response)!
-    io.buffered_tcp_writer_flush(writer)!
+    written := writer.write(response)!
+    writer.flush()!
     tcp_close(fd)
     return written
 
@@ -411,10 +411,10 @@ pub fn get(host: String, port: Int, url_path: String) -> String!:
     req = req + crlf
     req = req + crlf
     writer := io.buffered_tcp_writer(conn)
-    io.buffered_tcp_writer_write(writer, req)!
-    io.buffered_tcp_writer_flush(writer)!
+    writer.write(req)!
+    writer.flush()!
     response := io.read_all_tcp_stream_chunked(conn, 4096)!
-    io.tcp_stream_close(conn)
+    conn.close()
     cr := chr(13)
     mut hi := 0
     resp_len := response.len()
