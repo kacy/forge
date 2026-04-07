@@ -124,6 +124,10 @@ fn module_import_target_name(module_path: String, name: String) -> String:
         return "json_" + name
     if module_path == "std.toml":
         return "toml_" + name
+    if module_path == "std.encoding":
+        return "encoding_" + name
+    if module_path == "std.hash":
+        return "hash_" + name
     if module_path == "std.log":
         return "log_" + name
     if module_path == "std.net.url":
