@@ -1,0 +1,39 @@
+import std.bytes as bytes
+import std.net.websocket as websocket
+
+fn main() -> Int!:
+    frame := websocket.text_frame_bytes("hello")!
+    print(frame.len().to_string())
+    parsed := websocket.parse_frame(frame)!
+    print(parsed.fin.to_string())
+    print(parsed.is_text().to_string())
+    print(parsed.payload_text()!)
+
+    masked := bytes.buffer()
+    masked.write_byte(129)!
+    masked.write_byte(133)!
+    masked.write_byte(55)!
+    masked.write_byte(250)!
+    masked.write_byte(33)!
+    masked.write_byte(61)!
+    masked.write_byte(95)!
+    masked.write_byte(159)!
+    masked.write_byte(77)!
+    masked.write_byte(81)!
+    masked.write_byte(88)!
+
+    parsed_masked := websocket.parse_frame(masked.bytes())!
+    print(parsed_masked.masked.to_string())
+    print(parsed_masked.payload_text()!)
+
+    binary := bytes.buffer()
+    binary.write_byte(1)!
+    binary.write_byte(2)!
+    binary.write_byte(3)!
+    parsed_binary := websocket.parse_frame(websocket.binary_frame(binary.bytes())!)!
+    print(parsed_binary.is_binary().to_string())
+    print(parsed_binary.payload.len().to_string())
+    print(parsed_binary.payload[0].to_string())
+    print(parsed_binary.payload[1].to_string())
+    print(parsed_binary.payload[2].to_string())
+    return 0
