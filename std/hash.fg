@@ -218,7 +218,7 @@ K2 := 2400959708
 K3 := 3395469782
 
 fn rotl32(x: Int, n: Int) -> Int:
-    return bit_or(bit_shl(x, n), bit_shr(x, 32 - n))
+    return mask32(bit_or(bit_shl(x, n), bit_shr(x, 32 - n)))
 
 fn add32(a: Int, b: Int) -> Int:
     return bit_and(a + b, 4294967295)
