@@ -4,8 +4,9 @@
 # the public surface is bytes-first, with text as a convenience layer on top.
 #
 #   import std.net.websocket as websocket
-#   accept := websocket.compute_accept(client_key)!
-#   response := websocket.handshake_response(client_key)!
+#   req := http.read_request_bytes(fd)!
+#   ws := websocket.upgrade(fd, req)!
+#   client := websocket.dial("127.0.0.1", 8080, "/chat")!
 import std.bytes as bytes
 import std.hash as hash
 import std.encoding as encoding
@@ -279,6 +280,14 @@ pub fn upgrade(fd: Int, req: HttpRequestBytes) -> WebSocket!:
     writer.write_bytes(response)!
     ensure_writer_flushed(writer)!
     return register_websocket(stream, false)
+pub fn accept(fd: Int) -> WebSocket!:
+    req := http.read_request_bytes(fd)!
+    return upgrade(fd, req)
+pub fn accept_buffered(req: HttpRequestBytes, reader: BufferedBytesReader, writer: BufferedBytesWriter) -> WebSocket!:
+    response := upgrade_response(req)!
+    writer.write_bytes(response)!
+    ensure_writer_flushed(writer)!
+    return from_buffered(reader, writer, false)
 impl WebSocketFrame:
     fn is_text() -> Bool:
         return self.opcode == OP_TEXT
