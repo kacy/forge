@@ -6,15 +6,15 @@ fn main() -> Int!:
 
     writer := fs.create(path)!
     print(io.write_text(writer, "hello")!.to_string())
-    io.close_file(writer)
+    writer.close()
 
     appender := fs.open_append(path)!
     print(io.write_text(appender, " world")!.to_string())
-    io.close_file(appender)
+    appender.close()
 
     reader := fs.open(path)!
     print(io.read_text_chunked(reader, 4)!)
-    io.close_file(reader)
+    reader.close()
 
     print(fs.exists(path).to_string())
 

@@ -36,6 +36,8 @@ stdlib call sites can read like:
 - `import std.json as json`
 - `reader := io.string_reader(data)`
 - `text := io.read_all(reader)!`
+- `line := buffered.read_line()!`
+- `stream.close()`
 - `conn := io.connect(host, port)!`
 - `root := json.parse(text)`
 

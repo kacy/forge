@@ -3,17 +3,17 @@ import std.io as io
 fn main() -> Int!:
     stdout_proc := io.spawn_process("printf 'hello from child'")!
     print(io.read_stdout_chunked(stdout_proc, 3)!)
-    print(io.wait(stdout_proc).to_string())
-    io.close_process(stdout_proc)
+    print(stdout_proc.wait().to_string())
+    stdout_proc.close()
 
     stderr_proc := io.spawn_process("printf 'problem' >&2")!
     print(io.read_stderr_chunked(stderr_proc, 2)!)
-    print(io.wait(stderr_proc).to_string())
-    io.close_process(stderr_proc)
+    print(stderr_proc.wait().to_string())
+    stderr_proc.close()
 
     io_proc := io.spawn_process("head -c 5")!
     print(io.write_stdin(io_proc, "hello world")!.to_string())
     print(io.read_stdout_chunked(io_proc, 2)!)
-    print(io.wait(io_proc).to_string())
-    io.close_process(io_proc)
+    print(io_proc.wait().to_string())
+    io_proc.close()
     return 0

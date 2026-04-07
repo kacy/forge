@@ -15,5 +15,5 @@ fn main() -> Int!:
     print(writer.write("ab")!.to_string())
     print(writer.write("cdef")!.to_string())
     print(writer.flush()!.to_string())
-    print(io.string_buffer_string(sink))
+    print(sink.string())
     return 0
