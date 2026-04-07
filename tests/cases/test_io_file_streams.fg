@@ -1,5 +1,6 @@
 from std.fs import create, open, open_append, exists
 from std.io import write_all_file_stream, read_all_file_stream_chunked, file_stream_close
+from std.io import write_file_text_chunked, append_file_text_chunked, read_file_text_chunked
 
 fn main() -> Int!:
     path := "/tmp/forge_io_stream_test.txt"
@@ -17,4 +18,10 @@ fn main() -> Int!:
     file_stream_close(reader)
 
     print(exists(path).to_string())
+
+    text_path := "/tmp/forge_io_text_test.txt"
+    print(write_file_text_chunked(text_path, "alpha", 2)!.to_string())
+    print(append_file_text_chunked(text_path, " beta", 2)!.to_string())
+    print(read_file_text_chunked(text_path, 3)!)
+    print(exists(text_path).to_string())
     return 0

@@ -9,8 +9,7 @@
 #   warn("this prints")
 #   error("connection failed", "host=db.local port=5432")
 
-from std.fs import open_append
-from std.io import write_all_file_stream, file_stream_close
+from std.io import append_file_text
 
 # Levels: 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR
 mut min_level: Int := 0
@@ -62,12 +61,7 @@ fn emit_line(line: String):
     print_err(line)
     if sink_path == "":
         return
-    stream_result := open_append(sink_path)
-    if stream_result.is_err:
-        return
-    stream := stream_result.ok
-    _wrote := write_all_file_stream(stream, line + chr(10))
-    file_stream_close(stream)
+    _wrote := append_file_text(sink_path, line + chr(10))
 
 pub fn debug(msg: String):
     log_debug(msg)

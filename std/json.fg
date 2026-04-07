@@ -9,9 +9,7 @@
 #   if object_has(root, "name"):
 #       print(object_keys(root).join(", "))
 
-from std.io import file_stream_open_read, file_stream_open_write, file_stream_close
-from std.io import read_all_file_stream_chunked
-from std.io import buffered_file_writer_chunked, buffered_file_writer_write, buffered_file_writer_flush
+from std.io import read_file_text_chunked, write_file_text_chunked
 
 JSON_FILE_CHUNK_SIZE := 4096
 
@@ -318,17 +316,10 @@ pub fn parse_file_chunked(path: String, chunk_size: Int) -> Int:
     return json_parse_file_chunked(path, chunk_size)
 
 fn json_parse_file_chunked(path: String, chunk_size: Int) -> Int:
-    stream_result := file_stream_open_read(path)
-    if stream_result.is_err:
-        return 0 - 1
-    stream := stream_result.ok
-    data_result := read_all_file_stream_chunked(stream, chunk_size)
+    data_result := read_file_text_chunked(path, chunk_size)
     if data_result.is_err:
-        file_stream_close(stream)
         return 0 - 1
-    data := data_result.ok
-    file_stream_close(stream)
-    return json_parse(data)
+    return json_parse(data_result.ok)
 
 # ===============================================================
 # Public API — Type and Value Accessors
@@ -613,20 +604,7 @@ pub fn save_chunked(path: String, handle: Int, chunk_size: Int) -> Int:
     return json_save_chunked(path, handle, chunk_size)
 
 fn json_save_chunked(path: String, handle: Int, chunk_size: Int) -> Int:
-    stream_result := file_stream_open_write(path)
-    if stream_result.is_err:
-        return 0 - 1
-    stream := stream_result.ok
-    writer := buffered_file_writer_chunked(stream, chunk_size)
-    data := json_encode(handle)
-    write_result := buffered_file_writer_write(writer, data)
+    write_result := write_file_text_chunked(path, json_encode(handle), chunk_size)
     if write_result.is_err:
-        file_stream_close(stream)
         return 0 - 1
-    total := write_result.ok
-    flush_result := buffered_file_writer_flush(writer)
-    if flush_result.is_err:
-        file_stream_close(stream)
-        return 0 - 1
-    file_stream_close(stream)
-    return total + flush_result.ok
+    return write_result.ok

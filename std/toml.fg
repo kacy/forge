@@ -9,7 +9,7 @@
 #   db := get_table(root, "database")
 #   host := get_string(db, "host")
 
-from std.io import file_stream_open_read, file_stream_close, read_all_file_stream_chunked
+from std.io import read_file_text_chunked
 
 TOML_FILE_CHUNK_SIZE := 4096
 
@@ -399,17 +399,10 @@ pub fn parse_file_chunked(path: String, chunk_size: Int) -> Int:
     return toml_parse_file_chunked(path, chunk_size)
 
 fn toml_parse_file_chunked(path: String, chunk_size: Int) -> Int:
-    stream_result := file_stream_open_read(path)
-    if stream_result.is_err:
-        return 0 - 1
-    stream := stream_result.ok
-    data_result := read_all_file_stream_chunked(stream, chunk_size)
+    data_result := read_file_text_chunked(path, chunk_size)
     if data_result.is_err:
-        file_stream_close(stream)
         return 0 - 1
-    data := data_result.ok
-    file_stream_close(stream)
-    return toml_parse(data)
+    return toml_parse(data_result.ok)
 
 # ===============================================================
 # Public API — Type and Introspection

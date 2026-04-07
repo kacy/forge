@@ -472,6 +472,37 @@ pub fn read_all_file_stream_chunked(stream: FileStream, chunk_size: Int) -> Stri
         chunk = file_stream_read(stream, size)!
     return result
 
+pub fn read_file_text(path: String) -> String!:
+    return read_file_text_chunked(path, DEFAULT_CHUNK_SIZE)
+
+pub fn read_file_text_chunked(path: String, chunk_size: Int) -> String!:
+    stream := file_stream_open_read(path)!
+    content := read_all_file_stream_chunked(stream, chunk_size)!
+    file_stream_close(stream)
+    return content
+
+pub fn write_file_text(path: String, data: String) -> Int!:
+    return write_file_text_chunked(path, data, DEFAULT_CHUNK_SIZE)
+
+pub fn write_file_text_chunked(path: String, data: String, chunk_size: Int) -> Int!:
+    stream := file_stream_open_write(path)!
+    writer := buffered_file_writer_chunked(stream, chunk_size)
+    mut total := buffered_file_writer_write(writer, data)!
+    total = total + buffered_file_writer_flush(writer)!
+    file_stream_close(stream)
+    return total
+
+pub fn append_file_text(path: String, data: String) -> Int!:
+    return append_file_text_chunked(path, data, DEFAULT_CHUNK_SIZE)
+
+pub fn append_file_text_chunked(path: String, data: String, chunk_size: Int) -> Int!:
+    stream := file_stream_open_append(path)!
+    writer := buffered_file_writer_chunked(stream, chunk_size)
+    mut total := buffered_file_writer_write(writer, data)!
+    total = total + buffered_file_writer_flush(writer)!
+    file_stream_close(stream)
+    return total
+
 pub fn write_all_process_stdin(writer: ProcessStdin, data: String) -> Int!:
     mut total := 0
     mut remaining := data
