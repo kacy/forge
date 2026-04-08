@@ -563,8 +563,11 @@ fn ir_emit_method_call(idx: Int) -> Int:
             emit_name = "map_values"
     elif mname == "contains_key" and obj_is_map_int:
         emit_name = "map_contains_ikey"
-    elif mname == "insert" and obj_is_map_int:
-        emit_name = "map_insert_ikey"
+    elif mname == "insert":
+        if obj_is_map_int:
+            emit_name = "map_insert_ikey"
+        elif obj_is_map:
+            emit_name = "map_insert"
     if BOOL_RETURNING_METHODS.contains(emit_name):
         ir_var_types.insert("__last_call", "bool")
 
@@ -923,7 +926,10 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
             if entry.kind == "entry" and entry.children.len() >= 2:
                 k_r := ir_expr(entry.children[0])
                 v_r := ir_expr(entry.children[1])
-                ir_emit_call(ir_reg(), "insert", "void", [map_r, k_r, v_r])
+                if has_int_keys:
+                    ir_emit_call(ir_reg(), "map_insert_ikey", "void", [map_r, k_r, v_r])
+                else:
+                    ir_emit_call(ir_reg(), "map_insert", "void", [map_r, k_r, v_r])
             _fi7 = _fi7 + 1
         return map_r
 

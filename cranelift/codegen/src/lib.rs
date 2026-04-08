@@ -480,6 +480,7 @@ pub fn declare_runtime_functions(
         ("tcp_read2", "forge_tcp_read2", &[I64, I64], &[I64]),
         ("forge_struct_alloc", "forge_struct_alloc", &[I64], &[I64]),
         ("insert", "forge_map_insert_cstr", &[I64, I64, I64], &[]),
+        ("map_insert", "forge_map_insert_cstr", &[I64, I64, I64], &[]),
         ("forge_map_insert_cstr", "forge_map_insert_cstr", &[I64, I64, I64], &[]),
         ("map_insert_ikey", "forge_map_insert_ikey", &[I64, I64, I64], &[]),
         ("forge_map_insert_ikey", "forge_map_insert_ikey", &[I64, I64, I64], &[]),

@@ -44,7 +44,7 @@ BYTES_RETURNING_FUNCS := "bytes_from_string_utf8,read_file_bytes,file_read_bytes
 LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks,json_object_keys"
 LIST_STRING_RETURNING_FUNCS := "sort_strings,zip,enumerate,toml_keys"
 BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty"
-VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear"
+VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear"
 STRING_RETURNING_METHODS := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at,join,list_join,read_file,env,chr"
 
 # --- state ---
@@ -1057,8 +1057,11 @@ fn ir_emit_method_call(idx: Int) -> Int:
             emit_name = "map_values"
     elif mname == "contains_key" and obj_is_map_int:
         emit_name = "map_contains_ikey"
-    elif mname == "insert" and obj_is_map_int:
-        emit_name = "map_insert_ikey"
+    elif mname == "insert":
+        if obj_is_map_int:
+            emit_name = "map_insert_ikey"
+        elif obj_is_map:
+            emit_name = "map_insert"
     elif mname == "slice" and obj_is_bytes:
         emit_name = "bytes_slice"
     elif mname == "concat" and obj_is_bytes:
@@ -1527,7 +1530,10 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
             if entry.kind == "entry" and entry.children.len() >= 2:
                 k_r := ir_expr(entry.children[0])
                 v_r := ir_expr(entry.children[1])
-                ir_emit_call3(ir_reg(), "insert", "void", map_r, k_r, v_r)
+                if has_int_keys:
+                    ir_emit_call3(ir_reg(), "map_insert_ikey", "void", map_r, k_r, v_r)
+                else:
+                    ir_emit_call3(ir_reg(), "map_insert", "void", map_r, k_r, v_r)
             _fi7 = _fi7 + 1
         return map_r
 

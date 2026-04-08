@@ -1419,6 +1419,7 @@ fn resolve_func_name(name: &str) -> &str {
         "slice" => "forge_list_slice",
         // Map operations
         "insert" => "insert",
+        "map_insert" => "map_insert",
         "map_insert_ikey" => "map_insert_ikey",
         "map_get" => "map_get",
         "map_get_ikey" => "map_get_ikey",
