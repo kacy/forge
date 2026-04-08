@@ -338,10 +338,6 @@ fn compile_ir_function(
     #[cfg(not(forge_cranelift_new_api))]
     let mut next_var_id: u32 = 0;
 
-    // Create a zero constant that can be used as fallback for undefined registers
-    let zero_val = builder.ins().iconst(types::I64, 0);
-    regs.insert(usize::MAX, zero_val); // sentinel
-
     // Call __init_globals (and module-specific __init_globals_N) at the start of main
     if func_name == "main" {
         // Call module-specific initializers first (imported modules)
@@ -645,8 +641,8 @@ fn compile_ir_function(
 
             "add" | "sub" | "mul" | "div" | "mod" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
-                let a_reg: usize = parts[2].parse().unwrap_or(usize::MAX);
-                let b_reg: usize = parts[3].parse().unwrap_or(usize::MAX);
+                let a_reg = parts[2].parse::<usize>().ok();
+                let b_reg = parts[3].parse::<usize>().ok();
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
                 reg_source_vars.remove(&reg);
@@ -654,7 +650,9 @@ fn compile_ir_function(
                 // If `add` has a string operand, treat as concat (IR emitter
                 // sometimes emits `add` instead of `concat` when variable types
                 // aren't tracked across function boundaries)
-                if parts[0] == "add" && string_regs.contains(&a_reg) && string_regs.contains(&b_reg)
+                if parts[0] == "add"
+                    && a_reg.is_some_and(|r| string_regs.contains(&r))
+                    && b_reg.is_some_and(|r| string_regs.contains(&r))
                 {
                     let concat_name = if runtime_funcs.contains_key("forge_concat_cstr") {
                         "forge_concat_cstr"
@@ -679,7 +677,8 @@ fn compile_ir_function(
                     float_regs.remove(&reg);
                 // If operands are known floats, promote to float operation
                 } else if matches!(parts[0], "add" | "sub" | "mul" | "div")
-                    && (float_regs.contains(&a_reg) || float_regs.contains(&b_reg))
+                    && (a_reg.is_some_and(|r| float_regs.contains(&r))
+                        || b_reg.is_some_and(|r| float_regs.contains(&r)))
                 {
                     let fa = builder.ins().bitcast(
                         types::F64,
@@ -725,15 +724,16 @@ fn compile_ir_function(
 
             "eq" | "neq" | "lt" | "gt" | "lte" | "gte" if parts.len() >= 4 => {
                 let reg: usize = parts[1].parse().unwrap_or(0);
-                let a_reg: usize = parts[2].parse().unwrap_or(usize::MAX);
-                let b_reg: usize = parts[3].parse().unwrap_or(usize::MAX);
+                let a_reg = parts[2].parse::<usize>().ok();
+                let b_reg = parts[3].parse::<usize>().ok();
                 let a = get_reg(&regs, parts[2]);
                 let b = get_reg(&regs, parts[3]);
                 reg_source_vars.remove(&reg);
                 struct_regs.remove(&reg);
                 // For lt/gt/lte/gte on strings, call runtime comparison
                 let is_str_cmp = matches!(parts[0], "lt" | "gt" | "lte" | "gte")
-                    && (string_regs.contains(&a_reg) || string_regs.contains(&b_reg));
+                    && (a_reg.is_some_and(|r| string_regs.contains(&r))
+                        || b_reg.is_some_and(|r| string_regs.contains(&r)));
                 if is_str_cmp {
                     let cmp_name = match parts[0] {
                         "lt" => "forge_cstring_lt",
@@ -752,7 +752,9 @@ fn compile_ir_function(
                         let cmp = builder.ins().icmp(IntCC::SignedLessThan, a, b);
                         regs.insert(reg, builder.ins().uextend(types::I64, cmp));
                     }
-                } else if float_regs.contains(&a_reg) || float_regs.contains(&b_reg) {
+                } else if a_reg.is_some_and(|r| float_regs.contains(&r))
+                    || b_reg.is_some_and(|r| float_regs.contains(&r))
+                {
                     // Float comparison
                     let fa = builder.ins().bitcast(
                         types::F64,
@@ -1066,6 +1068,8 @@ fn compile_ir_function(
                 reg_source_vars.insert(reg, name.to_string());
                 if let Some(struct_name) = struct_vars.get(name) {
                     struct_regs.insert(reg, struct_name.clone());
+                } else if struct_layouts.contains_key(name) {
+                    struct_regs.insert(reg, name.to_string());
                 } else {
                     struct_regs.remove(&reg);
                 }
@@ -1601,11 +1605,12 @@ fn resolve_func_name(name: &str) -> &str {
 }
 
 fn get_reg(regs: &HashMap<usize, Value>, s: &str) -> Value {
-    let reg: usize = s.parse().unwrap_or(0);
+    let reg: usize = s
+        .parse()
+        .unwrap_or_else(|_| panic!("IR consumer: invalid register reference '{}'", s));
     regs.get(&reg)
-        .or_else(|| regs.get(&usize::MAX)) // fallback to zero sentinel
         .copied()
-        .unwrap_or_else(|| panic!("IR consumer: no registers available"))
+        .unwrap_or_else(|| panic!("IR consumer: missing register {}", reg))
 }
 
 #[cfg(test)]

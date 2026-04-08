@@ -528,6 +528,22 @@ fn ir_collect_struct_decls(root_idx: Int, emit_decl: Bool):
             ir_struct_names.insert(sname, field_names.len())
             if emit_decl:
                 ir_emit("struct " + sname + " " + field_names.join(" "))
+        elif cn.kind == "enum_decl":
+            sname := cn.value
+            mut variant_names: List[String] := []
+            mut j := 0
+            while j < cn.children.len():
+                vc := cn.children[j]
+                vn := get_node(vc)
+                if vn.kind == "variant":
+                    variant_index := variant_names.len()
+                    variant_names.push(vn.value)
+                    ir_struct_field_lookup.insert(sname + "." + vn.value, sname)
+                    ir_struct_field_index_lookup.insert(sname + "." + vn.value, variant_index.to_string())
+                j = j + 1
+            ir_struct_names.insert(sname, variant_names.len())
+            if emit_decl:
+                ir_emit("struct " + sname + " " + variant_names.join(" "))
         i = i + 1
 
 fn ir_seed_global_types():
