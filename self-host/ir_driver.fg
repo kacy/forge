@@ -126,8 +126,8 @@ fn rename_import_ir(ir: String, module_index: Int) -> RenamedImport:
 
     return RenamedImport(out.join(chr(10)), global_names, function_names, init_funcs)
 
-fn rewrite_calls_with_function_map(ir: String, function_map: Map[String, String]) -> String:
-    if function_map.len() == 0:
+fn rewrite_ir_with_import_maps(ir: String, global_map: Map[String, String], function_map: Map[String, String]) -> String:
+    if global_map.len() == 0 and function_map.len() == 0:
         return ir
 
     mut out: List[String] := []
@@ -137,7 +137,11 @@ fn rewrite_calls_with_function_map(ir: String, function_map: Map[String, String]
         line := ir.substring(start, end)
         parts := line.split(" ")
         mut rewritten := line
-        if parts.len() >= 5 and parts[0] == "call" and function_map.contains_key(parts[2]):
+        if parts.len() >= 3 and parts[0] == "load" and global_map.contains_key(parts[2]):
+            rewritten = "load " + parts[1] + " " + global_map[parts[2]]
+        elif parts.len() >= 3 and parts[0] == "store" and global_map.contains_key(parts[1]):
+            rewritten = "store " + global_map[parts[1]] + " " + parts[2]
+        elif parts.len() >= 5 and parts[0] == "call" and function_map.contains_key(parts[2]):
             rewritten = "call " + parts[1] + " " + function_map[parts[2]] + " " + join_from(parts, 3)
         elif parts.len() >= 3 and parts[0] == "callv" and function_map.contains_key(parts[1]):
             rewritten = "callv " + function_map[parts[1]]
@@ -324,7 +328,7 @@ fn emit_combined_file(path: String, emit_tests: Bool) -> String!:
         set_test_mode(false)
         ir := emit_ir(import_roots[i])
         renamed := rename_import_ir(ir, i)
-        rewritten_ir := rewrite_calls_with_function_map(renamed.ir, imported_function_map)
+        rewritten_ir := rewrite_ir_with_import_maps(renamed.ir, imported_global_map, imported_function_map)
 
         prefix := "m" + i.to_string() + "_"
         for bare in renamed.global_names:
