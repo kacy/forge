@@ -914,9 +914,6 @@ fn compile_ir_function(
                     } else if let Some(&fid) = runtime_funcs.get(fname) {
                         runtime_call = true;
                         Some(fid)
-                    } else if let Some(&fid) = runtime_funcs.get(&format!("forge_{}", fname)) {
-                        runtime_call = true;
-                        Some(fid)
                     } else {
                         None
                     };
@@ -1087,6 +1084,8 @@ fn compile_ir_function(
                 } else if let Some(&var) = named_vars.get(name) {
                     let val = builder.use_var(var);
                     regs.insert(reg, val);
+                } else if struct_layouts.contains_key(name) {
+                    regs.insert(reg, builder.ins().iconst(types::I64, 0));
                 } else {
                     return Err(CompileError::ModuleError(format!(
                         "ir consumer: unknown load source '{}' in {}",
@@ -1526,10 +1525,19 @@ fn resolve_func_name(name: &str) -> &str {
         "file_exists" => "forge_file_exists",
         "dir_exists" => "forge_dir_exists",
         "exec" => "forge_exec",
+        "exec_output" => "forge_exec_output",
         "exit" => "forge_exit",
         "env" => "forge_env",
         "args" => "forge_args_to_list",
         "dns_resolve" => "forge_dns_resolve",
+        "tcp_listen" => "forge_tcp_listen",
+        "tcp_connect" => "forge_tcp_connect",
+        "tcp_accept" => "forge_tcp_accept",
+        "tcp_read" => "forge_tcp_read",
+        "tcp_read2" => "forge_tcp_read2",
+        "tcp_write" => "forge_tcp_write",
+        "tcp_set_timeout" => "forge_tcp_set_timeout",
+        "tcp_close" => "forge_tcp_close",
         "process_spawn" => "forge_process_spawn",
         "process_write" => "forge_process_write",
         "process_read" => "forge_process_read",
