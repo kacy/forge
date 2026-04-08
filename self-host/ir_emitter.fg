@@ -45,7 +45,7 @@ LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,tak
 LIST_STRING_RETURNING_FUNCS := "sort_strings,zip,enumerate,toml_keys"
 BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty"
 VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear"
-STRING_RETURNING_METHODS := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at,join,read_file,env,chr"
+STRING_RETURNING_METHODS := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at,join,list_join,read_file,env,chr"
 
 # --- state ---
 mut ir_lines: List[String] := []
@@ -1009,6 +1009,8 @@ fn ir_emit_method_call(idx: Int) -> Int:
             emit_name = "list_index_of_string"
         elif obj_is_list:
             emit_name = "list_index_of"
+    elif mname == "join" and obj_is_list:
+        emit_name = "list_join"
     elif mname == "sort":
         if obj_type == "list_string":
             emit_name = "sort_strings"

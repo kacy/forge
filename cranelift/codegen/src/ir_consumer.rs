@@ -1398,6 +1398,7 @@ fn resolve_func_name(name: &str) -> &str {
         // List operations
         "len" => "forge_auto_len",
         "join" => "forge_list_join",
+        "list_join" => "list_join",
         "push" => "forge_list_push_value",
         "pop" => "forge_list_pop",
         "remove" | "list_remove" => "list_remove",

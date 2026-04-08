@@ -523,6 +523,8 @@ fn ir_emit_method_call(idx: Int) -> Int:
     elif mname == "index_of":
         if obj_is_list:
             emit_name = "list_index_of"
+    elif mname == "join" and obj_is_list:
+        emit_name = "list_join"
     elif mname == "sort":
         if obj_type == "list_string":
             emit_name = "sort_strings"
