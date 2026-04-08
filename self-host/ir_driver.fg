@@ -85,7 +85,7 @@ fn rename_import_ir(ir: String, module_index: Int) -> RenamedImport:
     mut init_funcs: List[String] := []
     for name in function_names:
         if name.starts_with("__init_globals"):
-            init_funcs.push(prefix + "__init_globals_" + module_index.to_string())
+            init_funcs.push(prefix + name.replace("__init_globals", "__init_globals_" + module_index.to_string()))
 
     mut out: List[String] := []
     start = 0
