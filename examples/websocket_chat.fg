@@ -1,9 +1,17 @@
-# live websocket chat between two clients
+# websocket chat flow over buffered sessions
+import std.bytes as bytes
+import std.io as io
 import std.net.websocket as websocket
-fn run_chat_server(port: Int) -> Int!:
-    server_fd := tcp_listen("127.0.0.1", port)!
-    left := websocket.accept(tcp_accept(server_fd)!)!
-    right := websocket.accept(tcp_accept(server_fd)!)!
+fn chat_client_wire(name: String, message: String) -> Bytes!:
+    wire := bytes.buffer()
+    wire.write(websocket.client_text_frame_bytes(name, bytes.from_string_utf8("abcd"))!)!
+    wire.write(websocket.client_text_frame_bytes(message, bytes.from_string_utf8("wxyz"))!)!
+    return wire.bytes()
+fn main() -> Int!:
+    left_out := bytes.buffer()
+    right_out := bytes.buffer()
+    left := websocket.from_buffered(io.bytes_reader(chat_client_wire("left", "hello from left")!).buffered_chunked(4), left_out.buffered_chunked(4), false)
+    right := websocket.from_buffered(io.bytes_reader(chat_client_wire("right", "hello from right")!).buffered_chunked(4), right_out.buffered_chunked(4), false)
     left_name := left.recv_text()!
     right_name := right.recv_text()!
     left.send_text("welcome " + left_name)!
@@ -12,25 +20,10 @@ fn run_chat_server(port: Int) -> Int!:
     right.send_text(left_name + ": " + left_msg)!
     right_msg := right.recv_text()!
     left.send_text(right_name + ": " + right_msg)!
-    left.close(1000, "bye")!
-    right.close(1000, "bye")!
-    tcp_close(server_fd)
-    return 0
-fn main() -> Int!:
-    port := 18841
-    server_task := spawn run_chat_server(port)
-    sleep(200)
-    left := websocket.dial("127.0.0.1", port, "/chat")!
-    right := websocket.dial("127.0.0.1", port, "/chat")!
-    left.send_text("left")!
-    right.send_text("right")!
-    print(left.recv_text()!)
-    print(right.recv_text()!)
-    left.send_text("hello from left")!
-    print(right.recv_text()!)
-    right.send_text("hello from right")!
-    print(left.recv_text()!)
-    left.close_now()
-    right.close_now()
-    await server_task
+    left_reader := io.bytes_reader(left_out.bytes()).buffered_chunked(4)
+    right_reader := io.bytes_reader(right_out.bytes()).buffered_chunked(4)
+    print(websocket.read_frame_buffered(left_reader)!.payload_text()!)
+    print(websocket.read_frame_buffered(right_reader)!.payload_text()!)
+    print(websocket.read_frame_buffered(right_reader)!.payload_text()!)
+    print(websocket.read_frame_buffered(left_reader)!.payload_text()!)
     return 0
