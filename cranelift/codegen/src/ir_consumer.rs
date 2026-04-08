@@ -1088,7 +1088,10 @@ fn compile_ir_function(
                     let val = builder.use_var(var);
                     regs.insert(reg, val);
                 } else {
-                    regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                    return Err(CompileError::ModuleError(format!(
+                        "ir consumer: unknown load source '{}' in {}",
+                        name, func_name
+                    )));
                 }
                 // Propagate types through load
                 if string_vars.contains(name) || string_global_names.contains(name) {
@@ -1191,7 +1194,10 @@ fn compile_ir_function(
                     let addr = builder.ins().func_addr(types::I64, fref);
                     regs.insert(reg, addr);
                 } else {
-                    regs.insert(reg, builder.ins().iconst(types::I64, 0));
+                    return Err(CompileError::ModuleError(format!(
+                        "ir consumer: unknown function reference '{}' in {}",
+                        fname, func_name
+                    )));
                 }
                 reg_source_vars.remove(&reg);
                 struct_regs.remove(&reg);
