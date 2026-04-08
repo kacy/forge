@@ -410,7 +410,11 @@ fn ir_infer_type(idx: Int) -> String:
         return ""
     if kind == "field_access":
         if node.children.len() > 0:
-            obj_type := ir_infer_type(node.children[0])
+            mut obj_type := ir_infer_type(node.children[0])
+            if obj_type.len() == 0:
+                recv := get_node(node.children[0])
+                if recv.kind == "ident" and ir_struct_names.contains_key(recv.value):
+                    obj_type = recv.value
             if obj_type.len() > 0:
                 lookup_key := obj_type + "." + node_value(idx)
                 if ir_struct_field_lookup.contains_key(lookup_key):
@@ -1010,7 +1014,11 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         if node.children.len() > 0:
             obj_r := ir_expr(node.children[0])
             r := ir_reg()
-            obj_type := ir_infer_type(node.children[0])
+            mut obj_type := ir_infer_type(node.children[0])
+            if obj_type.len() == 0:
+                recv := get_node(node.children[0])
+                if recv.kind == "ident" and ir_struct_names.contains_key(recv.value):
+                    obj_type = recv.value
             lookup_key := obj_type + "." + fname
             if ir_struct_field_index_lookup.contains_key(lookup_key):
                 field_offset := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key]) * 8
