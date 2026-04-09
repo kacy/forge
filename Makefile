@@ -1,4 +1,4 @@
-.PHONY: build self-host bootstrap bootstrap-verify bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test clean
+.PHONY: build self-host bootstrap bootstrap-verify bootstrap-ir-checks bootstrap-ir-checks-only bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test clean
 
 NONDETERMINISTIC_EXAMPLES := net_basics net_echo
 EXPECTED_EXAMPLES := $(filter-out $(addprefix examples/expected/,$(addsuffix .txt,$(NONDETERMINISTIC_EXAMPLES))),$(wildcard examples/expected/*.txt))
@@ -52,13 +52,19 @@ bootstrap-verify: self-host
 	@$(MAKE) --no-print-directory run-examples-self-only
 	@echo "--- verifying self-hosted compiler on regression cases ---"
 	@$(MAKE) --no-print-directory run-regressions-self-only
+	@$(MAKE) --no-print-directory bootstrap-ir-checks-only
+	echo "bootstrap verified"
+
+# keep the ir hardening checks grouped so bootstrap drift is easy to spot
+bootstrap-ir-checks: self-host bootstrap-ir-checks-only
+
+bootstrap-ir-checks-only:
 	@echo "--- verifying combined ir contract ---"
 	@$(MAKE) --no-print-directory ir-contract-regressions-only
 	@echo "--- verifying combined ir invariants ---"
 	@$(MAKE) --no-print-directory bootstrap-ir-invariants-only
 	@echo "--- verifying ir fixed point on deterministic corpus ---"
 	@$(MAKE) --no-print-directory bootstrap-ir-fixed-point-only
-	echo "bootstrap verified"
 
 bootstrap-ir-invariants: self-host bootstrap-ir-invariants-only
 
