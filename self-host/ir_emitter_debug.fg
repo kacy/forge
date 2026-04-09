@@ -354,6 +354,41 @@ fn ir_record_global_type(name: String, global_type: String):
     elif global_type == "bool":
         ir_global_bool_names.push(name)
 
+fn ir_unwrap_pub_child(idx: Int) -> Int:
+    node := get_node(idx)
+    if node.kind == "pub" and node.children.len() > 0:
+        return node.children[0]
+    return idx
+
+fn ir_impl_target_type(node: Node) -> String:
+    mut impl_type := ""
+    mut i := 0
+    while i < node.children.len():
+        child := node.children[i]
+        child_node := get_node(child)
+        if child_node.kind == "type":
+            impl_type = child_node.value
+        elif child_node.kind == "for_type":
+            mut j := 0
+            while j < child_node.children.len():
+                type_child := get_node(child_node.children[j])
+                if type_child.kind == "type":
+                    impl_type = type_child.value
+                j = j + 1
+        elif child_node.kind == "generic_type" and impl_type == "":
+            impl_type = child_node.value
+        i = i + 1
+    return impl_type
+
+fn ir_emit_impl_methods(node: Node, impl_type: String):
+    mut i := 0
+    while i < node.children.len():
+        child := node.children[i]
+        child_node := get_node(child)
+        if child_node.kind == "fn_decl":
+            ir_impl_func(child, impl_type)
+        i = i + 1
+
 # --- centralized type inference for AST nodes ---
 # Returns: "int", "float", "bool", "string", "list", "list_string",
 #          "map", "map_int", "set", or "" (unknown)
@@ -2000,41 +2035,13 @@ pub fn emit_ir(root_idx: Int) -> String:
     _kids28 := root.children
     while _fi28 < _kids28.len():
         child := _kids28[_fi28]
-        cn := get_node(child)
-        mut actual := child
-        mut actual_node := cn
-        if cn.kind == "pub" and cn.children.len() > 0:
-            actual = cn.children[0]
-            actual_node = get_node(actual)
+        actual := ir_unwrap_pub_child(child)
+        actual_node := get_node(actual)
         if actual_node.kind == "fn" or actual_node.kind == "fn_decl":
             ir_func(actual)
         elif actual_node.kind == "impl_decl":
-            # emit methods from impl blocks
-            mut impl_type := ""
-            mut _fi39 := 0
-            _kids39 := cn.children
-            while _fi39 < _kids39.len():
-                ic := _kids39[_fi39]
-                icn := get_node(ic)
-                if icn.kind == "type":
-                    impl_type = icn.value
-                elif icn.kind == "for_type":
-                    # impl X for TYPE — get type from for_type child
-                    mut _fi41 := 0
-                    _kids41 := icn.children
-                    while _fi41 < _kids41.len():
-                        ftc := _kids41[_fi41]
-                        ftn := get_node(ftc)
-                        if ftn.kind == "type":
-                            impl_type = ftn.value
-                        _fi41 = _fi41 + 1
-                elif icn.kind == "generic_type" and impl_type == "":
-                    # impl TYPE: — simple impl on the generic_type
-                    impl_type = icn.value
-                elif icn.kind == "fn_decl":
-                    ir_impl_func(ic, impl_type)
-
-                _fi39 = _fi39 + 1
+            impl_type := ir_impl_target_type(actual_node)
+            ir_emit_impl_methods(actual_node, impl_type)
         _fi28 = _fi28 + 1
     # append deferred lambda function bodies
     mut li := 0

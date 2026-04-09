@@ -574,6 +574,41 @@ fn ir_record_global_type(name: String, global_type: String):
     elif global_type == "bool":
         ir_global_bool_names.push(name)
 
+fn ir_unwrap_pub_child(idx: Int) -> Int:
+    node := get_node(idx)
+    if node.kind == "pub" and node.children.len() > 0:
+        return node.children[0]
+    return idx
+
+fn ir_impl_target_type(node: Node) -> String:
+    mut impl_type := ""
+    mut i := 0
+    while i < node.children.len():
+        child := node.children[i]
+        child_node := get_node(child)
+        if child_node.kind == "type":
+            impl_type = child_node.value
+        elif child_node.kind == "for_type":
+            mut j := 0
+            while j < child_node.children.len():
+                type_child := get_node(child_node.children[j])
+                if type_child.kind == "type":
+                    impl_type = type_child.value
+                j = j + 1
+        elif child_node.kind == "generic_type" and impl_type == "":
+            impl_type = child_node.value
+        i = i + 1
+    return impl_type
+
+fn ir_emit_impl_methods(node: Node, impl_type: String):
+    mut i := 0
+    while i < node.children.len():
+        child := node.children[i]
+        child_node := get_node(child)
+        if child_node.kind == "fn_decl":
+            ir_impl_func(child, impl_type)
+        i = i + 1
+
 fn ir_collect_struct_decls(root_idx: Int, emit_decl: Bool):
     root := get_node(root_idx)
     mut i := 0
@@ -2785,12 +2820,8 @@ pub fn emit_ir(root_idx: Int) -> String:
     kids28_children := root.children
     while _fi28 < kids28_children.len():
         child := kids28_children[_fi28]
-        cn := get_node(child)
-        mut actual := child
-        mut actual_node := cn
-        if cn.kind == "pub" and cn.children.len() > 0:
-            actual = cn.children[0]
-            actual_node = get_node(actual)
+        actual := ir_unwrap_pub_child(child)
+        actual_node := get_node(actual)
         if actual_node.kind == "fn" or actual_node.kind == "fn_decl":
             if not (ir_emit_tests and actual_node.value == "main"):
                 ir_func(actual)
@@ -2799,32 +2830,8 @@ pub fn emit_ir(root_idx: Int) -> String:
                 ir_emit_test_func(actual, test_ord)
                 test_ord = test_ord + 1
         elif actual_node.kind == "impl_decl":
-            # emit methods from impl blocks
-            mut impl_type := ""
-            mut _fi39 := 0
-            kids39_children := cn.children
-            while _fi39 < kids39_children.len():
-                ic := kids39_children[_fi39]
-                icn := get_node(ic)
-                if icn.kind == "type":
-                    impl_type = icn.value
-                elif icn.kind == "for_type":
-                    # impl X for TYPE — get type from for_type child
-                    mut _fi41 := 0
-                    kids41_children := icn.children
-                    while _fi41 < kids41_children.len():
-                        ftc := kids41_children[_fi41]
-                        ftn := get_node(ftc)
-                        if ftn.kind == "type":
-                            impl_type = ftn.value
-                        _fi41 = _fi41 + 1
-                elif icn.kind == "generic_type" and impl_type == "":
-                    # impl TYPE: — simple impl on the generic_type
-                    impl_type = icn.value
-                elif icn.kind == "fn_decl":
-                    ir_impl_func(ic, impl_type)
-
-                _fi39 = _fi39 + 1
+            impl_type := ir_impl_target_type(actual_node)
+            ir_emit_impl_methods(actual_node, impl_type)
         _fi28 = _fi28 + 1
     if ir_emit_tests:
         ir_emit_test_main(root_idx)
