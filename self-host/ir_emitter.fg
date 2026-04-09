@@ -2254,6 +2254,11 @@ fn ir_emit_fn_params(fn_idx: Int):
             ir_emit_named_param(cn.value, ir_extract_param_type(nk[i]))
         i = i + 1
 
+fn ir_base_decl_name(name: String) -> String:
+    if name.contains("["):
+        return name.substring(0, name.index_of("["))
+    return name
+
 fn ir_extract_return_type(fn_idx: Int) -> String:
     node := get_node(fn_idx)
     mut i := 0
@@ -2267,6 +2272,13 @@ fn ir_extract_return_type(fn_idx: Int) -> String:
                     return ir_resolve_type_node(cn.children[j])
                 j = j + 1
         i = i + 1
+    return "unknown"
+
+fn ir_lookup_func_return(full_name: String, base_name: String) -> String:
+    if ir_func_returns.contains_key(full_name):
+        return ir_func_returns[full_name]
+    if ir_func_returns.contains_key(base_name):
+        return ir_func_returns[base_name]
     return "unknown"
 
 fn ir_impl_method_key(type_name: String, method_name: String) -> String:
@@ -2339,6 +2351,19 @@ fn ir_emit_default_return():
     ir_emit("ret " + dr.to_string())
     ir_emit("endfunc")
 
+fn ir_prepare_func_emission(ret_type: String):
+    ir_next_reg = 0
+    ir_var_regs = {}
+    ir_var_types = {}
+    ir_map_value_types = {}
+    ir_seed_global_types()
+    ir_current_func_return_kind = ret_type
+
+fn ir_finish_func_emission(body_idx: Int):
+    if body_idx >= 0:
+        ir_block(body_idx)
+    ir_emit_default_return()
+
 fn ir_collect_test_decls(root_idx: Int) -> List[Int]:
     root := get_node(root_idx)
     mut tests: List[Int] := []
@@ -2357,31 +2382,15 @@ fn ir_collect_test_decls(root_idx: Int) -> List[Int]:
 
 fn ir_emit_test_func(idx: Int, ordinal: Int):
     body_idx := ir_find_body(idx)
-
-    ir_next_reg = 0
-    ir_var_regs = {}
-    ir_var_types = {}
-    ir_map_value_types = {}
-    ir_seed_global_types()
-    ir_current_func_return_kind = "int"
+    ir_prepare_func_emission("int")
     ir_emit_func_header("__test_" + ordinal.to_string(), 0, "int")
-
-    if body_idx >= 0:
-        ir_block(body_idx)
-
-    ir_emit_default_return()
+    ir_finish_func_emission(body_idx)
 
 fn ir_emit_test_main(root_idx: Int):
     tests := ir_collect_test_decls(root_idx)
     if tests.len() == 0:
         return
-
-    ir_next_reg = 0
-    ir_var_regs = {}
-    ir_var_types = {}
-    ir_map_value_types = {}
-    ir_seed_global_types()
-    ir_current_func_return_kind = "int"
+    ir_prepare_func_emission("int")
     ir_emit_func_header("main", 0, "int")
 
     mut i := 0
@@ -2395,33 +2404,15 @@ fn ir_emit_test_main(root_idx: Int):
 # --- emit function ---
 fn ir_func(idx: Int):
     node := get_node(idx)
-    mut name := node.value
-    mut full_name := name
-    if name.contains("["):
-        name = name.substring(0, name.index_of("["))
-        full_name = name
-
+    full_name := node.value
+    name := ir_base_decl_name(full_name)
     body_idx := ir_find_body(idx)
     param_count := ir_param_count(idx)
-
-    ir_next_reg = 0
-    ir_var_regs = {}
-    ir_var_types = {}
-    ir_map_value_types = {}
-    ir_seed_global_types()
-    mut ret_type := "unknown"
-    if ir_func_returns.contains_key(full_name):
-        ret_type = ir_func_returns[full_name]
-    elif ir_func_returns.contains_key(name):
-        ret_type = ir_func_returns[name]
-    ir_current_func_return_kind = ret_type
+    ret_type := ir_lookup_func_return(full_name, name)
+    ir_prepare_func_emission(ret_type)
     ir_emit_func_header(name, param_count, ret_type)
     ir_emit_fn_params(idx)
-
-    if body_idx >= 0:
-        ir_block(body_idx)
-
-    ir_emit_default_return()
+    ir_finish_func_emission(body_idx)
 
 # --- emit impl method ---
 fn ir_impl_func(idx: Int, impl_type: String):
@@ -2433,24 +2424,14 @@ fn ir_impl_func(idx: Int, impl_type: String):
 
     body_idx := ir_find_body(idx)
     param_count := ir_param_count(idx) + 1
-
-    ir_next_reg = 0
-    ir_var_regs = {}
-    ir_var_types = {}
-    ir_map_value_types = {}
-    ir_seed_global_types()
     ret_type := ir_extract_return_type(idx)
-    ir_current_func_return_kind = ret_type
+    ir_prepare_func_emission(ret_type)
     ir_emit_func_header(full_name, param_count, ret_type)
     ir_emit_named_param("self", impl_type)
     ir_emit_fn_params(idx)
     ir_func_returns.insert(method_key, ret_type)
     ir_func_returns.insert(full_name, ret_type)
-
-    if body_idx >= 0:
-        ir_block(body_idx)
-
-    ir_emit_default_return()
+    ir_finish_func_emission(body_idx)
 
 # --- collect import renames ---
 fn ir_collect_imports(root_idx: Int):
