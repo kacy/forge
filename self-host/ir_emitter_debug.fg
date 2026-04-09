@@ -389,6 +389,31 @@ fn ir_emit_impl_methods(node: Node, impl_type: String):
             ir_impl_func(child, impl_type)
         i = i + 1
 
+fn ir_known_callable_return_type(fname: String) -> String:
+    if ir_struct_names.contains_key(fname):
+        return fname
+    if fname == "get_node":
+        return "Node"
+    if fname == "advance_token" or fname == "expect":
+        return "Token"
+    if fname == "ti_primitive" or fname == "ti_struct" or fname == "ti_enum" or fname == "ti_function" or fname == "ti_optional" or fname == "ti_result" or fname == "ti_tuple" or fname == "ti_list" or fname == "ti_map" or fname == "ti_set" or fname == "ti_task" or fname == "ti_channel" or fname == "get_type_info":
+        return "TypeInfo"
+    if FLOAT_RETURNING_FUNCS.contains(fname):
+        return "float"
+    if BOOL_RETURNING_FUNCS.contains(fname):
+        return "bool"
+    if INT_RETURNING_FUNCS.contains(fname):
+        return "int"
+    if STRING_RETURNING_FUNCS.contains(fname):
+        return "string"
+    if LIST_RETURNING_FUNCS.contains(fname):
+        return "list"
+    if LIST_STRING_RETURNING_FUNCS.contains(fname):
+        return "list_string"
+    if ir_func_returns.contains_key(fname):
+        return ir_resolve_type_hint(ir_func_returns[fname])
+    return ""
+
 # --- centralized type inference for AST nodes ---
 # Returns: "int", "float", "bool", "string", "list", "list_string",
 #          "map", "map_int", "set", or "" (unknown)
@@ -452,28 +477,7 @@ fn ir_infer_type(idx: Int) -> String:
             mut fname := fn_node.value
             if ir_import_renames.contains_key(fname):
                 fname = ir_import_renames[fname]
-            if ir_struct_names.contains_key(fname):
-                return fname
-            if fname == "get_node":
-                return "Node"
-            if fname == "advance_token" or fname == "expect":
-                return "Token"
-            if fname == "ti_primitive" or fname == "ti_struct" or fname == "ti_enum" or fname == "ti_function" or fname == "ti_optional" or fname == "ti_result" or fname == "ti_tuple" or fname == "ti_list" or fname == "ti_map" or fname == "ti_set" or fname == "ti_task" or fname == "ti_channel" or fname == "get_type_info":
-                return "TypeInfo"
-            if FLOAT_RETURNING_FUNCS.contains(fname):
-                return "float"
-            if BOOL_RETURNING_FUNCS.contains(fname):
-                return "bool"
-            if INT_RETURNING_FUNCS.contains(fname):
-                return "int"
-            if STRING_RETURNING_FUNCS.contains(fname):
-                return "string"
-            if LIST_RETURNING_FUNCS.contains(fname):
-                return "list"
-            if LIST_STRING_RETURNING_FUNCS.contains(fname):
-                return "list_string"
-            if ir_func_returns.contains_key(fname):
-                return ir_resolve_type_hint(ir_func_returns[fname])
+            return ir_known_callable_return_type(fname)
         return ""
     # method calls
     if kind == "method_call":
