@@ -30,6 +30,10 @@ IR_FIXED_POINT_SOURCES := \
 	tests/cases/test_http_websocket_app.fg \
 	tests/cases/test_websocket_wire.fg
 
+BOOTSTRAP_IR_REBUILD_TARGETS := \
+	self-host/forge_main.fg \
+	self-host/ir_driver.fg
+
 # --- primary build (Cranelift native backend) ---
 
 build:
@@ -100,12 +104,14 @@ bootstrap-ir-fixed-point-only:
 	if [ ! -x ./self-host/ir_driver ]; then \
 		timeout 120 ./target/release/forge build self-host/ir_driver.fg >/dev/null; \
 	fi; \
-	timeout 120 ./self-host/forge_main build self-host/forge_main.fg >/dev/null; \
-	timeout 120 ./self-host/forge_main build self-host/ir_driver.fg >/dev/null; \
+	for target in $(BOOTSTRAP_IR_REBUILD_TARGETS); do \
+		timeout 120 ./self-host/forge_main build "$$target" >/dev/null; \
+	done; \
 	cp ./self-host/forge_main "$$tmpdir/forge_main_stage1"; \
 	cp ./self-host/ir_driver "$$tmpdir/ir_driver_stage1"; \
-	timeout 120 ./self-host/forge_main build self-host/forge_main.fg >/dev/null; \
-	timeout 120 ./self-host/forge_main build self-host/ir_driver.fg >/dev/null; \
+	for target in $(BOOTSTRAP_IR_REBUILD_TARGETS); do \
+		timeout 120 ./self-host/forge_main build "$$target" >/dev/null; \
+	done; \
 	for src in $(IR_FIXED_POINT_SOURCES); do \
 		stage1=$$(timeout 20 "$$tmpdir/ir_driver_stage1" --combined "$$src" 2>/dev/null); \
 		stage1_status=$$?; \
