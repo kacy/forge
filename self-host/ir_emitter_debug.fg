@@ -1857,6 +1857,109 @@ fn ir_collect_function_returns(root_idx: Int):
                 j = j + 1
         i = i + 1
 
+fn ir_emit_global_binding(node: Node):
+    gname := ir_binding_name(node)
+    mut init_val := "0"
+    mut global_type := ""
+    print("[g] bind " + gname)
+    mut i := 0
+    while i < node.children.len():
+        gc := node.children[i]
+        gcn := get_node(gc)
+        print("[g] child " + gcn.kind + " " + gcn.value)
+        if gcn.kind == "type" or gcn.kind == "generic_type":
+            global_type = ir_resolve_type_node(gc)
+        elif gcn.kind == "int_lit":
+            init_val = gcn.value
+            if global_type.len() == 0:
+                global_type = "int"
+        elif gcn.kind == "string_lit":
+            si := ir_str(gcn.value)
+            init_val = "str:" + si
+            if global_type.len() == 0:
+                global_type = "string"
+        elif gcn.kind == "list":
+            init_val = "list"
+            if global_type.len() == 0:
+                global_type = "list"
+        elif gcn.kind == "map":
+            init_val = "map"
+            if global_type.len() == 0:
+                global_type = "map"
+        elif gcn.kind == "set":
+            init_val = "set"
+            if global_type.len() == 0:
+                global_type = "set"
+        elif gcn.kind == "bool_lit":
+            if gcn.value == "true":
+                init_val = "1"
+            else:
+                init_val = "0"
+            if global_type.len() == 0:
+                global_type = "bool"
+        i = i + 1
+    print("[g] final " + gname + " init=" + init_val + " type=" + global_type)
+    if global_type.len() > 0:
+        ir_record_global_type(gname, global_type)
+    ir_emit("global " + gname + " " + init_val)
+
+fn ir_emit_global_bindings(root: Node):
+    mut i := 0
+    while i < root.children.len():
+        child := root.children[i]
+        cn := ir_unwrap_pub_node(child)
+        if ir_is_binding_kind(cn.kind):
+            ir_emit_global_binding(cn)
+        i = i + 1
+
+fn ir_emit_collection_global_init(binding: Node):
+    gname := ir_binding_name(binding)
+    mut i := 0
+    while i < binding.children.len():
+        gc := binding.children[i]
+        gcn := get_node(gc)
+        if gcn.kind == "list":
+            list_r := ir_reg()
+            ir_emit_call(list_r, "__list_new", "list", [])
+            ir_emit("store " + gname + " " + list_r.to_string())
+        elif gcn.kind == "map":
+            map_r := ir_reg()
+            if ir_global_map_int_names.contains(gname):
+                ir_emit_call(map_r, "__map_new_int", "map_int", [])
+            else:
+                ir_emit_call(map_r, "__map_new", "map", [])
+            ir_emit("store " + gname + " " + map_r.to_string())
+        elif gcn.kind == "set":
+            set_r := ir_reg()
+            ir_emit_call(set_r, "__set_new", "set", [])
+            ir_emit("store " + gname + " " + set_r.to_string())
+        i = i + 1
+
+fn ir_emit_init_globals(root: Node):
+    mut has_collection_globals := false
+    mut i := 0
+    while i < root.children.len():
+        child := root.children[i]
+        cn := ir_unwrap_pub_node(child)
+        if ir_is_binding_kind(cn.kind) and ir_binding_has_collection_init(cn):
+            has_collection_globals = true
+        i = i + 1
+    if not has_collection_globals:
+        return
+
+    ir_emit_func_header("__init_globals", 0, "int")
+    i = 0
+    while i < root.children.len():
+        child := root.children[i]
+        cn := ir_unwrap_pub_node(child)
+        if ir_is_binding_kind(cn.kind):
+            ir_emit_collection_global_init(cn)
+        i = i + 1
+    dr := ir_reg()
+    ir_emit("iconst " + dr.to_string() + " 0")
+    ir_emit("ret " + dr.to_string())
+    ir_emit("endfunc")
+
 # --- main entry ---
 pub fn emit_ir(root_idx: Int) -> String:
     ir_reset()
@@ -1887,106 +1990,8 @@ pub fn emit_ir(root_idx: Int) -> String:
     ir_lambda_bodies = []
 
     ir_collect_function_returns(root_idx)
-    # emit global variables (unwrap pub)
-    mut _fi25 := 0
-    _kids25 := root.children
-    while _fi25 < _kids25.len():
-        child := _kids25[_fi25]
-        cn := ir_unwrap_pub_node(child)
-        if ir_is_binding_kind(cn.kind):
-            gname := ir_binding_name(cn)
-            # find initial value
-            mut init_val := "0"
-            mut global_type := ""
-            print("[g] bind " + gname)
-            mut _fi36 := 0
-            _kids36 := cn.children
-            while _fi36 < _kids36.len():
-                gc := _kids36[_fi36]
-                gcn := get_node(gc)
-                print("[g] child " + gcn.kind + " " + gcn.value)
-                if gcn.kind == "type" or gcn.kind == "generic_type":
-                    global_type = ir_resolve_type_node(gc)
-                elif gcn.kind == "int_lit":
-                    init_val = gcn.value
-                    if global_type.len() == 0:
-                        global_type = "int"
-                elif gcn.kind == "string_lit":
-                    si := ir_str(gcn.value)
-                    init_val = "str:" + si
-                    if global_type.len() == 0:
-                        global_type = "string"
-                elif gcn.kind == "list":
-                    init_val = "list"
-                    if global_type.len() == 0:
-                        global_type = "list"
-                elif gcn.kind == "map":
-                    init_val = "map"
-                    if global_type.len() == 0:
-                        global_type = "map"
-                elif gcn.kind == "set":
-                    init_val = "set"
-                    if global_type.len() == 0:
-                        global_type = "set"
-                elif gcn.kind == "bool_lit":
-                    if gcn.value == "true":
-                        init_val = "1"
-                    else:
-                        init_val = "0"
-                    if global_type.len() == 0:
-                        global_type = "bool"
-                _fi36 = _fi36 + 1
-            print("[g] final " + gname + " init=" + init_val + " type=" + global_type)
-            if global_type.len() > 0:
-                ir_record_global_type(gname, global_type)
-            ir_emit("global " + gname + " " + init_val)
-
-        _fi25 = _fi25 + 1
-    # emit __init_globals to initialize list/map/set globals
-    mut has_collection_globals := false
-    mut _fi26 := 0
-    _kids26 := root.children
-    while _fi26 < _kids26.len():
-        child := _kids26[_fi26]
-        cn := ir_unwrap_pub_node(child)
-        if ir_is_binding_kind(cn.kind) and ir_binding_has_collection_init(cn):
-            has_collection_globals = true
-        _fi26 = _fi26 + 1
-    if has_collection_globals:
-        ir_emit_func_header("__init_globals", 0, "int")
-        mut _fi27 := 0
-        _kids27 := root.children
-        while _fi27 < _kids27.len():
-            child := _kids27[_fi27]
-            cn := ir_unwrap_pub_node(child)
-            if ir_is_binding_kind(cn.kind):
-                gname := ir_binding_name(cn)
-                mut _fi38 := 0
-                _kids38 := cn.children
-                while _fi38 < _kids38.len():
-                    gc := _kids38[_fi38]
-                    gcn := get_node(gc)
-                    if gcn.kind == "list":
-                        list_r := ir_reg()
-                        ir_emit_call(list_r, "__list_new", "list", [])
-                        ir_emit("store " + gname + " " + list_r.to_string())
-                    elif gcn.kind == "map":
-                        map_r := ir_reg()
-                        if ir_global_map_int_names.contains(gname):
-                            ir_emit_call(map_r, "__map_new_int", "map_int", [])
-                        else:
-                            ir_emit_call(map_r, "__map_new", "map", [])
-                        ir_emit("store " + gname + " " + map_r.to_string())
-                    elif gcn.kind == "set":
-                        set_r := ir_reg()
-                        ir_emit_call(set_r, "__set_new", "set", [])
-                        ir_emit("store " + gname + " " + set_r.to_string())
-                    _fi38 = _fi38 + 1
-            _fi27 = _fi27 + 1
-        dr := ir_reg()
-        ir_emit("iconst " + dr.to_string() + " 0")
-        ir_emit("ret " + dr.to_string())
-        ir_emit("endfunc")
+    ir_emit_global_bindings(root)
+    ir_emit_init_globals(root)
 
     # emit functions (unwrap pub wrappers)
     mut _fi28 := 0
