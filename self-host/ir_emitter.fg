@@ -844,16 +844,7 @@ fn ir_known_method_return_type(obj_type: String, meth: String) -> String:
         return "list_string"
     return ""
 
-# --- centralized type inference for AST nodes ---
-# Returns: "int", "float", "bool", "string", "list", "list_string",
-#          "map", "map_int", "set", "set_int", or "" (unknown)
-fn ir_infer_type(idx: Int) -> String:
-    checked := ir_checked_type(idx)
-    if checked.len() > 0:
-        return checked
-    node := get_node(idx)
-    kind := node_kind(idx)
-    # literals
+fn ir_literal_expr_type(node: Node, kind: String) -> String:
     if kind == "int_lit" or kind == "int" or kind == "integer":
         return "int"
     if kind == "float_lit" or kind == "float":
@@ -878,6 +869,52 @@ fn ir_infer_type(idx: Int) -> String:
         return "set"
     if kind == "tuple":
         return "tuple"
+    return ""
+
+fn ir_binary_expr_type(node: Node) -> String:
+    op := node.value
+    if op == "eq" or op == "neq" or op == "lt" or op == "gt" or op == "lte" or op == "gte" or op == "and" or op == "or":
+        return "bool"
+    if op == "add" or op == "sub" or op == "mul" or op == "div" or op == "mod":
+        if node.children.len() >= 2:
+            lt := ir_infer_type(node.children[0])
+            rt := ir_infer_type(node.children[1])
+            if lt == "float" or rt == "float":
+                return "float"
+            if lt == "string" or rt == "string":
+                return "string"
+        return "int"
+    return "int"
+
+fn ir_index_expr_type(idx: Int, node: Node) -> String:
+    checked_index := ir_checked_index_type(idx)
+    if checked_index.len() > 0:
+        return checked_index
+    if node.children.len() == 0:
+        return ""
+    coll_type := ir_infer_type(node.children[0])
+    if coll_type == "string":
+        return "string"
+    if coll_type == "bytes":
+        return "int"
+    if coll_type == "list_string":
+        return "string"
+    if coll_type == "map" or coll_type == "map_int":
+        return ir_lookup_map_value_type_for_expr(node.children[0])
+    return ""
+
+# --- centralized type inference for AST nodes ---
+# Returns: "int", "float", "bool", "string", "list", "list_string",
+#          "map", "map_int", "set", "set_int", or "" (unknown)
+fn ir_infer_type(idx: Int) -> String:
+    checked := ir_checked_type(idx)
+    if checked.len() > 0:
+        return checked
+    node := get_node(idx)
+    kind := node_kind(idx)
+    literal_type := ir_literal_expr_type(node, kind)
+    if literal_type.len() > 0:
+        return literal_type
     # identifiers — look up tracked type
     if kind == "ident":
         return ir_lookup_name_type(node.value)
@@ -888,20 +925,7 @@ fn ir_infer_type(idx: Int) -> String:
         return ir_infer_type(node.children[0])
     # binary ops
     if kind == "binary":
-        op := node.value
-        if op == "eq" or op == "neq" or op == "lt" or op == "gt" or op == "lte" or op == "gte" or op == "and" or op == "or":
-            return "bool"
-        if op == "add" or op == "sub" or op == "mul" or op == "div" or op == "mod":
-            # check if either operand is float
-            if node.children.len() >= 2:
-                lt := ir_infer_type(node.children[0])
-                rt := ir_infer_type(node.children[1])
-                if lt == "float" or rt == "float":
-                    return "float"
-                if lt == "string" or rt == "string":
-                    return "string"
-            return "int"
-        return "int"
+        return ir_binary_expr_type(node)
     # unary
     if kind == "unary":
         if node.value == "not" or node.value == "!" or node.value == "not_op":
@@ -947,19 +971,7 @@ fn ir_infer_type(idx: Int) -> String:
         return ir_resolve_type_hint(node.value)
     # index — depends on collection type
     if kind == "index" and node.children.len() > 0:
-        checked_index := ir_checked_index_type(idx)
-        if checked_index.len() > 0:
-            return checked_index
-        coll_type := ir_infer_type(node.children[0])
-        if coll_type == "string":
-            return "string"
-        if coll_type == "bytes":
-            return "int"
-        if coll_type == "list_string":
-            return "string"
-        if coll_type == "map" or coll_type == "map_int":
-            return ir_lookup_map_value_type_for_expr(node.children[0])
-        return ""
+        return ir_index_expr_type(idx, node)
     return ""
 
 fn ir_lookup_name_type(name: String) -> String:
