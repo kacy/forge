@@ -1356,7 +1356,7 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
         return r
 
     r := ir_reg()
-    callee_uses_result_abi := ir_static_callee_uses_result_abi(node.children[0])
+    callee_uses_result_abi := ir_static_callee_uses_result_abi(node.children[0]) or ir_checked_result_kind(idx).len() > 0
     mut call_text := ""
     mut ai := 0
     while ai < arg_regs.len():
