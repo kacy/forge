@@ -193,35 +193,44 @@ fn ir_resolve_type_hint(type_name: String) -> String:
         return base
     return resolved
 
+fn ir_resolve_generic_type_node(tn: Node) -> String:
+    if tn.value == "List":
+        if tn.children.len() > 0:
+            first := get_node(tn.children[0])
+            if first.kind == "type" and first.value == "String":
+                return "list_string"
+        return "list"
+    if tn.value == "Map":
+        if tn.children.len() > 0:
+            first := get_node(tn.children[0])
+            if first.kind == "type" and first.value == "Int":
+                return "map_int"
+        return "map"
+    if tn.value == "Set":
+        return "set"
+    return ""
+
+fn ir_resolve_result_type_kind(inner_type: String) -> String:
+    if inner_type == "int":
+        return "result_int"
+    if inner_type == "bool":
+        return "result_bool"
+    if inner_type == "bytes":
+        return "bytes"
+    return ir_retkind(inner_type)
+
 fn ir_resolve_type_node(type_idx: Int) -> String:
     tn := get_node(type_idx)
     if tn.kind == "type":
         return ir_resolve_type_hint(tn.value)
     if tn.kind == "generic_type":
-        if tn.value == "List":
-            if tn.children.len() > 0:
-                first := get_node(tn.children[0])
-                if first.kind == "type" and first.value == "String":
-                    return "list_string"
-            return "list"
-        if tn.value == "Map":
-            if tn.children.len() > 0:
-                first := get_node(tn.children[0])
-                if first.kind == "type" and first.value == "Int":
-                    return "map_int"
-            return "map"
-        if tn.value == "Set":
-            return "set"
+        generic_type := ir_resolve_generic_type_node(tn)
+        if generic_type.len() > 0:
+            return generic_type
         return ir_resolve_type_hint(tn.value)
     if tn.kind == "result_type" and tn.children.len() > 0:
         inner_type := ir_resolve_type_node(tn.children[0])
-        if inner_type == "int":
-            return "result_int"
-        if inner_type == "bool":
-            return "result_bool"
-        if inner_type == "bytes":
-            return "bytes"
-        return ir_retkind(inner_type)
+        return ir_resolve_result_type_kind(inner_type)
     return ""
 
 fn ir_resolve_map_value_type_node(type_idx: Int) -> String:
