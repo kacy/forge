@@ -287,6 +287,20 @@ fn ir_decode_result_value(value_reg: Int, result_kind: String) -> Int:
         return decoded
     return value_reg
 
+fn ir_list_contains(items: List[String], value: String) -> Bool:
+    mut i := 0
+    while i < items.len():
+        if items[i] == value:
+            return true
+        i = i + 1
+    return false
+
+fn ir_is_string_literal_kind(kind: String) -> Bool:
+    return kind == "string_lit" or kind == "string" or kind == "str_lit" or kind == "lit"
+
+fn ir_string_symbol_name(index: Int) -> String:
+    return "m" + ir_module_count.to_string() + "s" + index.to_string()
+
 fn ir_find_free_vars(idx: Int, bound: List[String]) -> List[String]:
     mut free: List[String] := []
     mut stack: List[Int] := [idx]
@@ -296,19 +310,7 @@ fn ir_find_free_vars(idx: Int, bound: List[String]) -> List[String]:
         kind := node_kind(current)
         if kind == "ident":
             name := node_value(current)
-            mut is_bound := false
-            mut i := 0
-            while i < bound.len():
-                if bound[i] == name:
-                    is_bound = true
-                i = i + 1
-            mut already_free := false
-            i = 0
-            while i < free.len():
-                if free[i] == name:
-                    already_free = true
-                i = i + 1
-            if not is_bound and not already_free:
+            if not ir_list_contains(bound, name) and not ir_list_contains(free, name):
                 free.push(name)
         mut i := 0
         child_count := node_child_count(current)
@@ -316,16 +318,17 @@ fn ir_find_free_vars(idx: Int, bound: List[String]) -> List[String]:
             stack.push(node_child(current, i))
             i = i + 1
     return free
+
 fn ir_str(s: String) -> String:
     cleaned := ir_strip_quotes(s)
     mut i := 0
     while i < ir_strings.len():
         if ir_strings[i] == cleaned:
-            return "m" + ir_module_count.to_string() + "s" + i.to_string()
+            return ir_string_symbol_name(i)
         i = i + 1
     idx := ir_strings.len()
     ir_strings.push(cleaned)
-    return "m" + ir_module_count.to_string() + "s" + idx.to_string()
+    return ir_string_symbol_name(idx)
 
 # --- collect strings (iterative to avoid deep recursion crashes) ---
 fn ir_collect_strings(idx: Int):
@@ -334,9 +337,7 @@ fn ir_collect_strings(idx: Int):
         current := stack[stack.len() - 1]
         stack.remove(stack.len() - 1)
         node := get_node(current)
-        if node.kind == "string_lit" or node.kind == "string" or node.kind == "str_lit":
-            ir_str(node.value)
-        elif node.kind == "lit":
+        if ir_is_string_literal_kind(node.kind):
             ir_str(node.value)
         kids := node.children
         mut i := 0
