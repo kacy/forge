@@ -1,4 +1,4 @@
-.PHONY: build self-host bootstrap bootstrap-verify bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test clean
+.PHONY: build self-host bootstrap bootstrap-verify bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test clean
 
 NONDETERMINISTIC_EXAMPLES := net_basics net_echo
 EXPECTED_EXAMPLES := $(filter-out $(addprefix examples/expected/,$(addsuffix .txt,$(NONDETERMINISTIC_EXAMPLES))),$(wildcard examples/expected/*.txt))
@@ -54,9 +54,35 @@ bootstrap-verify: self-host
 	@$(MAKE) --no-print-directory run-regressions-self-only
 	@echo "--- verifying combined ir contract ---"
 	@$(MAKE) --no-print-directory ir-contract-regressions-only
+	@echo "--- verifying combined ir invariants ---"
+	@$(MAKE) --no-print-directory bootstrap-ir-invariants-only
 	@echo "--- verifying ir fixed point on deterministic corpus ---"
 	@$(MAKE) --no-print-directory bootstrap-ir-fixed-point-only
 	echo "bootstrap verified"
+
+bootstrap-ir-invariants: self-host bootstrap-ir-invariants-only
+
+bootstrap-ir-invariants-only:
+	@echo "--- combined ir invariant checks ---"
+	@pass=0; fail=0; \
+	if timeout 15 ./self-host/ir_driver --combined tests/cases/test_imported_globals_init.fg | awk 'BEGIN { init=0 } /^func m[0-9]+___init_globals_[0-9]+ / { init=1 } /^call 900000 m[0-9]+___init_globals_[0-9]+ int 0/ { call=1 } END { if (init && call) exit 0; exit 1 }'; then \
+		pass=$$((pass+1)); echo "ok   imported init globals wiring"; \
+	else \
+		echo "FAIL imported init globals wiring"; fail=$$((fail+1)); \
+	fi; \
+	if timeout 15 ./self-host/ir_driver --combined examples/concurrency.fg | awk 'BEGIN { m=0; w=0; s=0 } /^call / && $$3=="Mutex" && $$4=="opaque:Mutex" { m=1 } /^call / && $$3=="WaitGroup" && $$4=="opaque:WaitGroup" { w=1 } /^call / && $$3=="Semaphore" && $$4=="opaque:Semaphore" { s=1 } END { if (m && w && s) exit 0; exit 1 }'; then \
+		pass=$$((pass+1)); echo "ok   sync primitive retkind invariants"; \
+	else \
+		echo "FAIL sync primitive retkind invariants"; fail=$$((fail+1)); \
+	fi; \
+	if timeout 15 ./self-host/ir_driver --combined tests/cases/test_websocket_wire.fg | awk 'BEGIN { ok=0 } /^call / && $$4 ~ /^struct:/ { ok=1 } /^call / && $$4 ~ /^[A-Z]/ { bad=1 } END { if (ok && !bad) exit 0; exit 1 }'; then \
+		pass=$$((pass+1)); echo "ok   explicit struct call retkinds"; \
+	else \
+		echo "FAIL explicit struct call retkinds"; fail=$$((fail+1)); \
+	fi; \
+	echo "$$pass passed, $$fail failed"; \
+	if [ $$fail -gt 0 ]; then exit 1; fi; \
+	echo "all combined ir invariant checks passed"
 
 bootstrap-ir-fixed-point: self-host bootstrap-ir-fixed-point-only
 
