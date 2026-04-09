@@ -850,6 +850,97 @@ fn ir_emit_static_call(node: Node, idx: Int) -> Int:
     ir_emit_call(r, fname, ir_infer_type(idx), arg_regs)
     return r
 
+fn ir_emit_map_literal(node: Node) -> Int:
+    map_r := ir_reg()
+    mut has_int_keys := false
+    if node.children.len() > 0:
+        first_entry := get_node(node.children[0])
+        if first_entry.kind == "entry" and first_entry.children.len() > 0:
+            k_node := get_node(first_entry.children[0])
+            if k_node.kind == "int_lit" or k_node.kind == "int":
+                has_int_keys = true
+    if has_int_keys:
+        ir_emit_call(map_r, "__map_new_int", "map_int", [])
+    else:
+        ir_emit_call(map_r, "__map_new", "map", [])
+    mut i := 0
+    while i < node.children.len():
+        entry := get_node(node.children[i])
+        if entry.kind == "entry" and entry.children.len() >= 2:
+            k_r := ir_expr(entry.children[0])
+            v_r := ir_expr(entry.children[1])
+            if has_int_keys:
+                ir_emit_call(ir_reg(), "map_insert_ikey", "void", [map_r, k_r, v_r])
+            else:
+                ir_emit_call(ir_reg(), "map_insert", "void", [map_r, k_r, v_r])
+        i = i + 1
+    return map_r
+
+fn ir_emit_set_literal(node: Node) -> Int:
+    set_r := ir_reg()
+    literal_type := ir_literal_expr_type(node, "set")
+    if literal_type == "set_int":
+        ir_emit_call(set_r, "__set_new_int", "set_int", [])
+        mut i := 0
+        while i < node.children.len():
+            elem_r := ir_expr(node.children[i])
+            ir_emit_call(ir_reg(), "set_add_int", "void", [set_r, elem_r])
+            i = i + 1
+        return set_r
+    ir_emit_call(set_r, "__set_new", "set", [])
+    mut i := 0
+    while i < node.children.len():
+        elem_r := ir_expr(node.children[i])
+        ir_emit_call(ir_reg(), "set_add", "void", [set_r, elem_r])
+        i = i + 1
+    return set_r
+
+fn ir_emit_list_literal(node: Node) -> Int:
+    list_r := ir_reg()
+    ir_emit_call(list_r, "__list_new", "list", [])
+    mut i := 0
+    while i < node.children.len():
+        elem_r := ir_expr(node.children[i])
+        ir_emit_call(ir_reg(), "__list_push", "void", [list_r, elem_r])
+        i = i + 1
+    return list_r
+
+fn ir_emit_tuple_literal(node: Node) -> Int:
+    mut elem_regs: List[Int] := []
+    mut i := 0
+    while i < node.children.len():
+        elem_regs.push(ir_expr(node.children[i]))
+        i = i + 1
+    r := ir_reg()
+    nf := ir_reg()
+    ir_emit("iconst " + nf.to_string() + " " + elem_regs.len().to_string())
+    ir_emit_call(r, "__struct_alloc", "struct:tuple", [nf])
+    mut ti := 0
+    while ti < elem_regs.len():
+        ir_emit("sstore " + r.to_string() + " " + ti.to_string() + " " + elem_regs[ti].to_string())
+        ti = ti + 1
+    return r
+
+fn ir_emit_field_access(idx: Int, node: Node) -> Int:
+    fname := node_value(idx)
+    if node.children.len() == 0:
+        r := ir_reg()
+        ir_emit("iconst " + r.to_string() + " 0")
+        return r
+    obj_r := ir_expr(node.children[0])
+    r := ir_reg()
+    obj_type := ir_field_receiver_type(node.children[0])
+    lookup_key := obj_type + "." + fname
+    if ir_struct_field_index_lookup.contains_key(lookup_key):
+        field_offset := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key]) * 8
+        mut field_kind := "unknown"
+        if ir_struct_field_lookup.contains_key(lookup_key):
+            field_kind = ir_retkind(ir_struct_field_lookup[lookup_key])
+        ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + field_offset.to_string() + " " + field_kind + " " + fname)
+    else:
+        ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + fname)
+    return r
+
 # --- method call dispatch (extracted from ir_expr) ---
 fn ir_emit_method_call(idx: Int) -> Int:
     node := get_node(idx)
@@ -1037,79 +1128,16 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         return ir_emit_string_interp(idx)
 
     if kind == "map":
-        # map literal: create map and insert entries
-        map_r := ir_reg()
-        # check if entries have int keys
-        mut has_int_keys := false
-        if node.children.len() > 0:
-            first_entry := get_node(node.children[0])
-            if first_entry.kind == "entry" and first_entry.children.len() > 0:
-                k_node := get_node(first_entry.children[0])
-                if k_node.kind == "int_lit" or k_node.kind == "int":
-                    has_int_keys = true
-        if has_int_keys:
-            ir_emit_call(map_r, "__map_new_int", "map_int", [])
-        else:
-            ir_emit_call(map_r, "__map_new", "map", [])
-        # insert each entry (children are entry nodes with key/value pairs)
-        mut _fi7 := 0
-        _kids7 := node.children
-        while _fi7 < _kids7.len():
-            child := _kids7[_fi7]
-            entry := get_node(child)
-            if entry.kind == "entry" and entry.children.len() >= 2:
-                k_r := ir_expr(entry.children[0])
-                v_r := ir_expr(entry.children[1])
-                if has_int_keys:
-                    ir_emit_call(ir_reg(), "map_insert_ikey", "void", [map_r, k_r, v_r])
-                else:
-                    ir_emit_call(ir_reg(), "map_insert", "void", [map_r, k_r, v_r])
-            _fi7 = _fi7 + 1
-        return map_r
+        return ir_emit_map_literal(node)
 
     if kind == "set":
-        set_r := ir_reg()
-        ir_emit_call(set_r, "__set_new", "set", [])
-        mut _fi8 := 0
-        _kids8 := node.children
-        while _fi8 < _kids8.len():
-            child := _kids8[_fi8]
-            elem_r := ir_expr(child)
-            ir_emit_call(ir_reg(), "set_add", "void", [set_r, elem_r])
-            _fi8 = _fi8 + 1
-        return set_r
+        return ir_emit_set_literal(node)
 
     if kind == "list":
-        # list literal: create list, push each element
-        list_r := ir_reg()
-        ir_emit_call(list_r, "__list_new", "list", [])
-        mut _fi9 := 0
-        _kids9 := node.children
-        while _fi9 < _kids9.len():
-            child := _kids9[_fi9]
-            elem_r := ir_expr(child)
-            ir_emit_call(ir_reg(), "__list_push", "void", [list_r, elem_r])
-            _fi9 = _fi9 + 1
-        return list_r
+        return ir_emit_list_literal(node)
 
     if kind == "tuple":
-        # tuple literal: allocate struct and store elements
-        mut elem_regs: List[Int] := []
-        mut _fi10 := 0
-        _kids10 := node.children
-        while _fi10 < _kids10.len():
-            child := _kids10[_fi10]
-            elem_regs.push(ir_expr(child))
-            _fi10 = _fi10 + 1
-        r := ir_reg()
-        nf := ir_reg()
-        ir_emit("iconst " + nf.to_string() + " " + elem_regs.len().to_string())
-        ir_emit_call(r, "__struct_alloc", "struct:tuple", [nf])
-        mut ti := 0
-        while ti < elem_regs.len():
-            ir_emit("sstore " + r.to_string() + " " + ti.to_string() + " " + elem_regs[ti].to_string())
-            ti = ti + 1
-        return r
+        return ir_emit_tuple_literal(node)
 
     if kind == "struct_init":
         # struct initialization: allocate struct and store fields
@@ -1139,29 +1167,7 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         return r
 
     if kind == "field_access":
-        # obj.field — emit field load instruction
-        fname := node_value(idx)
-        if node.children.len() > 0:
-            obj_r := ir_expr(node.children[0])
-            r := ir_reg()
-            mut obj_type := ir_infer_type(node.children[0])
-            if obj_type.len() == 0:
-                recv := get_node(node.children[0])
-                if recv.kind == "ident" and ir_struct_names.contains_key(recv.value):
-                    obj_type = recv.value
-            lookup_key := obj_type + "." + fname
-            if ir_struct_field_index_lookup.contains_key(lookup_key):
-                field_offset := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key]) * 8
-                mut field_kind := "unknown"
-                if ir_struct_field_lookup.contains_key(lookup_key):
-                    field_kind = ir_retkind(ir_struct_field_lookup[lookup_key])
-                ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + field_offset.to_string() + " " + field_kind + " " + fname)
-            else:
-                ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + fname)
-            return r
-        r := ir_reg()
-        ir_emit("iconst " + r.to_string() + " 0")
-        return r
+        return ir_emit_field_access(idx, node)
 
     if kind == "lambda":
         return ir_emit_lambda(idx)
