@@ -1960,6 +1960,25 @@ fn ir_emit_init_globals(root: Node):
     ir_emit("ret " + dr.to_string())
     ir_emit("endfunc")
 
+fn ir_emit_top_level_items(root: Node):
+    mut i := 0
+    while i < root.children.len():
+        child := root.children[i]
+        actual := ir_unwrap_pub_child(child)
+        actual_node := get_node(actual)
+        if actual_node.kind == "fn" or actual_node.kind == "fn_decl":
+            ir_func(actual)
+        elif actual_node.kind == "impl_decl":
+            impl_type := ir_impl_target_type(actual_node)
+            ir_emit_impl_methods(actual_node, impl_type)
+        i = i + 1
+
+fn ir_append_lambda_bodies():
+    mut i := 0
+    while i < ir_lambda_bodies.len():
+        ir_lines.push(ir_lambda_bodies[i])
+        i = i + 1
+
 # --- main entry ---
 pub fn emit_ir(root_idx: Int) -> String:
     ir_reset()
@@ -1992,25 +2011,8 @@ pub fn emit_ir(root_idx: Int) -> String:
     ir_collect_function_returns(root_idx)
     ir_emit_global_bindings(root)
     ir_emit_init_globals(root)
-
-    # emit functions (unwrap pub wrappers)
-    mut _fi28 := 0
-    _kids28 := root.children
-    while _fi28 < _kids28.len():
-        child := _kids28[_fi28]
-        actual := ir_unwrap_pub_child(child)
-        actual_node := get_node(actual)
-        if actual_node.kind == "fn" or actual_node.kind == "fn_decl":
-            ir_func(actual)
-        elif actual_node.kind == "impl_decl":
-            impl_type := ir_impl_target_type(actual_node)
-            ir_emit_impl_methods(actual_node, impl_type)
-        _fi28 = _fi28 + 1
-    # append deferred lambda function bodies
-    mut li := 0
-    while li < ir_lambda_bodies.len():
-        ir_lines.push(ir_lambda_bodies[li])
-        li = li + 1
+    ir_emit_top_level_items(root)
+    ir_append_lambda_bodies()
 
     ir_module_count = ir_module_count + 1
     return ir_lines.join(chr(10))
