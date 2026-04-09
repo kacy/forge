@@ -47,6 +47,8 @@ fn line_end(text: String, start: Int) -> Int:
     return text.len()
 
 fn remove_main_from_import(ir: String) -> String:
+    # imported modules can define their own main, but the combined IR should
+    # only keep the root module entry point.
     mut out: List[String] := []
     mut skipping := false
     mut start := 0
@@ -357,7 +359,7 @@ fn emit_single_file(path: String, emit_tests: Bool) -> String!:
     print(ir)
     return ""
 
-fn apply_import_name_maps(renamed: RenamedImport, module_index: Int, imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]):
+fn record_import_name_maps(renamed: RenamedImport, module_index: Int, imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]):
     prefix := "m" + module_index.to_string() + "_"
     for bare in renamed.global_names:
         imported_global_map.insert(bare, prefix + bare)
@@ -365,6 +367,15 @@ fn apply_import_name_maps(renamed: RenamedImport, module_index: Int, imported_gl
         imported_function_map.insert(bare, prefix + bare)
     for init_func in renamed.init_funcs:
         imported_init_funcs.push(init_func)
+
+fn emit_imported_module_ir(root: Int, import_roots: List[Int], module_index: Int, imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]) -> String:
+    # imported modules are emitted in isolation, then rewritten once the
+    # already-seen global/function maps are known.
+    ir := emit_module_ir(root, import_roots, false)
+    renamed := rename_import_ir(ir, module_index)
+    rewritten_ir := rewrite_ir_with_import_maps(renamed.ir, imported_global_map, imported_function_map)
+    record_import_name_maps(renamed, module_index, imported_global_map, imported_function_map, imported_init_funcs)
+    return rewritten_ir
 
 fn emit_combined_file(path: String, emit_tests: Bool) -> String!:
     parsed := parse_and_check(path)!
@@ -382,13 +393,11 @@ fn emit_combined_file(path: String, emit_tests: Bool) -> String!:
         if is_runtime_builtin_module(module_path):
             i = i + 1
             continue
-        ir := emit_module_ir(import_roots[i], import_roots, false)
-        renamed := rename_import_ir(ir, i)
-        rewritten_ir := rewrite_ir_with_import_maps(renamed.ir, imported_global_map, imported_function_map)
-        apply_import_name_maps(renamed, i, imported_global_map, imported_function_map, imported_init_funcs)
-        all_ir.push(rewritten_ir)
+        all_ir.push(emit_imported_module_ir(import_roots[i], import_roots, i, imported_global_map, imported_function_map, imported_init_funcs))
         i = i + 1
 
+    # the root module keeps its own names, but any imported references need to
+    # be rewritten to the prefixed names assigned above.
     mut main_ir := emit_module_ir(root, import_roots, emit_tests)
     main_ir = rewrite_main_ir(main_ir, imported_global_map, imported_function_map, imported_init_funcs)
     all_ir.push(main_ir)
