@@ -4,16 +4,16 @@ fn main():
     mut numbers := [1, 2, 3]
     numbers.push(4)
     numbers.push(5)
-    print("list len: " + numbers.len().to_string())
-    print("list last: " + numbers[numbers.len() - 1].to_string())
+    print("list len: {numbers.len()}")
+    print("list last: {numbers[numbers.len() - 1]}")
 
     mut scores: Map[String, Int] := {}
     scores.insert("alice", 10)
     scores.insert("bob", 20)
-    print("map len: " + scores.len().to_string())
-    print("alice score: " + scores["alice"].to_string())
+    print("map len: {scores.len()}")
+    print("alice score: {scores["alice"]}")
 
     mut tags := {"base"}
     tags.add("shared")
-    print("set has shared: " + tags.contains("shared").to_string())
-    print("set len: " + tags.len().to_string())
+    print("set has shared: {tags.contains("shared")}")
+    print("set len: {tags.len()}")
