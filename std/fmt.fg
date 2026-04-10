@@ -1,14 +1,15 @@
-# std.fmt — number formatting utilities
+# std.fmt — number formatting and lightweight templates
 #
-# Format integers as hexadecimal, octal, or binary strings.
-# Format floats with a fixed number of decimal places.
-# Fill `{}` placeholders with preformatted string values.
+# use interpolation for one-off value printing:
+#   print("count: {items.len()}")
 #
-#   from std.fmt import hex, bin, float_fixed, format2
-#   hex(255)             # "ff"
-#   bin(42)              # "101010"
-#   float_fixed(3.14159, 2)  # "3.14"
-#   format2("x={}, y={}", "3", "4")  # "x=3, y=4"
+# use std.fmt when you want a reusable template or literal braces:
+#   slot := chr(123) + chr(125)
+#   format2("x=" + slot + ", y=" + slot, "3", "4")
+#
+# format integers as hexadecimal, octal, or binary strings.
+# format floats with a fixed number of decimal places.
+# fill `{}` placeholders with string values.
 
 # ===============================================================
 # Integer Formatting
