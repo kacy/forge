@@ -1467,6 +1467,19 @@ fn ir_emit_tuple_literal(node: Node) -> Int:
         ti = ti + 1
     return r
 
+fn ir_field_lookup_key(recv_idx: Int, field_name: String) -> String:
+    return ir_field_receiver_type(recv_idx) + "." + field_name
+
+fn ir_emit_named_field_access(result_reg: Int, obj_r: Int, lookup_key: String, field_name: String):
+    if ir_struct_field_index_lookup.contains_key(lookup_key):
+        field_offset := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key]) * 8
+        mut field_kind := "unknown"
+        if ir_struct_field_lookup.contains_key(lookup_key):
+            field_kind = ir_retkind(ir_struct_field_lookup[lookup_key])
+        ir_emit("field " + result_reg.to_string() + " " + obj_r.to_string() + " " + field_offset.to_string() + " " + field_kind + " " + field_name)
+    else:
+        ir_emit("field " + result_reg.to_string() + " " + obj_r.to_string() + " " + field_name)
+
 fn ir_emit_field_access(idx: Int, node: Node) -> Int:
     fname := node_value(idx)
     if node.children.len() == 0:
@@ -1475,16 +1488,17 @@ fn ir_emit_field_access(idx: Int, node: Node) -> Int:
         return r
     obj_r := ir_expr(node.children[0])
     r := ir_reg()
-    obj_type := ir_field_receiver_type(node.children[0])
-    lookup_key := obj_type + "." + fname
-    if ir_struct_field_index_lookup.contains_key(lookup_key):
-        field_offset := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key]) * 8
-        mut field_kind := "unknown"
-        if ir_struct_field_lookup.contains_key(lookup_key):
-            field_kind = ir_retkind(ir_struct_field_lookup[lookup_key])
-        ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + field_offset.to_string() + " " + field_kind + " " + fname)
+    ir_emit_named_field_access(r, obj_r, ir_field_lookup_key(node.children[0], fname), fname)
+    return r
+
+fn ir_emit_result_flag_field(obj_r: Int, fname: String) -> Int:
+    zero := ir_reg()
+    ir_emit("iconst " + zero.to_string() + " 0")
+    r := ir_reg()
+    if fname == "is_ok":
+        ir_emit("neq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
     else:
-        ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " " + fname)
+        ir_emit("eq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
     return r
 
 fn ir_emit_result_field_access(idx: Int, obj_r: Int, fname: String) -> Int:
@@ -1501,27 +1515,13 @@ fn ir_emit_result_field_access(idx: Int, obj_r: Int, fname: String) -> Int:
                     return ir_decode_result_value(obj_r, result_kind)
                 return obj_r
             if fname == "is_ok" or fname == "is_err":
-                zero := ir_reg()
-                ir_emit("iconst " + zero.to_string() + " 0")
-                r := ir_reg()
-                if fname == "is_ok":
-                    ir_emit("neq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
-                else:
-                    ir_emit("eq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
-                return r
+                return ir_emit_result_flag_field(obj_r, fname)
     if fname == "ok":
         if expr_result_kind == "result_int" or expr_result_kind == "result_bool":
             return ir_decode_result_value(obj_r, expr_result_kind)
         return obj_r
     if fname == "is_ok" or fname == "is_err":
-        zero := ir_reg()
-        ir_emit("iconst " + zero.to_string() + " 0")
-        r := ir_reg()
-        if fname == "is_ok":
-            ir_emit("neq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
-        else:
-            ir_emit("eq " + r.to_string() + " " + obj_r.to_string() + " " + zero.to_string())
-        return r
+        return ir_emit_result_flag_field(obj_r, fname)
     return 0 - 1
 
 # --- method call dispatch (extracted from ir_expr) ---
