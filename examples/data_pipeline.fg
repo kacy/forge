@@ -67,27 +67,30 @@ fn names_list(records: List[Record]) -> String:
 
 fn main():
     records := make_records()
-    print("total records: " + records.len().to_string())
+    print("total records: {records.len()}")
 
     # filter
     eng := filter_by_category(records, "engineering")
-    print("engineering count: " + eng.len().to_string())
-    print("engineering names: " + names_list(eng))
+    print("engineering count: {eng.len()}")
+    print("engineering names: {names_list(eng)}")
 
     # aggregate
-    print("engineering avg: " + average_score(eng).to_string())
+    print("engineering avg: {average_score(eng)}")
     best := max_score(eng)
-    print("engineering best: " + best.name + " (" + best.score.to_string() + ")")
+    print("engineering best: {best.name} ({best.score})")
 
     # count by category
     counts := count_by_category(records)
-    print("engineering: " + counts["engineering"].to_string())
-    print("marketing: " + counts["marketing"].to_string())
-    print("sales: " + counts["sales"].to_string())
+    engineering_count := counts["engineering"]
+    marketing_count := counts["marketing"]
+    sales_count := counts["sales"]
+    print("engineering: {engineering_count}")
+    print("marketing: {marketing_count}")
+    print("sales: {sales_count}")
 
     # overall
-    print("overall avg: " + average_score(records).to_string())
+    print("overall avg: {average_score(records)}")
     overall_best := max_score(records)
-    print("overall best: " + overall_best.name + " (" + overall_best.score.to_string() + ")")
+    print("overall best: {overall_best.name} ({overall_best.score})")
 
     print("pipeline works")

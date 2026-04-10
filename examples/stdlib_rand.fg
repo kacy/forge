@@ -14,16 +14,16 @@ fn main():
 
     # basic random
     a := int(1, 10)
-    print("random int: " + a.to_string())
+    print("random int: {a}")
 
     # roll
     d := roll(6)
-    print("roll d6: " + d.to_string())
+    print("roll d6: {d}")
 
     # choice
     items := [10, 20, 30, 40, 50]
     c := choice(items)
-    print("choice: " + c.to_string())
+    print("choice: {c}")
 
     # shuffle
     nums := [1, 2, 3, 4, 5]
@@ -52,6 +52,6 @@ fn main():
         if chance(50):
             hits = hits + 1
         i = i + 1
-    print("chance(50) hits: " + hits.to_string())
+    print("chance(50) hits: {hits}")
 
     print("rand tests passed")
