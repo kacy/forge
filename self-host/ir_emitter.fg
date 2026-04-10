@@ -1396,48 +1396,56 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
     ir_emit_resolved_call(r, callee.name, idx, arg_regs, ir_callee_uses_result_abi(callee, idx))
     return r
 
+fn ir_map_uses_int_keys(node: Node) -> Bool:
+    if node.children.len() == 0:
+        return false
+    first_entry := get_node(node.children[0])
+    if first_entry.kind != "entry" or first_entry.children.len() == 0:
+        return false
+    k_node := get_node(first_entry.children[0])
+    return k_node.kind == "int_lit" or k_node.kind == "int"
+
+fn ir_emit_map_entry_insert(map_r: Int, has_int_keys: Bool, entry: Node):
+    if entry.kind != "entry" or entry.children.len() < 2:
+        return
+    k_r := ir_expr(entry.children[0])
+    v_r := ir_expr(entry.children[1])
+    if has_int_keys:
+        ir_emit_call3(ir_reg(), "map_insert_ikey", "void", map_r, k_r, v_r)
+    else:
+        ir_emit_call3(ir_reg(), "map_insert", "void", map_r, k_r, v_r)
+
 fn ir_emit_map_literal(node: Node) -> Int:
     map_r := ir_reg()
-    mut has_int_keys := false
-    if node.children.len() > 0:
-        first_entry := get_node(node.children[0])
-        if first_entry.kind == "entry" and first_entry.children.len() > 0:
-            k_node := get_node(first_entry.children[0])
-            if k_node.kind == "int_lit" or k_node.kind == "int":
-                has_int_keys = true
+    has_int_keys := ir_map_uses_int_keys(node)
     if has_int_keys:
         ir_emit_call0(map_r, "__map_new_int", "map_int")
     else:
         ir_emit_call0(map_r, "__map_new", "map")
     mut i := 0
     while i < node.children.len():
-        entry := get_node(node.children[i])
-        if entry.kind == "entry" and entry.children.len() >= 2:
-            k_r := ir_expr(entry.children[0])
-            v_r := ir_expr(entry.children[1])
-            if has_int_keys:
-                ir_emit_call3(ir_reg(), "map_insert_ikey", "void", map_r, k_r, v_r)
-            else:
-                ir_emit_call3(ir_reg(), "map_insert", "void", map_r, k_r, v_r)
+        ir_emit_map_entry_insert(map_r, has_int_keys, get_node(node.children[i]))
         i = i + 1
     return map_r
+
+fn ir_set_new_name(literal_type: String) -> String:
+    if literal_type == "set_int":
+        return "__set_new_int"
+    return "__set_new"
+
+fn ir_set_add_name(literal_type: String) -> String:
+    if literal_type == "set_int":
+        return "set_add_int"
+    return "set_add"
 
 fn ir_emit_set_literal(node: Node) -> Int:
     set_r := ir_reg()
     literal_type := ir_literal_expr_type(node, "set")
-    if literal_type == "set_int":
-        ir_emit_call0(set_r, "__set_new_int", "set_int")
-        mut i := 0
-        while i < node.children.len():
-            elem_r := ir_expr(node.children[i])
-            ir_emit_call2(ir_reg(), "set_add_int", "void", set_r, elem_r)
-            i = i + 1
-        return set_r
-    ir_emit_call0(set_r, "__set_new", "set")
+    ir_emit_call0(set_r, ir_set_new_name(literal_type), literal_type)
     mut i := 0
     while i < node.children.len():
         elem_r := ir_expr(node.children[i])
-        ir_emit_call2(ir_reg(), "set_add", "void", set_r, elem_r)
+        ir_emit_call2(ir_reg(), ir_set_add_name(literal_type), "void", set_r, elem_r)
         i = i + 1
     return set_r
 
@@ -1451,6 +1459,12 @@ fn ir_emit_list_literal(node: Node) -> Int:
         i = i + 1
     return list_r
 
+fn ir_emit_tuple_stores(tuple_r: Int, elem_regs: List[Int]):
+    mut i := 0
+    while i < elem_regs.len():
+        ir_emit("sstore " + tuple_r.to_string() + " " + i.to_string() + " " + elem_regs[i].to_string())
+        i = i + 1
+
 fn ir_emit_tuple_literal(node: Node) -> Int:
     mut elem_regs: List[Int] := []
     mut i := 0
@@ -1461,10 +1475,7 @@ fn ir_emit_tuple_literal(node: Node) -> Int:
     nf := ir_reg()
     ir_emit("iconst " + nf.to_string() + " " + elem_regs.len().to_string())
     ir_emit_call1(r, "__struct_alloc", "struct:tuple", nf)
-    mut ti := 0
-    while ti < elem_regs.len():
-        ir_emit("sstore " + r.to_string() + " " + ti.to_string() + " " + elem_regs[ti].to_string())
-        ti = ti + 1
+    ir_emit_tuple_stores(r, elem_regs)
     return r
 
 fn ir_field_lookup_key(recv_idx: Int, field_name: String) -> String:
@@ -1566,6 +1577,15 @@ fn ir_emit_method_call(idx: Int) -> Int:
     return r
 
 # --- string interpolation (extracted from ir_expr) ---
+fn ir_string_interp_part_reg(child: Int) -> Int:
+    cn := get_node(child)
+    if cn.kind == "lit":
+        si := ir_str(cn.value)
+        part_r := ir_reg()
+        ir_emit("strref " + part_r.to_string() + " " + si)
+        return part_r
+    return ir_string_interp_expr_part(child)
+
 fn ir_emit_string_interp(idx: Int) -> Int:
     node := get_node(idx)
     # concatenate literal parts and expression parts
@@ -1574,14 +1594,7 @@ fn ir_emit_string_interp(idx: Int) -> Int:
     kids4_children := node.children
     while _fi4 < kids4_children.len():
         child := kids4_children[_fi4]
-        mut cn := get_node(child)
-        mut part_r := 0
-        if cn.kind == "lit":
-            si := ir_str(cn.value)
-            part_r = ir_reg()
-            ir_emit("strref " + part_r.to_string() + " " + si)
-        else:
-            part_r = ir_string_interp_expr_part(child)
+        part_r := ir_string_interp_part_reg(child)
         if result_r < 0:
             result_r = part_r
         else:
