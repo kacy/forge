@@ -2684,54 +2684,69 @@ fn ir_append_lambda_bodies():
         ir_lines.push(ir_lambda_bodies[i])
         i = i + 1
 
-# --- main entry ---
-pub fn emit_ir(root_idx: Int) -> String:
-    ir_reset()
-
-    root := get_node(root_idx)
-    ir_collect_strings(root_idx)
-
-    # emit string data
+fn ir_emit_string_table():
     mut i := 0
     while i < ir_strings.len():
         sid := "m" + ir_module_count.to_string() + "s" + i.to_string()
         ir_emit("string " + sid + " " + chr(34) + ir_strings[i] + chr(34))
         i = i + 1
 
-    # collect import renames
+fn ir_collect_root_import_metadata(root_idx: Int):
     ir_import_renames = {}
     ir_collect_imports(root_idx)
 
-    # collect type aliases before structs and returns so both can resolve
-    # alias names through the same table.
-    ir_collect_type_aliases(root_idx)
-
-    # emit struct declarations and register names
+fn ir_collect_root_type_metadata(root_idx: Int):
     ir_struct_names = {}
     ir_struct_field_lookup = {}
     ir_struct_field_index_lookup = {}
     ir_register_known_import_structs()
+
     mut preload_struct_i := 0
     while preload_struct_i < ir_preloaded_import_roots.len():
         ir_collect_struct_decls(ir_preloaded_import_roots[preload_struct_i], false)
         preload_struct_i = preload_struct_i + 1
+
     ir_collect_struct_decls(root_idx, true)
     ir_register_alias_structs(root_idx)
-    ir_lambda_count = 0
-    ir_lambda_bodies = []
 
+fn ir_collect_root_callable_metadata(root_idx: Int):
     ir_collect_function_returns(root_idx)
+
     mut preload_i := 0
     while preload_i < ir_preloaded_import_roots.len():
         ir_collect_impl_methods(ir_preloaded_import_roots[preload_i])
         preload_i = preload_i + 1
+
     ir_collect_impl_methods(root_idx)
+
+fn ir_emit_root_module(root_idx: Int, root: Node):
     ir_emit_global_bindings(root)
     ir_emit_init_globals(root)
     ir_emit_top_level_items(root_idx, root)
     ir_append_lambda_bodies()
 
+fn ir_finish_module_emit():
     ir_module_count = ir_module_count + 1
     ir_preloaded_import_roots = []
     ir_emit_tests = false
+
+# --- main entry ---
+pub fn emit_ir(root_idx: Int) -> String:
+    ir_reset()
+
+    root := get_node(root_idx)
+    ir_collect_strings(root_idx)
+    ir_emit_string_table()
+
+    # collect aliases first so both type and callable metadata can resolve
+    # through the same table.
+    ir_collect_root_import_metadata(root_idx)
+    ir_collect_type_aliases(root_idx)
+    ir_collect_root_type_metadata(root_idx)
+
+    ir_lambda_count = 0
+    ir_lambda_bodies = []
+    ir_collect_root_callable_metadata(root_idx)
+    ir_emit_root_module(root_idx, root)
+    ir_finish_module_emit()
     return ir_lines.join(chr(10))
