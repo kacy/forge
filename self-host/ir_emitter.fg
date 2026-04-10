@@ -808,6 +808,10 @@ fn ir_known_callable_return_type(fname: String) -> String:
 
 fn ir_field_receiver_type(recv_idx: Int) -> String:
     mut obj_type := ir_infer_type(recv_idx)
+    if obj_type.contains("["):
+        base := obj_type.substring(0, obj_type.index_of("["))
+        if ir_struct_names.contains_key(base):
+            obj_type = base
     if obj_type.len() == 0:
         recv := get_node(recv_idx)
         if recv.kind == "ident" and ir_struct_names.contains_key(recv.value):

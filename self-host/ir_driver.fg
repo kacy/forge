@@ -304,7 +304,7 @@ fn validate_combined_ir_contract(ir: String):
     return
 
 fn is_runtime_builtin_module(module_path: String) -> Bool:
-    return module_path == "std.fmt" or module_path == "std.net.tcp" or module_path == "std.net.dns" or module_path == "std.net.url" or module_path == "std.os.path" or module_path == "std.os.process"
+    return module_path == "std.net.tcp" or module_path == "std.net.dns" or module_path == "std.net.url" or module_path == "std.os.path" or module_path == "std.os.process"
 
 fn parse_args() -> CliArgs:
     a := args()
