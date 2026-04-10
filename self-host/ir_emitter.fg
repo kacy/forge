@@ -269,8 +269,11 @@ fn ir_expr_result_kind(idx: Int) -> String:
                 return ret_kind
     return ""
 
+fn ir_uses_result_abi(result_kind: String) -> Bool:
+    return result_kind == "result_int" or result_kind == "result_bool"
+
 fn ir_encode_result_value(value_reg: Int, result_kind: String) -> Int:
-    if result_kind == "result_int" or result_kind == "result_bool":
+    if ir_uses_result_abi(result_kind):
         one := ir_reg()
         ir_emit("iconst " + one.to_string() + " 1")
         encoded := ir_reg()
@@ -279,7 +282,7 @@ fn ir_encode_result_value(value_reg: Int, result_kind: String) -> Int:
     return value_reg
 
 fn ir_decode_result_value(value_reg: Int, result_kind: String) -> Int:
-    if result_kind == "result_int" or result_kind == "result_bool":
+    if ir_uses_result_abi(result_kind):
         one := ir_reg()
         ir_emit("iconst " + one.to_string() + " 1")
         decoded := ir_reg()
@@ -480,6 +483,50 @@ fn ir_emit_call2(result_reg: Int, fname: String, ret_type: String, arg0: Int, ar
 
 fn ir_emit_call3(result_reg: Int, fname: String, ret_type: String, arg0: Int, arg1: Int, arg2: Int):
     ir_emit_call_text(result_reg, fname, ret_type, 3, " " + arg0.to_string() + " " + arg1.to_string() + " " + arg2.to_string())
+
+fn ir_declared_callable_return_type(fname: String) -> String:
+    if not ir_func_returns.contains_key(fname):
+        return ""
+    ret_kind := ir_func_returns[fname]
+    if ret_kind == "result_int":
+        return "int"
+    if ret_kind == "result_bool":
+        return "bool"
+    return ir_resolve_type_hint(ret_kind)
+
+fn ir_collect_call_arg_regs(node: Node, start_idx: Int) -> List[Int]:
+    mut arg_regs: List[Int] := []
+    mut i := start_idx
+    while i < node.children.len():
+        child := node.children[i]
+        child_kind := node_kind(child)
+        if child_kind == "arg":
+            cn := get_node(child)
+            if cn.children.len() > 0:
+                arg_regs.push(ir_expr(cn.children[0]))
+        else:
+            arg_regs.push(ir_expr(child))
+        i = i + 1
+    return arg_regs
+
+fn ir_join_arg_regs(arg_regs: List[Int]) -> String:
+    mut call_text := ""
+    mut i := 0
+    while i < arg_regs.len():
+        call_text = call_text + " " + arg_regs[i].to_string()
+        i = i + 1
+    return call_text
+
+fn ir_emit_resolved_call(result_reg: Int, fname: String, idx: Int, arg_regs: List[Int], uses_result_abi: Bool):
+    ir_emit_call_text(result_reg, fname, ir_call_retkind(idx, uses_result_abi), arg_regs.len(), ir_join_arg_regs(arg_regs))
+
+fn ir_method_call_arg_regs(obj_r: Int, arg_regs: List[Int]) -> List[Int]:
+    mut call_args := [obj_r]
+    mut i := 0
+    while i < arg_regs.len():
+        call_args.push(arg_regs[i])
+        i = i + 1
+    return call_args
 
 fn ir_copy_lines(lines: List[String]) -> List[String]:
     mut copy: List[String] := []
@@ -797,14 +844,7 @@ fn ir_known_callable_return_type(fname: String) -> String:
         return "list"
     if LIST_STRING_RETURNING_FUNCS.contains(fname):
         return "list_string"
-    if ir_func_returns.contains_key(fname):
-        ret_kind := ir_func_returns[fname]
-        if ret_kind == "result_int":
-            return "int"
-        if ret_kind == "result_bool":
-            return "bool"
-        return ir_resolve_type_hint(ret_kind)
-    return ""
+    return ir_declared_callable_return_type(fname)
 
 fn ir_field_receiver_type(recv_idx: Int) -> String:
     mut obj_type := ir_infer_type(recv_idx)
@@ -820,13 +860,10 @@ fn ir_field_receiver_type(recv_idx: Int) -> String:
 
 fn ir_known_method_return_type(obj_type: String, meth: String) -> String:
     impl_name := ir_lookup_impl_method_name(obj_type, meth)
-    if impl_name.len() > 0 and ir_func_returns.contains_key(impl_name):
-        ret_kind := ir_func_returns[impl_name]
-        if ret_kind == "result_int":
-            return "int"
-        if ret_kind == "result_bool":
-            return "bool"
-        return ir_resolve_type_hint(ret_kind)
+    if impl_name.len() > 0:
+        declared := ir_declared_callable_return_type(impl_name)
+        if declared.len() > 0:
+            return declared
     if BOOL_RETURNING_METHODS.contains(meth):
         return "bool"
     if STRING_RETURNING_METHODS.contains(meth) or meth == "to_string_utf8":
@@ -1294,20 +1331,15 @@ fn ir_emit_binary_expr(node: Node) -> Int:
 
 fn ir_emit_static_call(idx: Int, node: Node) -> Int:
     mut fname := ""
-    mut arg_regs: List[Int] := []
     mut i := 0
     while i < node.children.len():
         child := node.children[i]
-        child_kind := node_kind(child)
         if i == 0:
             fname = ir_resolve_static_callee_name(child)
-        elif child_kind == "arg":
-            cn := get_node(child)
-            if cn.children.len() > 0:
-                arg_regs.push(ir_expr(cn.children[0]))
         i = i + 1
     if fname.len() == 0:
         fname = "unknown"
+    arg_regs := ir_collect_call_arg_regs(node, 1)
 
     if ir_emit_tests and fname == "assert" and arg_regs.len() >= 1:
         ok_l := ir_label()
@@ -1361,12 +1393,7 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
 
     r := ir_reg()
     callee_uses_result_abi := ir_static_callee_uses_result_abi(node.children[0]) or ir_checked_result_kind(idx).len() > 0
-    mut call_text := ""
-    mut ai := 0
-    while ai < arg_regs.len():
-        call_text = call_text + " " + arg_regs[ai].to_string()
-        ai = ai + 1
-    ir_emit_call_text(r, fname, ir_call_retkind(idx, callee_uses_result_abi), arg_regs.len(), call_text)
+    ir_emit_resolved_call(r, fname, idx, arg_regs, callee_uses_result_abi)
     return r
 
 fn ir_emit_map_literal(node: Node) -> Int:
@@ -1507,26 +1534,10 @@ fn ir_emit_method_call(idx: Int) -> Int:
 
     alias_fname := ir_resolve_module_alias_method_call_name(idx)
     if alias_fname.len() > 0:
-        mut arg_regs: List[Int] := []
-        mut arg_idx := 1
-        while arg_idx < node.children.len():
-            child := node.children[arg_idx]
-            child_kind := node_kind(child)
-            if child_kind == "arg":
-                cn := get_node(child)
-                if cn.children.len() > 0:
-                    arg_regs.push(ir_expr(cn.children[0]))
-            else:
-                arg_regs.push(ir_expr(child))
-            arg_idx = arg_idx + 1
-        r := ir_reg()
-        mut call_text := ""
-        mut ai := 0
-        while ai < arg_regs.len():
-            call_text = call_text + " " + arg_regs[ai].to_string()
-            ai = ai + 1
+        arg_regs := ir_collect_call_arg_regs(node, 1)
         uses_result_abi := ir_func_returns.contains_key(alias_fname) or ir_checked_result_kind(idx).len() > 0
-        ir_emit_call_text(r, alias_fname, ir_call_retkind(idx, uses_result_abi), arg_regs.len(), call_text)
+        r := ir_reg()
+        ir_emit_resolved_call(r, alias_fname, idx, arg_regs, uses_result_abi)
         return r
 
     obj_type := ir_method_receiver_type(node)
@@ -1551,12 +1562,8 @@ fn ir_emit_method_call(idx: Int) -> Int:
     mut ret_type := ir_call_retkind(idx, uses_result_abi)
     if VOID_METHODS.contains(emit_name):
         ret_type = "void"
-    mut call_text := " " + obj_r.to_string()
-    mut ci2 := 0
-    while ci2 < arg_regs.len():
-        call_text = call_text + " " + arg_regs[ci2].to_string()
-        ci2 = ci2 + 1
-    ir_emit_call_text(r, emit_name, ret_type, call_regs.len(), call_text)
+    call_args := ir_method_call_arg_regs(obj_r, arg_regs)
+    ir_emit_call_text(r, emit_name, ret_type, call_args.len(), ir_join_arg_regs(call_args))
     if VOID_METHODS.contains(emit_name):
         return obj_r
     return r
