@@ -1,0 +1,47 @@
+# std.os — process-level environment helpers
+#
+# small wrappers around cwd, env, and temp-path operations.
+
+import std.env as env
+import std.os.path as path
+
+pub fn cwd() -> String:
+    return os_getcwd()
+
+pub fn chdir(next_dir: String) -> Bool:
+    return os_chdir(next_dir)
+
+pub fn temp_dir() -> String:
+    return os_temp_dir()
+
+pub fn home_dir() -> String:
+    return os_home_dir()
+
+pub fn get_env(name: String) -> String:
+    return env.get(name)
+
+pub fn set_env(name: String, value: String) -> Bool:
+    return os_set_env(name, value)
+
+pub fn unset_env(name: String) -> Bool:
+    return os_unset_env(name)
+
+pub fn which(program: String) -> String:
+    if program == "":
+        return ""
+    if program.contains("/"):
+        if file_exists(program):
+            return program
+        return ""
+
+    search_path := env.get("PATH")
+    if search_path == "":
+        return ""
+
+    for dir in search_path.split(":"):
+        mut candidate := program
+        if dir != "":
+            candidate = path.join(dir, program)
+        if file_exists(candidate):
+            return candidate
+    return ""

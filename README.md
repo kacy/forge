@@ -128,6 +128,9 @@ output via the Cranelift native backend.
 - std.os.path, std.os.process — path manipulation, child processes
 - std.log, std.fmt, std.fs, std.math — logging, formatting, file ops, math
 
+for child processes, prefer `std.os.process.command(...)` and the structured
+`run` / `output` / `start` flow. keep `std.io` for low-level stream work.
+
 **memory management:**
 - complete automatic reference counting (ARC) for all heap-allocated types
 - string ARC with retain/release

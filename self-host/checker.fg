@@ -132,12 +132,6 @@ fn module_import_target_name(module_path: String, name: String) -> String:
         return "log_" + name
     if module_path == "std.net.url":
         return "url_" + name
-    if module_path == "std.fs":
-        return "fs_" + name
-    if module_path == "std.os.path":
-        if name == "base":
-            return "forge_path_basename"
-        return "path_" + name
     return name
 
 # Process import declarations from AST and register aliases
@@ -324,10 +318,18 @@ fn register_builtin_types():
     define_builtin_function("dir_exists", str_to_bool)
     define_builtin_function("mkdir", str_to_bool)
     define_builtin_function("remove_file", str_to_bool)
+    define_builtin_function("fs_remove_dir", str_to_bool)
+    define_builtin_function("fs_remove_tree", str_to_bool)
     # (String) -> String?
     define_builtin_function("env", create_function_type([TID_STRING], tid_string))
+    define_builtin_function("fs_file_size", str_to_int)
     # (String) -> List[String]
     define_builtin_function("list_dir", create_function_type([TID_STRING], list_string))
+    define_builtin_function("os_getcwd", create_function_type([], tid_string))
+    define_builtin_function("os_temp_dir", create_function_type([], tid_string))
+    define_builtin_function("os_home_dir", create_function_type([], tid_string))
+    define_builtin_function("os_chdir", str_to_bool)
+    define_builtin_function("os_unset_env", str_to_bool)
     define_builtin_function("json_type_of", create_function_type([TID_INT], TID_STRING))
     define_builtin_function("json_get_string", create_function_type([TID_INT], TID_STRING))
     define_builtin_function("json_get_int", create_function_type([TID_INT], TID_INT))
@@ -356,6 +358,7 @@ fn register_builtin_types():
 
     # (String, String) -> Bool
     define_builtin_function("rename_file", create_function_type([TID_STRING, TID_STRING], TID_BOOL))
+    define_builtin_function("os_set_env", create_function_type([TID_STRING, TID_STRING], TID_BOOL))
     define_builtin_function("json_object_get", create_function_type([TID_INT, TID_STRING], TID_INT))
     define_builtin_function("json_object_has", create_function_type([TID_INT, TID_STRING], TID_BOOL))
     # (String, String) -> Bool!
@@ -405,6 +408,8 @@ fn register_builtin_types():
     # process management builtins
     # (String) -> Int!
     define_builtin_function("process_spawn", create_function_type([TID_STRING], int_result))
+    define_builtin_function("process_spawn_argv", create_function_type([TID_STRING, list_string, TID_STRING, list_string, list_string], int_result))
+    define_builtin_function("process_output_argv", create_function_type([TID_STRING, list_string, TID_STRING, list_string, list_string], int_result))
     # (Int, String) -> Int!
     define_builtin_function("process_write", create_function_type([TID_INT, TID_STRING], int_result))
     # (Int, Int) -> String!
@@ -419,6 +424,10 @@ fn register_builtin_types():
     define_builtin_function("process_kill", create_function_type([TID_INT], TID_BOOL))
     # (Int) -> Void
     define_builtin_function("process_close", int_to_void)
+    define_builtin_function("process_output_status", int_to_int)
+    define_builtin_function("process_output_stdout", create_function_type([TID_INT], TID_STRING))
+    define_builtin_function("process_output_stderr", create_function_type([TID_INT], TID_STRING))
+    define_builtin_function("process_output_close", int_to_void)
 
     # concurrency primitives (stub types)
     register_sync_primitive_type("Mutex", [])
@@ -469,8 +478,16 @@ fn register_builtin_types():
     fix_builtin_binding("dir_exists", [tid_string], tid_bool)
     fix_builtin_binding("mkdir", [tid_string], tid_bool)
     fix_builtin_binding("remove_file", [tid_string], tid_bool)
+    fix_builtin_binding("fs_remove_dir", [tid_string], tid_bool)
+    fix_builtin_binding("fs_remove_tree", [tid_string], tid_bool)
     fix_builtin_binding("env", [tid_string], tid_string)
+    fix_builtin_binding("fs_file_size", [tid_string], tid_int)
     fix_builtin_binding("list_dir", [tid_string], list_string)
+    fix_builtin_binding("os_getcwd", [], tid_string)
+    fix_builtin_binding("os_temp_dir", [], tid_string)
+    fix_builtin_binding("os_home_dir", [], tid_string)
+    fix_builtin_binding("os_chdir", [tid_string], tid_bool)
+    fix_builtin_binding("os_unset_env", [tid_string], tid_bool)
     fix_builtin_binding("json_type_of", [tid_int], tid_string)
     fix_builtin_binding("json_get_string", [tid_int], tid_string)
     fix_builtin_binding("json_get_int", [tid_int], tid_int)
@@ -491,6 +508,7 @@ fn register_builtin_types():
     fix_builtin_binding("file_open_write", [tid_string], int_result)
     fix_builtin_binding("file_open_append", [tid_string], int_result)
     fix_builtin_binding("rename_file", [tid_string, tid_string], tid_bool)
+    fix_builtin_binding("os_set_env", [tid_string, tid_string], tid_bool)
     fix_builtin_binding("json_object_get", [tid_int, tid_string], tid_int)
     fix_builtin_binding("json_object_has", [tid_int, tid_string], tid_bool)
     fix_builtin_binding("write_file", [tid_string, tid_string], bool_result)
@@ -524,6 +542,8 @@ fn register_builtin_types():
     fix_builtin_binding("tcp_write_bytes", [tid_int, tid_bytes], int_result)
     fix_builtin_binding("tcp_set_timeout", [tid_int, tid_int], tid_void)
     fix_builtin_binding("process_spawn", [tid_string], int_result)
+    fix_builtin_binding("process_spawn_argv", [tid_string, list_string, tid_string, list_string, list_string], int_result)
+    fix_builtin_binding("process_output_argv", [tid_string, list_string, tid_string, list_string, list_string], int_result)
     fix_builtin_binding("process_write", [tid_int, tid_string], int_result)
     fix_builtin_binding("process_read", [tid_int, tid_int], str_result)
     fix_builtin_binding("process_read_err", [tid_int, tid_int], str_result)
@@ -533,6 +553,10 @@ fn register_builtin_types():
     fix_builtin_binding("process_wait", [tid_int], tid_int)
     fix_builtin_binding("process_kill", [tid_int], tid_bool)
     fix_builtin_binding("process_close", [tid_int], tid_void)
+    fix_builtin_binding("process_output_status", [tid_int], tid_int)
+    fix_builtin_binding("process_output_stdout", [tid_int], tid_string)
+    fix_builtin_binding("process_output_stderr", [tid_int], tid_string)
+    fix_builtin_binding("process_output_close", [tid_int], tid_void)
 
 # create a function type from param list and return type
 fn create_function_type(params: List[Int], ret: Int) -> Int:

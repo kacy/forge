@@ -1,0 +1,25 @@
+import std.os.process as process
+
+fn main() -> Int!:
+    pwd_out := process.command("pwd").cwd("/tmp").output()!
+    print(pwd_out.status.to_string())
+    print(pwd_out.stdout.trim())
+
+    env_out := process.command("env").env("FORGE_PROCESS_TEST", "hello world").output()!
+    print(env_out.stdout.contains("FORGE_PROCESS_TEST=hello world").to_string())
+
+    quiet_code := process.command("printf").arg("").run()!
+    print(quiet_code.to_string())
+
+    failing_out := process.command("ls").arg("/nonexistent_path_xyz").output()!
+    print((failing_out.status != 0).to_string())
+    print((failing_out.stderr.len() > 0).to_string())
+
+    child := process.command("head").args(["-c", "5"]).start()!
+    child.stdin().write_all("abcdef")!
+    print(child.stdout().read_all()!)
+    print(child.wait().to_string())
+    child.close()
+
+    print(process.output_shell("printf shell-ok")!)
+    return 0

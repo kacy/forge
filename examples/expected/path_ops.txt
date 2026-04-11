@@ -1,4 +1,7 @@
 /home/user/documents
+/home/user/documents/notes.txt
+/home/user/downloads
+true
 /home/user
 file.txt
 .txt
@@ -7,4 +10,5 @@ file
 file.txt
 
 noext
+alpha/gamma
 path ops work

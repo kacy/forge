@@ -39,6 +39,12 @@ struct ProcessHandle {
     stderr: Option<ChildStderr>,
 }
 
+struct ProcessOutputHandle {
+    status: i64,
+    stdout: String,
+    stderr: String,
+}
+
 struct ForgeBytes {
     data: Vec<u8>,
 }
@@ -49,6 +55,8 @@ struct ForgeByteBuffer {
 
 static PROCESS_HANDLES: OnceLock<Mutex<HashMap<i64, ProcessHandle>>> = OnceLock::new();
 static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+static PROCESS_OUTPUT_HANDLES: OnceLock<Mutex<HashMap<i64, ProcessOutputHandle>>> = OnceLock::new();
+static NEXT_PROCESS_OUTPUT_HANDLE: AtomicI64 = AtomicI64::new(1);
 static FILE_HANDLES: OnceLock<Mutex<HashMap<i64, File>>> = OnceLock::new();
 static NEXT_FILE_HANDLE: AtomicI64 = AtomicI64::new(1);
 
@@ -56,8 +64,85 @@ fn process_handles() -> &'static Mutex<HashMap<i64, ProcessHandle>> {
     PROCESS_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn process_output_handles() -> &'static Mutex<HashMap<i64, ProcessOutputHandle>> {
+    PROCESS_OUTPUT_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn file_handles() -> &'static Mutex<HashMap<i64, File>> {
     FILE_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+unsafe fn forge_optional_cstring(ptr: *const i8) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let len = crate::string::forge_cstring_len(ptr) as usize;
+    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+    std::str::from_utf8(slice).unwrap_or("").to_string()
+}
+
+unsafe fn forge_required_cstring(ptr: *const i8) -> Option<String> {
+    let text = forge_optional_cstring(ptr);
+    if text.is_empty() {
+        return None;
+    }
+    Some(text)
+}
+
+unsafe fn forge_string_list_to_vec(list: ForgeList) -> Vec<String> {
+    let len = crate::collections::list::forge_list_len(list);
+    let mut values = Vec::with_capacity(len as usize);
+    let mut i = 0;
+    while i < len {
+        let ptr = crate::collections::list::forge_list_get_value(list, i) as *const i8;
+        values.push(forge_optional_cstring(ptr));
+        i += 1;
+    }
+    values
+}
+
+fn forge_store_process_output(status: i64, stdout: String, stderr: String) -> i64 {
+    let handle = NEXT_PROCESS_OUTPUT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let entry = ProcessOutputHandle {
+        status,
+        stdout,
+        stderr,
+    };
+    process_output_handles().lock().insert(handle, entry);
+    handle
+}
+
+fn forge_strdup_string(text: &str) -> *mut i8 {
+    let owned = format!("{}\0", text);
+    unsafe { forge_strdup(owned.as_ptr() as *const i8) }
+}
+
+unsafe fn forge_build_command(
+    program: *const i8,
+    argv: ForgeList,
+    cwd: *const i8,
+    env_keys: ForgeList,
+    env_values: ForgeList,
+) -> Option<Command> {
+    let program_text = forge_required_cstring(program)?;
+    let mut command = Command::new(program_text);
+
+    for arg in forge_string_list_to_vec(argv) {
+        command.arg(arg);
+    }
+
+    let cwd_text = forge_optional_cstring(cwd);
+    if !cwd_text.is_empty() {
+        command.current_dir(cwd_text);
+    }
+
+    let keys = forge_string_list_to_vec(env_keys);
+    let values = forge_string_list_to_vec(env_values);
+    for (key, value) in keys.into_iter().zip(values.into_iter()) {
+        command.env(key, value);
+    }
+
+    Some(command)
 }
 
 unsafe fn forge_bytes_ref<'a>(handle: i64) -> Option<&'a ForgeBytes> {
@@ -706,6 +791,71 @@ pub unsafe extern "C" fn forge_mkdir(path: *const i8) -> i64 {
     0
 }
 
+/// Remove an empty directory
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_remove_dir(path: *const i8) -> i64 {
+    use std::fs;
+
+    if path.is_null() {
+        return 0;
+    }
+
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if fs::remove_dir(path_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Remove a directory tree recursively
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_remove_tree(path: *const i8) -> i64 {
+    use std::fs;
+
+    if path.is_null() {
+        return 0;
+    }
+
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if fs::remove_dir_all(path_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Read file size in bytes.
+/// Returns -1 when metadata cannot be read.
+///
+/// # Safety
+/// path must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn forge_file_size(path: *const i8) -> i64 {
+    if path.is_null() {
+        return -1;
+    }
+
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if let Ok(meta) = std::fs::metadata(path_str) {
+            return meta.len() as i64;
+        }
+    }
+    -1
+}
+
 /// Remove a file
 ///
 /// # Safety
@@ -1121,7 +1271,116 @@ pub unsafe extern "C" fn forge_env(name: *const i8) -> *const i8 {
             }
         }
     }
+    forge_strdup_string("")
+}
+
+/// Current working directory.
+///
+/// # Safety
+/// returns a heap-allocated c string pointer or null on failure
+#[no_mangle]
+pub unsafe extern "C" fn forge_os_getcwd() -> *const i8 {
+    if let Ok(path) = std::env::current_dir() {
+        if let Some(text) = path.to_str() {
+            return forge_strdup_string(text);
+        }
+    }
     std::ptr::null()
+}
+
+/// Change current working directory.
+///
+/// # Safety
+/// path must be a valid null-terminated c string
+#[no_mangle]
+pub unsafe extern "C" fn forge_os_chdir(path: *const i8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+
+    let len = crate::string::forge_cstring_len(path) as usize;
+    let slice = std::slice::from_raw_parts(path as *const u8, len);
+    if let Ok(path_str) = std::str::from_utf8(slice) {
+        if std::env::set_current_dir(path_str).is_ok() {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Return the platform temp directory.
+///
+/// # Safety
+/// returns a heap-allocated c string pointer or null on failure
+#[no_mangle]
+pub unsafe extern "C" fn forge_os_temp_dir() -> *const i8 {
+    let path = std::env::temp_dir();
+    if let Some(text) = path.to_str() {
+        return forge_strdup_string(text);
+    }
+    std::ptr::null()
+}
+
+/// Return the home directory from process environment when available.
+///
+/// # Safety
+/// returns a heap-allocated c string pointer or null when unavailable
+#[no_mangle]
+pub unsafe extern "C" fn forge_os_home_dir() -> *const i8 {
+    if let Ok(home) = std::env::var("HOME") {
+        return forge_strdup_string(&home);
+    }
+    if let Ok(home) = std::env::var("USERPROFILE") {
+        return forge_strdup_string(&home);
+    }
+    std::ptr::null()
+}
+
+/// Set an environment variable.
+///
+/// # Safety
+/// both inputs must be valid null-terminated c strings
+#[no_mangle]
+pub unsafe extern "C" fn forge_os_set_env(name: *const i8, value: *const i8) -> i64 {
+    if name.is_null() || value.is_null() {
+        return 0;
+    }
+
+    let name_len = crate::string::forge_cstring_len(name) as usize;
+    let value_len = crate::string::forge_cstring_len(value) as usize;
+    let name_slice = std::slice::from_raw_parts(name as *const u8, name_len);
+    let value_slice = std::slice::from_raw_parts(value as *const u8, value_len);
+    if let (Ok(name_str), Ok(value_str)) = (
+        std::str::from_utf8(name_slice),
+        std::str::from_utf8(value_slice),
+    ) {
+        unsafe {
+            std::env::set_var(name_str, value_str);
+        }
+        return 1;
+    }
+    0
+}
+
+/// Unset an environment variable.
+///
+/// # Safety
+/// name must be a valid null-terminated c string
+#[no_mangle]
+pub unsafe extern "C" fn forge_os_unset_env(name: *const i8) -> i64 {
+    if name.is_null() {
+        return 0;
+    }
+
+    let name_len = crate::string::forge_cstring_len(name) as usize;
+    let name_slice = std::slice::from_raw_parts(name as *const u8, name_len);
+    if let Ok(name_str) = std::str::from_utf8(name_slice) {
+        unsafe {
+            std::env::remove_var(name_str);
+        }
+        return 1;
+    }
+    0
 }
 
 /// Read a line from stdin
@@ -1155,25 +1414,18 @@ pub unsafe extern "C" fn forge_input() -> *mut i8 {
     std::ptr::null_mut()
 }
 
-/// Simple string list node for list_dir
-#[repr(C)]
-pub struct StringNode {
-    data: *mut i8,
-    next: *mut StringNode,
-}
-
 /// List directory contents
-/// Returns linked list of strings. Caller must free.
+/// Returns a Forge List[String].
 ///
 /// # Safety
 /// path must be a valid null-terminated C string
 #[no_mangle]
-pub unsafe extern "C" fn forge_list_dir(path: *const i8) -> *mut StringNode {
-    use std::alloc::{alloc, Layout};
+pub unsafe extern "C" fn forge_list_dir(path: *const i8) -> i64 {
+    use crate::collections::list::{forge_list_new, forge_list_push_value};
     use std::fs;
 
     if path.is_null() {
-        return std::ptr::null_mut();
+        return forge_list_new(8, 1).ptr as i64;
     }
 
     let len = crate::string::forge_cstring_len(path) as usize;
@@ -1181,47 +1433,20 @@ pub unsafe extern "C" fn forge_list_dir(path: *const i8) -> *mut StringNode {
     let slice = std::slice::from_raw_parts(path as *const u8, len);
     if let Ok(path_str) = std::str::from_utf8(slice) {
         if let Ok(entries) = fs::read_dir(path_str) {
-            let mut head: *mut StringNode = std::ptr::null_mut();
-            let mut tail: *mut StringNode = std::ptr::null_mut();
+            let list = forge_list_new(8, 1);
 
             for entry in entries {
                 if let Ok(entry) = entry {
                     if let Some(name) = entry.file_name().to_str() {
-                        let name_len = name.len();
-                        let name_layout = Layout::from_size_align(name_len + 1, 1).unwrap();
-                        let name_ptr = alloc(name_layout) as *mut i8;
-
-                        if !name_ptr.is_null() {
-                            std::ptr::copy_nonoverlapping(
-                                name.as_ptr(),
-                                name_ptr as *mut u8,
-                                name_len,
-                            );
-                            *name_ptr.add(name_len) = 0;
-
-                            let node_layout = Layout::new::<StringNode>();
-                            let node_ptr = alloc(node_layout) as *mut StringNode;
-
-                            if !node_ptr.is_null() {
-                                (*node_ptr).data = name_ptr;
-                                (*node_ptr).next = std::ptr::null_mut();
-
-                                if head.is_null() {
-                                    head = node_ptr;
-                                    tail = node_ptr;
-                                } else {
-                                    (*tail).next = node_ptr;
-                                    tail = node_ptr;
-                                }
-                            }
-                        }
+                        let name_ptr = forge_strdup_string(name) as i64;
+                        forge_list_push_value(list, name_ptr);
                     }
                 }
             }
-            return head;
+            return list.ptr as i64;
         }
     }
-    std::ptr::null_mut()
+    forge_list_new(8, 1).ptr as i64
 }
 
 /// Execute a command and return exit code
@@ -2543,6 +2768,94 @@ pub unsafe extern "C" fn forge_process_spawn(cmd: *const i8) -> i64 {
     } else {
         0
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_process_spawn_argv(
+    program: *const i8,
+    argv: ForgeList,
+    cwd: *const i8,
+    env_keys: ForgeList,
+    env_values: ForgeList,
+) -> i64 {
+    let Some(mut command) = forge_build_command(program, argv, cwd, env_keys, env_values) else {
+        return 0;
+    };
+
+    match command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(mut child) => {
+            let handle = NEXT_PROCESS_HANDLE.fetch_add(1, Ordering::Relaxed);
+            let entry = ProcessHandle {
+                stdin: child.stdin.take(),
+                stdout: child.stdout.take(),
+                stderr: child.stderr.take(),
+                child,
+            };
+            process_handles().lock().insert(handle, entry);
+            handle
+        }
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_process_output_argv(
+    program: *const i8,
+    argv: ForgeList,
+    cwd: *const i8,
+    env_keys: ForgeList,
+    env_values: ForgeList,
+) -> i64 {
+    let Some(mut command) = forge_build_command(program, argv, cwd, env_keys, env_values) else {
+        return 0;
+    };
+
+    match command.output() {
+        Ok(output) => {
+            let status = output.status.code().unwrap_or(-1) as i64;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            forge_store_process_output(status, stdout, stderr)
+        }
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn forge_process_output_status(handle: i64) -> i64 {
+    let outputs = process_output_handles().lock();
+    let Some(entry) = outputs.get(&handle) else {
+        return -1;
+    };
+    entry.status
+}
+
+#[no_mangle]
+pub extern "C" fn forge_process_output_close(handle: i64) {
+    process_output_handles().lock().remove(&handle);
+}
+
+#[no_mangle]
+pub extern "C" fn forge_process_output_stdout(handle: i64) -> *mut i8 {
+    let outputs = process_output_handles().lock();
+    let Some(entry) = outputs.get(&handle) else {
+        return std::ptr::null_mut();
+    };
+    forge_strdup_string(&entry.stdout)
+}
+
+#[no_mangle]
+pub extern "C" fn forge_process_output_stderr(handle: i64) -> *mut i8 {
+    let outputs = process_output_handles().lock();
+    let Some(entry) = outputs.get(&handle) else {
+        return std::ptr::null_mut();
+    };
+    forge_strdup_string(&entry.stderr)
 }
 
 /// Execute command and capture output — returns stdout as C string

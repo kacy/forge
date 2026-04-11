@@ -1,21 +1,39 @@
-# process management
+# process management with std.os.process
 
-import std.io as io
+import std.os as os
+import std.os.process as process
 
-fn main() -> String!:
-    # spawn echo command
-    child_process := io.spawn_process("echo hello from child")!
-    output := child_process.stdout().read_all()!
-    exit_code := child_process.wait()
-    child_process.close()
-    print("output: " + output.trim())
-    print("exit code: " + exit_code.to_string())
+fn main() -> Int!:
+    print("which sh: {(os.which("sh") != "")}")
 
-    # spawn a command that produces stderr
-    failing_process := io.spawn_process("ls /nonexistent_path_xyz")!
-    error_output := failing_process.stderr().read_all()!
-    failing_exit_code := failing_process.wait()
-    failing_process.close()
-    print("stderr: " + (error_output.len() > 0).to_string())
-    print("ls failed: " + (failing_exit_code != 0).to_string())
-    return ""
+    pwd_out := process.command("pwd").cwd("/tmp").output()!
+    pwd_status := pwd_out.status
+    pwd_text := pwd_out.stdout.trim()
+    print("pwd status: {pwd_status}")
+    print("pwd: {pwd_text}")
+
+    env_out := process.command("env").env("FORGE_PROCESS_EXAMPLE", "hello world").output()!
+    env_seen := env_out.stdout.contains("FORGE_PROCESS_EXAMPLE=hello world")
+    print("env seen: {env_seen}")
+
+    quiet_code := process.command("printf").arg("").run()!
+    print("quiet run: {quiet_code}")
+
+    failing_out := process.command("ls").arg("/nonexistent_path_xyz").output()!
+    has_stderr := failing_out.stderr.len() > 0
+    ls_failed := failing_out.status != 0
+    print("stderr: {has_stderr}")
+    print("ls failed: {ls_failed}")
+
+    child := process.command("head").args(["-c", "5"]).start()!
+    child.stdin().write_all("abcdef")!
+    streamed := child.stdout().read_all()!
+    child_exit := child.wait()
+    print("streamed: {streamed}")
+    print("child exit: {child_exit}")
+    child.close()
+
+    shell_command := "printf shell-ok"
+    shell_output := process.output_shell(shell_command)!
+    print("shell output: {shell_output}")
+    return 0

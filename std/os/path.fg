@@ -1,78 +1,146 @@
 # std.os.path — file path manipulation
 #
-# Pure string operations for manipulating file paths — no filesystem access.
-# Handles forward slashes only (Unix-style paths).
+# pure string operations for manipulating file paths.
+# handles forward slashes only (unix-style paths).
 #
-#   from std.os.path import join, ext, base, dir
+#   from std.os.path import join, join_all, clean, ext, base, dir
 #   join("src", "main.fg")     # "src/main.fg"
+#   join_all(["src", "pkg", "main.fg"])  # "src/pkg/main.fg"
+#   clean("src//pkg/./main.fg")          # "src/pkg/main.fg"
 #   ext("main.fg")            # ".fg"
 #   base("/home/user/file.txt")  # "file.txt"
 #   dir("/home/user/file.txt")   # "/home/user"
+
+fn trim_trailing_slashes(path: String) -> String:
+    if path.len() == 0:
+        return ""
+    mut end := path.len()
+    while end > 1 and path[end - 1] == "/":
+        end = end - 1
+    return path.substring(0, end)
+
+fn normalize_segments(parts: List[String], absolute: Bool) -> List[String]:
+    mut stack: List[String] := []
+    for part in parts:
+        if part == "" or part == ".":
+            continue
+        if part == "..":
+            if stack.len() > 0 and stack[stack.len() - 1] != "..":
+                stack.remove(stack.len() - 1)
+            else:
+                if not absolute:
+                    stack.push("..")
+            continue
+        stack.push(part)
+    return stack
+
+pub fn is_abs(path: String) -> Bool:
+    return path.starts_with("/")
 
 # ===============================================================
 # Path Joining
 # ===============================================================
 
-# Joins two path segments with a slash, handling edge cases.
-# Strips trailing slashes from the first segment and leading slashes from the second.
-# Returns the second segment if the first is empty, and vice versa.
+# joins two path segments with a slash, handling edge cases.
 pub fn join(first_segment: String, second_segment: String) -> String:
     if first_segment.len() == 0:
         return second_segment
     if second_segment.len() == 0:
         return first_segment
-    # strip trailing slashes from first_segment
+
     mut first_len := first_segment.len()
     while first_len > 0 and first_segment[first_len - 1] == "/":
         first_len = first_len - 1
-    # strip leading slashes from second_segment
+
     mut second_start := 0
     while second_start < second_segment.len() and second_segment[second_start] == "/":
         second_start = second_start + 1
+
     return first_segment.substring(0, first_len) + "/" + second_segment.substring(second_start, second_segment.len())
+
+pub fn join_all(parts: List[String]) -> String:
+    if parts.len() == 0:
+        return ""
+    mut joined := parts[0]
+    mut i := 1
+    while i < parts.len():
+        joined = join(joined, parts[i])
+        i = i + 1
+    return joined
+
+pub fn clean(path: String) -> String:
+    if path.len() == 0:
+        return "."
+
+    absolute := path.starts_with("/")
+    parts := normalize_segments(path.split("/"), absolute)
+    mut cleaned := parts.join("/")
+    if absolute:
+        cleaned = "/" + cleaned
+    cleaned = trim_trailing_slashes(cleaned)
+    if cleaned == "":
+        if absolute:
+            return "/"
+        return "."
+    if cleaned.starts_with("/.."):
+        return "/"
+    return cleaned
 
 # ===============================================================
 # Path Components
 # ===============================================================
 
-# Returns the directory portion of a path (everything before the last slash).
-# Returns "/" for root paths, "." for paths with no directory.
+# returns the directory portion of a path.
 pub fn dir(path: String) -> String:
-    mut i := path.len() - 1
+    trimmed := trim_trailing_slashes(path)
+    if trimmed.len() == 0:
+        return "."
+    if trimmed == "/":
+        return "/"
+
+    mut i := trimmed.len() - 1
     while i >= 0:
-        if path[i] == "/":
+        if trimmed[i] == "/":
             if i == 0:
                 return "/"
-            return path.substring(0, i)
+            return trimmed.substring(0, i)
         i = i - 1
     return "."
 
-# Returns the last component of a path (the filename).
-# Returns the full path if no slashes are present.
+# returns the last component of a path.
 pub fn base(path: String) -> String:
-    mut i := path.len() - 1
-    while i >= 0:
-        if path[i] == "/":
-            return path.substring(i + 1, path.len())
-        i = i - 1
-    return path
+    trimmed := trim_trailing_slashes(path)
+    if trimmed.len() == 0:
+        return ""
+    if trimmed == "/":
+        return "/"
 
-# Returns the file extension including the leading dot.
-# Returns empty string if no extension or if the path ends in a slash.
-pub fn ext(path: String) -> String:
-    mut i := path.len() - 1
+    mut i := trimmed.len() - 1
     while i >= 0:
-        if path[i] == "/":
-            return ""
-        if path[i] == ".":
-            return path.substring(i, path.len())
+        if trimmed[i] == "/":
+            return trimmed.substring(i + 1, trimmed.len())
+        i = i - 1
+    return trimmed
+
+# returns the file extension including the leading dot.
+pub fn ext(path: String) -> String:
+    base_name := base(path)
+    if base_name.len() == 0 or base_name == "/":
+        return ""
+
+    mut i := base_name.len() - 1
+    while i >= 0:
+        if base_name[i] == ".":
+            return base_name.substring(i, base_name.len())
         i = i - 1
     return ""
 
-# Returns the filename without its extension.
-# Returns the full base name if no extension is found.
+# returns the filename without its extension.
 pub fn stem(path: String) -> String:
     b := base(path)
+    if b.len() == 0 or b == "/":
+        return b
+
     mut i := b.len() - 1
     while i > 0:
         if b[i] == ".":

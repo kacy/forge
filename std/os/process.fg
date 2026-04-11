@@ -1,66 +1,113 @@
-# std.os.process — child process management
+# std.os.process — structured child process management
 #
-# Spawn and manage child processes with stdin/stdout/stderr access.
-# Uses opaque Int handles into a C-side process pool.
+# use command(...) for the main api:
 #
-#   from std.os.process import spawn, read_stdout, wait, close
-#   handle := spawn("ls -la")!
-#   output := read_stdout(handle, 4096)!
-#   code := wait(handle)
-#   close(handle)
+#   import std.os.process as process
+#   out := process.command("pwd").cwd("/tmp").output()!
+#   print("cwd: {out.stdout.trim()}")
+#
+# shell-string helpers still exist as compatibility paths:
+#
+#   code := process.run_shell("ls -la")
 
-# ===============================================================
-# Process Lifecycle
-# ===============================================================
+from std.io import ProcessStdin, ProcessStdout, ProcessStderr
 
-# Spawns a child process by command string.
-# The command is passed to the shell for execution.
-# Returns a handle to the process or fails if spawn fails.
-pub fn spawn(command: String) -> Int!:
-    return process_spawn(command)
+pub struct Command:
+    pub program: String
+    pub argv: List[String]
+    pub cwd_path: String
+    pub env_keys: List[String]
+    pub env_values: List[String]
 
-# Waits for the child process to exit and returns its exit code.
-# Blocks until the process terminates.
-pub fn wait(handle: Int) -> Int:
-    return process_wait(handle)
+pub struct Process:
+    pub handle: Int
 
-# Sends SIGTERM to the child process to request termination.
-# Returns true if the signal was successfully sent.
-pub fn kill(handle: Int) -> Bool:
-    return process_kill(handle)
+pub struct Output:
+    pub status: Int
+    pub stdout: String
+    pub stderr: String
 
-# Closes all pipe file descriptors for this process.
-# Should be called after the process completes to free resources.
-pub fn close(handle: Int):
-    process_close(handle)
+fn copy_string_list(items: List[String]) -> List[String]:
+    mut copied: List[String] := []
+    for item in items:
+        copied.push(item)
+    return copied
 
-# ===============================================================
-# Process I/O
-# ===============================================================
+pub fn command(program: String) -> Command:
+    return Command(program, [], "", [], [])
 
-# Writes data to the child's stdin.
-# Returns the number of bytes written or fails on error.
-pub fn write_stdin(handle: Int, data: String) -> Int!:
-    return process_write(handle, data)
+impl Command:
+    fn arg(value: String) -> Command:
+        argv := copy_string_list(self.argv)
+        argv.push(value)
+        return Command(self.program, argv, self.cwd_path, copy_string_list(self.env_keys), copy_string_list(self.env_values))
 
-# Reads up to max_bytes from the child's stdout.
-# Returns the data read or fails on error.
-pub fn read_stdout(handle: Int, max_bytes: Int) -> String!:
-    return process_read(handle, max_bytes)
+    fn args(values: List[String]) -> Command:
+        argv := copy_string_list(self.argv)
+        for value in values:
+            argv.push(value)
+        return Command(self.program, argv, self.cwd_path, copy_string_list(self.env_keys), copy_string_list(self.env_values))
 
-# Reads up to max_bytes from the child's stderr.
-# Returns the data read or fails on error.
-pub fn read_stderr(handle: Int, max_bytes: Int) -> String!:
-    return process_read_err(handle, max_bytes)
+    fn env(name: String, value: String) -> Command:
+        keys := copy_string_list(self.env_keys)
+        values := copy_string_list(self.env_values)
+        idx := keys.index_of(name)
+        if idx >= 0:
+            values[idx] = value
+        else:
+            keys.push(name)
+            values.push(value)
+        return Command(self.program, copy_string_list(self.argv), self.cwd_path, keys, values)
 
-# ===============================================================
-# Simple execution (no handle management)
-# ===============================================================
+    fn cwd(path: String) -> Command:
+        return Command(self.program, copy_string_list(self.argv), path, copy_string_list(self.env_keys), copy_string_list(self.env_values))
 
-# Run a shell command and return its exit code
-pub fn run(command: String) -> Int:
-    return exec(command)
+    fn start() -> Process!:
+        return start(self)
 
-# Run a shell command and return its stdout output as a string
-pub fn output(command: String) -> String:
-    return exec_output(command)
+    fn run() -> Int!:
+        return run(self)
+
+    fn output() -> Output!:
+        return output(self)
+
+pub fn start(cmd: Command) -> Process!:
+    handle := process_spawn_argv(cmd.program, cmd.argv, cmd.cwd_path, cmd.env_keys, cmd.env_values)!
+    return Process(handle)
+
+pub fn run(cmd: Command) -> Int!:
+    return output(cmd)!.status
+
+pub fn output(cmd: Command) -> Output!:
+    handle := process_output_argv(cmd.program, cmd.argv, cmd.cwd_path, cmd.env_keys, cmd.env_values)!
+    out := Output(process_output_status(handle), process_output_stdout(handle), process_output_stderr(handle))
+    process_output_close(handle)
+    return out
+
+impl Process:
+    fn stdin() -> ProcessStdin:
+        return ProcessStdin(self.handle)
+
+    fn stdout() -> ProcessStdout:
+        return ProcessStdout(self.handle)
+
+    fn stderr() -> ProcessStderr:
+        return ProcessStderr(self.handle)
+
+    fn wait() -> Int:
+        return process_wait(self.handle)
+
+    fn kill() -> Bool:
+        return process_kill(self.handle)
+
+    fn close():
+        process_close(self.handle)
+
+pub fn start_shell(command_text: String) -> Process!:
+    return Process(process_spawn(command_text)!)
+
+pub fn run_shell(command_text: String) -> Int:
+    return exec(command_text)
+
+pub fn output_shell(command_text: String) -> String!:
+    return exec_output(command_text)

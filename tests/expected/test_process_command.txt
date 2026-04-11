@@ -1,0 +1,9 @@
+0
+/tmp
+true
+0
+true
+true
+abcde
+0
+shell-ok

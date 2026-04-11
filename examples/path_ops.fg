@@ -5,6 +5,9 @@ fn main():
     # join
     joined := path.join("/home/user", "documents")
     print(joined)
+    print(path.join_all(["/home", "user", "documents", "notes.txt"]))
+    print(path.clean("/home/user//docs/../downloads/"))
+    print(path.is_abs("/home/user").to_string())
 
     # dir
     directory_path := path.dir("/home/user/file.txt")
@@ -27,5 +30,5 @@ fn main():
     print(path.base("file.txt"))
     print(path.ext("noext"))
     print(path.stem("noext"))
-
+    print(path.clean("alpha/./beta/../gamma"))
     print("path ops work")

@@ -1,0 +1,14 @@
+/tmp/forge_fs_path_ops/alpha/beta
+alpha/beta/gamma
+true
+file.txt
+/tmp/demo
+.txt
+file
+true
+hello path
+xyz
+xyz
+hello path!
+true
+true
