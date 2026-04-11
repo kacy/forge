@@ -1,18 +1,18 @@
-## std.time — time and delay utilities
-##
-## Functions:
-##   now() -> Int           Unix timestamp in milliseconds
-##   sleep(ms: Int)         Sleep for given milliseconds
-##   format(fmt: String) -> String  Format current time
+# std.time — time and delay utilities
+#
+# functions:
+#   now() -> Int                 unix timestamp in milliseconds
+#   delay(ms: Int)               sleep for the given milliseconds
+#   format_now() -> String       format the current time
 
-## Return current Unix timestamp in milliseconds
+# return current unix timestamp in milliseconds
 pub fn now() -> Int:
     return time()
 
-## Sleep for the given number of milliseconds
+# sleep for the given number of milliseconds
 pub fn delay(ms: Int):
     sleep(ms)
 
-## Format the current time as a human-readable string
+# format the current time as a human-readable string
 pub fn format_now() -> String:
-    return format_time()
+    return format_time(time(), "")

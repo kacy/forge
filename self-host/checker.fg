@@ -2620,6 +2620,11 @@ fn check_method_call(node: Node, scope_id: Int) -> Int:
         if is_error_type(ch_result) == false:
             return ch_result
 
+    if recv_info.kind == "task":
+        task_result := check_task_method_call(method_name, recv_info, arg_indices, scope_id)
+        if is_error_type(task_result) == false:
+            return task_result
+
     # sync primitive methods
     if recv_info.kind == "struct":
         sync_result := check_sync_primitive_method_call(recv_info.name, method_name, arg_indices, scope_id)
@@ -2981,6 +2986,12 @@ fn check_channel_method_call(method: String, info: TypeInfo, args: List[Int], sc
         # recv() returns T? (optional of inner type)
         expect_no_arguments("Channel.recv", args)
         return add_type_info(ti_optional(inner))
+    if method == "try_send":
+        expect_one_typed_argument("Channel.try_send", args, inner, scope_id)
+        return tid_bool
+    if method == "try_recv":
+        expect_no_arguments("Channel.try_recv", args)
+        return add_type_info(ti_optional(inner))
     if method == "close":
         expect_no_arguments("Channel.close", args)
         return tid_bool
@@ -2990,6 +3001,18 @@ fn check_channel_method_call(method: String, info: TypeInfo, args: List[Int], sc
     if method == "cap":
         expect_no_arguments("Channel.cap", args)
         return tid_int
+    return tid_err
+
+fn check_task_method_call(method: String, info: TypeInfo, args: List[Int], scope_id: Int) -> Int:
+    tid_bool := lookup_type_id("Bool")
+    tid_void := lookup_type_id("Void")
+    tid_err := lookup_type_id("<error>")
+    if method == "is_done":
+        expect_no_arguments("Task.is_done", args)
+        return tid_bool
+    if method == "detach":
+        expect_no_arguments("Task.detach", args)
+        return tid_void
     return tid_err
 
 fn expect_no_arguments(method: String, args: List[Int]):

@@ -88,6 +88,36 @@ pub unsafe extern "C" fn forge_channel_send(handle: i64, value: i64) -> i64 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn forge_channel_try_send(handle: i64, value: i64) -> i64 {
+    if handle == 0 {
+        return 0;
+    }
+    let channel = &*(handle as *mut ForgeChannelHandle);
+    let (lock, cvar) = &**channel;
+    let mut state = lock.lock().unwrap();
+
+    if state.closed {
+        return 0;
+    }
+
+    if state.capacity == 0 {
+        if state.receiver_waiting == 0 || state.pending_value.is_some() {
+            return 0;
+        }
+        state.pending_value = Some(value);
+        cvar.notify_all();
+        1
+    } else {
+        if state.queue.len() >= state.capacity {
+            return 0;
+        }
+        state.queue.push_back(value);
+        cvar.notify_all();
+        1
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn forge_channel_recv(handle: i64) -> i64 {
     if handle == 0 {
         return optional_tuple(false, 0);
@@ -118,6 +148,28 @@ pub unsafe extern "C" fn forge_channel_recv(handle: i64) -> i64 {
         state = cvar.wait(state).unwrap();
         state.receiver_waiting -= 1;
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_channel_try_recv(handle: i64) -> i64 {
+    if handle == 0 {
+        return optional_tuple(false, 0);
+    }
+    let channel = &*(handle as *mut ForgeChannelHandle);
+    let (lock, cvar) = &**channel;
+    let mut state = lock.lock().unwrap();
+
+    if let Some(value) = state.queue.pop_front() {
+        cvar.notify_all();
+        return optional_tuple(true, value);
+    }
+    if state.capacity == 0 {
+        if let Some(value) = state.pending_value.take() {
+            cvar.notify_all();
+            return optional_tuple(true, value);
+        }
+    }
+    optional_tuple(false, 0)
 }
 
 #[no_mangle]

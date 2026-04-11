@@ -147,6 +147,9 @@ fn rewrite_prefixed_import_line(line: String, declared: DeclaredIrNames, module_
             rewritten = "callv " + import_target_name(module_path, parts[1])
             if parts.len() > 2:
                 rewritten = rewritten + " " + join_from(parts, 2)
+    elif parts.len() >= 3 and parts[0] == "closure_ref":
+        if declared.function_set.contains_key(parts[2]):
+            rewritten = "closure_ref " + parts[1] + " " + import_target_name(module_path, parts[2])
     return rewritten
 
 fn rename_import_ir(ir: String, module_path: String, module_index: Int) -> RenamedImport:

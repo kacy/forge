@@ -1,0 +1,59 @@
+import std.concurrent as concurrent
+import std.time as time
+from std.concurrent import await_ctx, WaitError
+
+fn slow_value(ms: Int, value: Int) -> Int:
+    time.delay(ms)
+    return value
+
+fn main():
+    buffered := Channel[Int](1)
+    print("try-send1:{buffered.try_send(4)}")
+    print("try-send2:{buffered.try_send(5)}")
+
+    first := buffered.try_recv()
+    if first == none:
+        print("try-recv1:none")
+    else:
+        print("try-recv1:{first?}")
+    buffered.try_recv()
+    print("try-recv2-called:true")
+
+    quick := spawn slow_value(5, 9)
+    print("done-before:{quick.is_done()}")
+    time.delay(10)
+    print("done-after:{quick.is_done()}")
+    print("await:{await quick}")
+
+    detached := spawn slow_value(1, 3)
+    detached.detach()
+    time.delay(5)
+    print("detached-done:{detached.is_done()}")
+
+    cancel_pair := concurrent.with_cancel(concurrent.background())
+    cancel_ctx := cancel_pair.0
+    cancel_token := cancel_pair.1
+    cancel_token.cancel()
+    cancel_ctx.done().recv()
+    print("cancelled:{cancel_ctx.is_cancelled()}")
+
+    after_ch := concurrent.after(5)
+    after_first := after_ch.recv()
+    print("after-first:{after_first != none}")
+    after_ch.recv()
+    print("after-second-called:true")
+
+    ticker := concurrent.ticker(5)
+    tick_a := ticker.channel().recv()
+    tick_b := ticker.channel().recv()
+    print("ticker-a:{tick_a != none}")
+    print("ticker-b:{tick_b != none}")
+    ticker.stop()
+
+    timeout_pair := concurrent.with_timeout(concurrent.background(), 5)
+    timeout_ctx := timeout_pair.0
+    timeout_task := spawn slow_value(20, 7)
+    timeout_result := await_ctx(timeout_task, timeout_ctx)
+    print("await-timeout:{timeout_result.is_err}")
+    print("await-deadline:{timeout_result.err == WaitError.DeadlineExceeded}")
+    await timeout_task
