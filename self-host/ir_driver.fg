@@ -2,7 +2,7 @@ from lexer import lex_all
 from parser import parse_with_file, parser_diagnostics, parser_has_errors
 from ast import reset_arena, get_node
 from ir_emitter import emit_ir, set_import_roots, set_test_mode
-from driver import init_driver, resolve_imports, get_driver_parse_diagnostics, driver_has_parse_errors, get_resolved_module_path
+from driver import init_driver, resolve_imports, get_driver_parse_diagnostics, driver_has_parse_errors, get_resolved_module_path, find_imports
 from checker import initialize_checker, c_run_module
 from errors import render_diagnostics, has_errors
 
@@ -57,12 +57,12 @@ fn ir_lines(text: String) -> List[String]:
         start = end + 1
     return lines
 
-fn remove_main_from_import(ir: String) -> String:
+fn remove_main_from_import_lines(lines: List[String]) -> List[String]:
     # imported modules can define their own main, but the combined IR should
     # only keep the root module entry point.
     mut out: List[String] := []
     mut skipping := false
-    for line in ir_lines(ir):
+    for line in lines:
         trimmed := line.trim()
         if trimmed.starts_with("func main "):
             skipping = true
@@ -70,14 +70,14 @@ fn remove_main_from_import(ir: String) -> String:
             skipping = false
         elif not skipping:
             out.push(line)
-    return out.join(chr(10))
+    return out
 
-fn collect_declared_ir_names(ir: String) -> DeclaredIrNames:
+fn collect_declared_ir_names_from_lines(lines: List[String]) -> DeclaredIrNames:
     mut globals: List[String] := []
     mut global_set: Map[String, Bool] := {}
     mut functions: List[String] := []
     mut function_set: Map[String, Bool] := {}
-    for line in ir_lines(ir):
+    for line in lines:
         parts := line.split(" ")
         if parts.len() >= 2 and parts[0] == "global":
             globals.push(parts[1])
@@ -143,19 +143,19 @@ fn rewrite_line_with_import_maps(line: String, global_map: Map[String, String], 
     return rewritten
 
 fn rename_import_ir(ir: String, module_index: Int) -> RenamedImport:
-    trimmed_ir := remove_main_from_import(ir)
+    trimmed_lines := remove_main_from_import_lines(ir_lines(ir))
     prefix := "m" + module_index.to_string() + "_"
-    declared := collect_declared_ir_names(trimmed_ir)
+    declared := collect_declared_ir_names_from_lines(trimmed_lines)
     init_funcs := collect_import_init_funcs(declared.functions, prefix, module_index)
 
     mut out: List[String] := []
-    for line in ir_lines(trimmed_ir):
+    for line in trimmed_lines:
         out.push(rewrite_prefixed_import_line(line, declared, prefix, module_index))
     return RenamedImport(out.join(chr(10)), declared.globals, declared.functions, init_funcs)
 
-fn collect_main_func_names(main_ir: String) -> Map[String, Bool]:
+fn collect_main_func_names_from_lines(lines: List[String]) -> Map[String, Bool]:
     mut func_names: Map[String, Bool] := {}
-    for line in ir_lines(main_ir):
+    for line in lines:
         parts := line.split(" ")
         if parts.len() >= 2 and parts[0] == "func":
             func_names.insert(parts[1], true)
@@ -196,9 +196,10 @@ fn rewrite_ir_with_import_maps(ir: String, global_map: Map[String, String], func
     return out.join(chr(10))
 
 fn rewrite_main_ir(main_ir: String, imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]) -> String:
-    main_func_names := collect_main_func_names(main_ir)
+    main_lines := ir_lines(main_ir)
+    main_func_names := collect_main_func_names_from_lines(main_lines)
     mut out: List[String] := []
-    for line in ir_lines(main_ir):
+    for line in main_lines:
         parts := line.split(" ")
         out.push(rewrite_main_line(line, main_func_names, imported_global_map, imported_function_map))
         if parts.len() >= 2 and parts[0] == "func" and parts[1] == "main":
@@ -251,8 +252,9 @@ fn validate_call_retkind(line_no: Int, parts: List[String], struct_names: Map[St
 fn validate_combined_ir_contract(ir: String):
     mut func_kinds: Map[String, String] := {}
     mut struct_names: Map[String, Bool] := {}
+    lines := ir_lines(ir)
     mut line_no := 1
-    for line in ir_lines(ir):
+    for line in lines:
         parts := line.split(" ")
         if parts.len() >= 2 and parts[0] == "struct":
             struct_names.insert(parts[1], true)
@@ -260,7 +262,7 @@ fn validate_combined_ir_contract(ir: String):
         line_no = line_no + 1
 
     line_no = 1
-    for line in ir_lines(ir):
+    for line in lines:
         parts := line.split(" ")
         validate_call_retkind(line_no, parts, struct_names)
         line_no = line_no + 1
@@ -331,6 +333,35 @@ fn configure_emitter(import_roots: List[Int], emit_tests: Bool):
     set_import_roots(import_roots, import_paths)
     set_test_mode(emit_tests)
 
+fn module_root_map(import_roots: List[Int]) -> Map[String, Int]:
+    mut roots_by_path: Map[String, Int] := {}
+    mut i := 0
+    while i < import_roots.len():
+        roots_by_path.insert(get_resolved_module_path(import_roots[i]), import_roots[i])
+        i = i + 1
+    return roots_by_path
+
+fn collect_module_dependencies(root: Int, roots_by_path: Map[String, Int], seen: Map[String, Bool]) -> List[Int]:
+    mut deps: List[Int] := []
+    for mod_path in find_imports(root):
+        if not roots_by_path.contains_key(mod_path):
+            continue
+        if seen.contains_key(mod_path):
+            continue
+        seen.insert(mod_path, true)
+        dep_root := roots_by_path[mod_path]
+        subdeps := collect_module_dependencies(dep_root, roots_by_path, seen)
+        for subdep in subdeps:
+            deps.push(subdep)
+        deps.push(dep_root)
+    return deps
+
+fn module_dependency_roots(root: Int, import_roots: List[Int], roots_by_path: Map[String, Int]) -> List[Int]:
+    if import_roots.len() == 0:
+        return []
+    mut seen: Map[String, Bool] := {}
+    return collect_module_dependencies(root, roots_by_path, seen)
+
 fn emit_module_ir(root: Int, import_roots: List[Int], emit_tests: Bool) -> String:
     configure_emitter(import_roots, emit_tests)
     return emit_ir(root)
@@ -350,10 +381,10 @@ fn record_import_name_maps(renamed: RenamedImport, module_index: Int, imported_g
     for init_func in renamed.init_funcs:
         imported_init_funcs.push(init_func)
 
-fn emit_imported_module_ir(root: Int, import_roots: List[Int], module_index: Int, imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]) -> String:
+fn emit_imported_module_ir(root: Int, module_deps: List[Int], module_index: Int, imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]) -> String:
     # imported modules are emitted in isolation, then rewritten once the
     # already-seen global/function maps are known.
-    ir := emit_module_ir(root, import_roots, false)
+    ir := emit_module_ir(root, module_deps, false)
     renamed := rename_import_ir(ir, module_index)
     rewritten_ir := rewrite_ir_with_import_maps(renamed.ir, imported_global_map, imported_function_map)
     record_import_name_maps(renamed, module_index, imported_global_map, imported_function_map, imported_init_funcs)
@@ -365,12 +396,14 @@ fn should_skip_imported_module(module_root: Int) -> Bool:
 
 fn collect_imported_ir(import_roots: List[Int], imported_global_map: Map[String, String], imported_function_map: Map[String, String], imported_init_funcs: List[String]) -> List[String]:
     mut all_ir: List[String] := []
+    roots_by_path := module_root_map(import_roots)
     mut i := 0
     while i < import_roots.len():
         if should_skip_imported_module(import_roots[i]):
             i = i + 1
             continue
-        all_ir.push(emit_imported_module_ir(import_roots[i], import_roots, i, imported_global_map, imported_function_map, imported_init_funcs))
+        module_deps := module_dependency_roots(import_roots[i], import_roots, roots_by_path)
+        all_ir.push(emit_imported_module_ir(import_roots[i], module_deps, i, imported_global_map, imported_function_map, imported_init_funcs))
         i = i + 1
     return all_ir
 
