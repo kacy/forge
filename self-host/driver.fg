@@ -79,7 +79,7 @@ pub fn find_imports(root_idx: Int) -> List[String]:
     return imports
 
 # global visited map for diamond import dedup.
-# must be global because collections are passed by copy in forge.
+# keep it global so the recursive import walk can mutate one shared map.
 mut visited_files: Map[String, Bool] := {}
 
 # global checking map for cycle detection.

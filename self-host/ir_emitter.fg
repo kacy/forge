@@ -11,6 +11,7 @@
 #   iconst REG VALUE                    — integer constant
 #   strref REG STRIDX                   — reference to string data
 #   call REG FNAME RETTYPE NARGS ARG... — function call
+#   closure_ref REG FNAME               — closure handle for a lambda function
 #   callv FNAME NARGS ARG...            — void call (no return)
 #   add REG A B                         — integer add
 #   sub REG A B                         — integer sub
@@ -316,22 +317,97 @@ fn ir_is_string_literal_kind(kind: String) -> Bool:
 fn ir_string_symbol_name(index: Int) -> String:
     return "m" + ir_module_count.to_string() + "s" + index.to_string()
 
+fn ir_should_capture_name(name: String, bound: List[String], free: List[String]) -> Bool:
+    if ir_list_contains(bound, name) or ir_list_contains(free, name):
+        return false
+    if ir_module_aliases.contains_key(name):
+        return false
+    if ir_import_renames.contains_key(name):
+        return false
+    return ir_known_callable_return_type(name).len() == 0
+
+fn ir_copy_names(names: List[String]) -> List[String]:
+    mut copy: List[String] := []
+    mut i := 0
+    while i < names.len():
+        copy.push(names[i])
+        i = i + 1
+    return copy
+
+fn ir_csv_contains(csv: String, name: String) -> Bool:
+    if name.len() == 0:
+        return false
+    items := csv.split(",")
+    mut i := 0
+    while i < items.len():
+        if items[i] == name:
+            return true
+        i = i + 1
+    return false
+
+fn ir_is_float_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(FLOAT_RETURNING_FUNCS, fname)
+
+fn ir_is_bool_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(BOOL_RETURNING_FUNCS, fname)
+
+fn ir_is_int_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(INT_RETURNING_FUNCS, fname)
+
+fn ir_is_string_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(STRING_RETURNING_FUNCS, fname)
+
+fn ir_is_bytes_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(BYTES_RETURNING_FUNCS, fname)
+
+fn ir_is_list_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(LIST_RETURNING_FUNCS, fname)
+
+fn ir_is_list_string_returning_func(fname: String) -> Bool:
+    return ir_csv_contains(LIST_STRING_RETURNING_FUNCS, fname)
+
+fn ir_is_bool_returning_method(meth: String) -> Bool:
+    return ir_csv_contains(BOOL_RETURNING_METHODS, meth)
+
+fn ir_is_void_method(meth: String) -> Bool:
+    return ir_csv_contains(VOID_METHODS, meth)
+
+fn ir_is_string_returning_method(meth: String) -> Bool:
+    return ir_csv_contains(STRING_RETURNING_METHODS, meth)
+
+fn ir_find_free_vars_walk(idx: Int, bound: List[String], free: List[String]):
+    node := get_node(idx)
+    if node.kind == "ident":
+        name := node.value
+        if ir_should_capture_name(name, bound, free):
+            free.push(name)
+        return
+    if node.kind == "lambda":
+        inner_bound := ir_copy_names(bound)
+        mut i := 0
+        while i < node.children.len():
+            child := node.children[i]
+            cn := get_node(child)
+            if cn.kind == "param":
+                inner_bound.push(cn.value)
+            i = i + 1
+        i = 0
+        while i < node.children.len():
+            child := node.children[i]
+            cn := get_node(child)
+            if cn.kind == "body":
+                ir_find_free_vars_walk(child, inner_bound, free)
+            i = i + 1
+        return
+    mut i := 0
+    while i < node.children.len():
+        child := node.children[i]
+        ir_find_free_vars_walk(child, bound, free)
+        i = i + 1
+
 fn ir_find_free_vars(idx: Int, bound: List[String]) -> List[String]:
     mut free: List[String] := []
-    mut stack: List[Int] := [idx]
-    while stack.len() > 0:
-        current := stack[stack.len() - 1]
-        stack.remove(stack.len() - 1)
-        kind := node_kind(current)
-        if kind == "ident":
-            name := node_value(current)
-            if not ir_list_contains(bound, name) and not ir_list_contains(free, name):
-                free.push(name)
-        mut i := 0
-        child_count := node_child_count(current)
-        while i < child_count:
-            stack.push(node_child(current, i))
-            i = i + 1
+    ir_find_free_vars_walk(idx, bound, free)
     return free
 
 fn ir_str(s: String) -> String:
@@ -850,22 +926,22 @@ fn ir_known_struct_return_type(fname: String) -> String:
     return ""
 
 fn ir_known_scalar_return_type(fname: String) -> String:
-    if FLOAT_RETURNING_FUNCS.contains(fname):
+    if ir_is_float_returning_func(fname):
         return "float"
-    if BOOL_RETURNING_FUNCS.contains(fname):
+    if ir_is_bool_returning_func(fname):
         return "bool"
-    if INT_RETURNING_FUNCS.contains(fname):
+    if ir_is_int_returning_func(fname):
         return "int"
-    if STRING_RETURNING_FUNCS.contains(fname):
+    if ir_is_string_returning_func(fname):
         return "string"
-    if BYTES_RETURNING_FUNCS.contains(fname):
+    if ir_is_bytes_returning_func(fname):
         return "bytes"
     return ""
 
 fn ir_known_collection_return_type(fname: String) -> String:
-    if LIST_RETURNING_FUNCS.contains(fname):
+    if ir_is_list_returning_func(fname):
         return "list"
-    if LIST_STRING_RETURNING_FUNCS.contains(fname):
+    if ir_is_list_string_returning_func(fname):
         return "list_string"
     return ""
 
@@ -894,7 +970,7 @@ fn ir_field_receiver_type(recv_idx: Int) -> String:
     return obj_type
 
 fn ir_known_string_method_return_type(meth: String) -> String:
-    if STRING_RETURNING_METHODS.contains(meth) or meth == "to_string_utf8":
+    if ir_is_string_returning_method(meth) or meth == "to_string_utf8":
         return "string"
     if meth == "keys" or meth == "values" or meth == "split" or meth == "chars":
         return "list_string"
@@ -916,7 +992,7 @@ fn ir_known_method_return_type(obj_type: String, meth: String) -> String:
         declared := ir_declared_callable_return_type(impl_name)
         if declared.len() > 0:
             return declared
-    if BOOL_RETURNING_METHODS.contains(meth):
+    if ir_is_bool_returning_method(meth):
         return "bool"
     string_type := ir_known_string_method_return_type(meth)
     if string_type.len() > 0:
@@ -1282,23 +1358,29 @@ fn ir_string_interp_expr_part(expr_idx: Int) -> Int:
         return converted
     return part_r
 
-fn ir_emit_lambda_capture_setup(captures: List[String]):
+fn ir_emit_lambda_capture_setup(closure_r: Int, captures: List[String]):
     mut i := 0
     while i < captures.len():
         cap_val := ir_reg()
         ir_emit("load " + cap_val.to_string() + " " + captures[i])
         slot := ir_reg()
         ir_emit("iconst " + slot.to_string() + " " + i.to_string())
-        ir_emit_call2(ir_reg(), "__closure_set_env", "void", slot, cap_val)
+        ir_emit_call3(ir_reg(), "__closure_set_env", "void", closure_r, slot, cap_val)
         i = i + 1
 
+fn ir_emit_lambda_hidden_param():
+    closure_r := ir_reg()
+    ir_var_regs.insert("__closure", closure_r)
+    ir_emit("param __closure")
+
 fn ir_emit_lambda_capture_loads(captures: List[String]):
+    closure_r := ir_var_regs["__closure"]
     mut i := 0
     while i < captures.len():
         cap_r := ir_reg()
         slot_r := ir_reg()
         ir_emit("iconst " + slot_r.to_string() + " " + i.to_string())
-        ir_emit_call1(cap_r, "__closure_get_env", "unknown", slot_r)
+        ir_emit_call2(cap_r, "__closure_get_env", "unknown", closure_r, slot_r)
         ir_var_regs.insert(captures[i], cap_r)
         ir_emit("store " + captures[i] + " " + cap_r.to_string())
         i = i + 1
@@ -1630,7 +1712,7 @@ fn ir_emit_method_call(idx: Int) -> Int:
 
     obj_type := ir_method_receiver_type(node)
     mut emit_name := ir_method_emit_name(mname, obj_type)
-    if BOOL_RETURNING_METHODS.contains(emit_name):
+    if ir_is_bool_returning_method(emit_name):
         ir_var_types.insert("__last_call", "bool")
 
     impl_name := ir_lookup_impl_method_name(obj_type, mname)
@@ -1648,11 +1730,11 @@ fn ir_emit_method_call(idx: Int) -> Int:
     r := ir_reg()
     uses_result_abi := ir_callee_uses_result_abi(ResolvedCallee(emit_name, impl_dispatch), idx)
     mut ret_type := ir_call_retkind(idx, uses_result_abi)
-    if VOID_METHODS.contains(emit_name):
+    if ir_is_void_method(emit_name):
         ret_type = "void"
     call_args := ir_method_call_arg_regs(obj_r, arg_regs)
     ir_emit_call_text(r, emit_name, ret_type, call_args.len(), ir_join_arg_regs(call_args))
-    if VOID_METHODS.contains(emit_name):
+    if ir_is_void_method(emit_name):
         return obj_r
     return r
 
@@ -1752,7 +1834,6 @@ fn ir_emit_lambda(idx: Int) -> Int:
     lambda_name := "__lambda_" + ir_lambda_count.to_string()
     ir_lambda_count = ir_lambda_count + 1
     parts := ir_collect_lambda_parts(idx)
-    ir_emit_lambda_capture_setup(parts.captures)
 
     # save current state and emit lambda to deferred buffer
     saved_regs := ir_next_reg
@@ -1760,15 +1841,17 @@ fn ir_emit_lambda(idx: Int) -> Int:
     saved_types := ir_copy_var_types(ir_var_types)
     saved_lines := ir_copy_lines(ir_lines)
     ir_reset_lambda_emit_state()
-    ir_emit_func_header(lambda_name, parts.params.len(), "unknown")
+    ir_emit_func_header(lambda_name, parts.params.len() + 1, "unknown")
+    ir_emit_lambda_hidden_param()
     ir_emit_lambda_params(parts.params)
     ir_emit_lambda_capture_loads(parts.captures)
     ir_emit_lambda_body_value(parts.body_idx)
     ir_emit_lambda_default_return()
     ir_finish_lambda_emit(saved_regs, saved_vars, saved_types, saved_lines)
-    # return function reference
+    # return closure handle and fill captures
     r := ir_reg()
-    ir_emit("funcref " + r.to_string() + " " + lambda_name)
+    ir_emit("closure_ref " + r.to_string() + " " + lambda_name)
+    ir_emit_lambda_capture_setup(r, parts.captures)
     return r
 
 fn ir_emit_int_literal(node: Node) -> Int:
@@ -2805,8 +2888,7 @@ fn ir_collect_from_import_renames(value: String):
         iname := parts[i]
         if iname.len() > 0:
             renamed := ir_import_target_name(mod_path, iname)
-            if renamed != iname:
-                ir_import_renames.insert(iname, renamed)
+            ir_import_renames.insert(iname, renamed)
         i = i + 1
 
 fn ir_type_alias_target(node: Node) -> String:

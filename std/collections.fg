@@ -1,7 +1,7 @@
 # std.collections — list and map utilities
 #
 # Functional-style operations on lists: transform, filter, aggregate, query.
-# All functions return new lists — inputs are never modified.
+# These helpers return new lists instead of mutating the input list.
 #
 #   from std.collections import range, sum, reversed, zip, enumerate
 #   from std.collections import any, all, find, take, drop, flatten

@@ -347,7 +347,7 @@ pub fn doc_check() -> Int:
 # --- search ---
 
 # global file list for directory scanning.
-# must be global because lists are passed by copy.
+# keep it global so the directory walk appends into one shared list.
 mut d_file_list: List[String] := []
 
 # find the stdlib root by walking up from a starting directory.

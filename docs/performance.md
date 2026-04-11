@@ -50,9 +50,7 @@ kept as linear scan since it's only called on error paths.
 
 `codegen.fg` `g_emit_module()`. single pre-pass buckets children by kind
 (struct/enum/fn/impl/test), then each emission phase iterates only its
-bucket. reduces from 6n iterations to n + 6×bucket_size. applied to
-single-module path; multi-module path unchanged due to forge's pass-by-copy
-list semantics.
+bucket. reduces from 6n iterations to n + 6×bucket_size.
 
 ### linear import dedup — FIXED
 
