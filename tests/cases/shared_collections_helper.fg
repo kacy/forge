@@ -1,0 +1,11 @@
+pub fn push_imported(xs: List[Int]):
+    xs.push(70)
+
+pub fn insert_imported(m: Map[String, Int]):
+    m.insert("imported", 7)
+
+pub fn add_imported(s: Set[String]):
+    s.add("imported")
+
+pub fn alias_list(xs: List[Int]) -> List[Int]:
+    return xs

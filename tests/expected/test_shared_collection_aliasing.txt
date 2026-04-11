@@ -1,0 +1,11 @@
+list-after-call:4
+list-after-return:5
+list-after-struct:6
+closure-len:7
+list-after-closure:7
+nested-inner-len:2
+list-after-import:8
+map-len:4
+map-imported:true
+set-len:4
+set-imported:true

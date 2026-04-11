@@ -1,0 +1,63 @@
+from shared_collections_helper import push_imported, insert_imported, add_imported, alias_list
+
+struct Bucket:
+    pub items: List[Int]
+
+fn push_local(xs: List[Int], value: Int):
+    xs.push(value)
+
+fn insert_local(m: Map[String, Int], key: String, value: Int):
+    m.insert(key, value)
+
+fn add_local(s: Set[String], value: String):
+    s.add(value)
+
+fn make_reader(xs: List[Int]) -> fn() -> Int:
+    return fn() => xs.len()
+
+fn main():
+    mut xs := [1, 2]
+    alias_xs := xs
+    push_local(xs, 3)
+    alias_xs.push(4)
+    print("list-after-call:{xs.len()}")
+
+    returned := alias_list(xs)
+    returned.push(5)
+    print("list-after-return:{xs.len()}")
+
+    bucket := Bucket(xs)
+    bucket.items.push(6)
+    print("list-after-struct:{xs.len()}")
+
+    read_len := make_reader(xs)
+    xs.push(7)
+    print("closure-len:{read_len()}")
+    print("list-after-closure:{xs.len()}")
+
+    mut nested := [[10]]
+    inner := nested[0]
+    inner.push(11)
+    print("nested-inner-len:{nested[0].len()}")
+
+    push_imported(xs)
+    print("list-after-import:{xs.len()}")
+
+    mut m: Map[String, Int] := {}
+    m.insert("a", 1)
+    alias_m := m
+    insert_local(m, "b", 2)
+    alias_m.insert("c", 3)
+    insert_imported(m)
+    has_imported_map := m.contains_key("imported")
+    print("map-len:{m.len()}")
+    print("map-imported:{has_imported_map}")
+
+    mut s := {"x"}
+    alias_s := s
+    add_local(s, "y")
+    alias_s.add("z")
+    add_imported(s)
+    has_imported_set := s.contains("imported")
+    print("set-len:{s.len()}")
+    print("set-imported:{has_imported_set}")
