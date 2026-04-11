@@ -234,11 +234,11 @@ fn register_builtin_types():
     list_string := lookup_type_id("List[String]")
 
     # result types used by multiple builtins
-    int_result := add_type_info(ti_result(tid_int, tid_err))
-    float_result := add_type_info(ti_result(tid_float, tid_err))
-    str_result := add_type_info(ti_result(tid_string, tid_err))
-    bytes_result := add_type_info(ti_result(tid_bytes, tid_err))
-    bool_result := add_type_info(ti_result(tid_bool, tid_err))
+    int_result := add_type_info(ti_result(tid_int, tid_string))
+    float_result := add_type_info(ti_result(tid_float, tid_string))
+    str_result := add_type_info(ti_result(tid_string, tid_string))
+    bytes_result := add_type_info(ti_result(tid_bytes, tid_string))
+    bool_result := add_type_info(ti_result(tid_bool, tid_string))
     opt_string := add_type_info(ti_optional(tid_string))
 
     # --- shared function signatures, one type per group ---
@@ -689,7 +689,7 @@ fn resolve_type_implementation(node_idx: Int) -> Int:
             result = add_type_info(ti_optional(inner))
     elif node.kind == "result_type":
         ok := resolve_type_implementation(node.children[0])
-        mut err_tid := TID_ERR
+        mut err_tid := TID_STRING
         if node.children.len() > 1:
             err_tid = resolve_type_implementation(node.children[1])
         result = add_type_info(ti_result(ok, err_tid))
@@ -791,7 +791,7 @@ fn resolve_type_with_substitution_map(node_idx: Int, subst_params: List[String],
         return add_type_info(ti_optional(inner))
     if node.kind == "result_type":
         ok := resolve_type_with_substitution_map(node.children[0], subst_params, subst_args)
-        mut err_tid := TID_ERR
+        mut err_tid := TID_STRING
         if node.children.len() > 1:
             err_tid = resolve_type_with_substitution_map(node.children[1], subst_params, subst_args)
         return add_type_info(ti_result(ok, err_tid))
@@ -1515,6 +1515,14 @@ fn check_fail_statement(node: Node, scope_id: Int):
     ret_info := get_type_info(ret_type)
     if ret_info.kind != "result":
         report_error("E234", "fail requires function to return a result type")
+        return
+    if node.children.len() < 1:
+        return
+    err_type := c_check_expr(node.children[0], scope_id)
+    if is_error_type(err_type):
+        return
+    if types_compatible(err_type, ret_info.value_type) == false:
+        report_error("E219", "fail type mismatch: expected " + get_type_name(ret_info.value_type) + ", got " + get_type_name(err_type))
 
 # ---------------------------------------------------------------
 # if statement
@@ -1701,6 +1709,8 @@ fn check_expression_implementation(node_idx: Int, scope_id: Int) -> Int:
         return check_unwrap_expression(node, scope_id)
     if node.kind == "try":
         return check_try_expression(node, scope_id)
+    if node.kind == "catch_expr":
+        return check_catch_expression(node, scope_id)
     if node.kind == "match_expr":
         return check_match_expression(node_idx, scope_id)
     if node.kind == "lambda":
@@ -2476,6 +2486,9 @@ fn check_method_call(node: Node, scope_id: Int) -> Int:
         dispatch_type = recv_info.inner
         recv_info = get_type_info(dispatch_type)
     elif recv_info.kind == "result":
+        result_method := check_result_method_call(method_name, recv_info, arg_indices, scope_id)
+        if is_error_type(result_method) == false:
+            return result_method
         dispatch_type = recv_info.inner
         recv_info = get_type_info(dispatch_type)
 
@@ -2639,8 +2652,42 @@ fn check_bytes_method_call(method: String, args: List[Int], scope_id: Int) -> In
         return tid_bytes
     if method == "to_string_utf8":
         expect_no_arguments(method, args)
-        return add_type_info(ti_result(tid_string, TID_ERR))
+        return add_type_info(ti_result(tid_string, TID_STRING))
     report_error("E209", "Bytes has no method '" + method + "'")
+    return TID_ERR
+
+fn check_result_method_call(method: String, info: TypeInfo, args: List[Int], scope_id: Int) -> Int:
+    if method == "unwrap_or":
+        if args.len() != 1:
+            report_error("E207", "unwrap_or expects 1 argument, got " + args.len().to_string())
+            return TID_ERR
+        check_argument_type(args[0], info.inner, scope_id)
+        return info.inner
+    if method == "or_else":
+        if args.len() != 1:
+            report_error("E207", "or_else expects 1 argument, got " + args.len().to_string())
+            return TID_ERR
+        handler_type := c_check_expr(call_arg_expr_index(args[0]), scope_id)
+        if is_error_type(handler_type):
+            return TID_ERR
+        handler_info := get_type_info(handler_type)
+        if handler_info.kind != "function":
+            report_error("E219", "or_else expects a function, got " + get_type_name(handler_type))
+            return TID_ERR
+        if handler_info.param_types.len() != 1:
+            report_error("E219", "or_else handler must take exactly 1 argument")
+            return TID_ERR
+        if types_compatible(handler_info.param_types[0], info.value_type) == false:
+            report_error("E219", "or_else handler must accept " + get_type_name(info.value_type) + ", got " + get_type_name(handler_info.param_types[0]))
+            return TID_ERR
+        ret_info := get_type_info(handler_info.return_type)
+        if ret_info.kind != "result":
+            report_error("E219", "or_else handler must return a result type")
+            return TID_ERR
+        if types_compatible(ret_info.inner, info.inner) == false:
+            report_error("E219", "or_else handler must return " + get_type_name(info.inner) + " on success, got " + get_type_name(ret_info.inner))
+            return TID_ERR
+        return handler_info.return_type
     return TID_ERR
 
 # ---------------------------------------------------------------
@@ -3085,13 +3132,37 @@ fn check_try_expression(node: Node, scope_id: Int) -> Int:
     if info.kind == "result":
         # verify enclosing function also returns a result
         ret := get_scope_return_type(scope_id)
-        if ret >= 0:
-            ret_info := get_type_info(ret)
-            if ret_info.kind != "result":
-                report_error("E239", "try (!) can only be used in functions that return a result type")
+        if ret < 0:
+            report_error("E239", "try (!) can only be used in functions that return a result type")
+            return TID_ERR
+        ret_info := get_type_info(ret)
+        if ret_info.kind != "result":
+            report_error("E239", "try (!) can only be used in functions that return a result type")
+            return TID_ERR
+        if types_compatible(info.value_type, ret_info.value_type) == false:
+            report_error("E239", "try (!) error type mismatch: cannot propagate " + get_type_name(info.value_type) + " from function returning " + get_type_name(ret))
+            return TID_ERR
         return info.inner
     report_error_with_fix("E224", "try requires a result type, got " + get_type_name(inner), "use ! for unwrapping optional types")
     return TID_ERR
+
+fn check_catch_expression(node: Node, scope_id: Int) -> Int:
+    if node.children.len() < 2:
+        return TID_ERR
+    result_type := c_check_expr(node.children[0], scope_id)
+    if is_error_type(result_type):
+        return TID_ERR
+    result_info := get_type_info(result_type)
+    if result_info.kind != "result":
+        report_error("E224", "catch requires a result type, got " + get_type_name(result_type))
+        return TID_ERR
+    fallback_type := c_check_expr(node.children[1], scope_id)
+    if is_error_type(fallback_type):
+        return TID_ERR
+    if types_compatible(fallback_type, result_info.inner) == false:
+        report_error("E219", "catch fallback type mismatch: expected " + get_type_name(result_info.inner) + ", got " + get_type_name(fallback_type))
+        return TID_ERR
+    return result_info.inner
 
 # ---------------------------------------------------------------
 # if expression
@@ -3658,7 +3729,9 @@ fn types_structurally_equal(a: Int, b: Int) -> Bool:
     # result structural equality
     if ai.kind == "result":
         if bi.kind == "result":
-            return types_structurally_equal(ai.inner, bi.inner)
+            if types_structurally_equal(ai.inner, bi.inner) == false:
+                return false
+            return types_structurally_equal(ai.value_type, bi.value_type)
     # optional structural equality
     if ai.kind == "optional":
         if bi.kind == "optional":
@@ -3718,6 +3791,11 @@ fn types_structurally_equal(a: Int, b: Int) -> Bool:
                 i = i + 1
             return true
     return false
+
+fn types_compatible(actual: Int, expected: Int) -> Bool:
+    if actual == expected:
+        return true
+    return types_structurally_equal(actual, expected)
 
 # ---------------------------------------------------------------
 # public API — run checker and return diagnostics as JSON
