@@ -163,26 +163,63 @@ fn forge_bytes_from_vec(data: Vec<u8>) -> i64 {
     Box::into_raw(Box::new(ForgeBytes { data })) as i64
 }
 
-/// Closure environment: a fixed-size array of i64 slots for captured variables.
-/// Closure environment slots for passing captures to lambda functions.
-static CLOSURE_ENV: [std::sync::atomic::AtomicI64; 16] = {
-    const ZERO: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-    [ZERO; 16]
-};
+const FORGE_CLOSURE_ENV_SLOTS: usize = 16;
 
-/// Set a captured variable slot before calling a closure.
+struct ForgeClosure {
+    func_ptr: i64,
+    env: [i64; FORGE_CLOSURE_ENV_SLOTS],
+}
+
+unsafe fn forge_closure_mut<'a>(handle: i64) -> Option<&'a mut ForgeClosure> {
+    if handle == 0 {
+        return None;
+    }
+    Some(&mut *(handle as *mut ForgeClosure))
+}
+
+unsafe fn forge_closure_ref<'a>(handle: i64) -> Option<&'a ForgeClosure> {
+    if handle == 0 {
+        return None;
+    }
+    Some(&*(handle as *const ForgeClosure))
+}
+
 #[no_mangle]
-pub extern "C" fn forge_closure_set_env(slot: i64, value: i64) {
-    if slot >= 0 && (slot as usize) < 16 {
-        CLOSURE_ENV[slot as usize].store(value, std::sync::atomic::Ordering::Relaxed);
+pub extern "C" fn forge_closure_new(func_ptr: i64) -> i64 {
+    Box::into_raw(Box::new(ForgeClosure {
+        func_ptr,
+        env: [0; FORGE_CLOSURE_ENV_SLOTS],
+    })) as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_closure_get_fn(handle: i64) -> i64 {
+    if let Some(closure) = forge_closure_ref(handle) {
+        closure.func_ptr
+    } else {
+        0
     }
 }
 
-/// Read a captured variable from the closure environment.
+/// Set a captured variable slot on a specific closure handle.
 #[no_mangle]
-pub extern "C" fn forge_closure_get_env(slot: i64) -> i64 {
-    if slot >= 0 && (slot as usize) < 16 {
-        CLOSURE_ENV[slot as usize].load(std::sync::atomic::Ordering::Relaxed)
+pub unsafe extern "C" fn forge_closure_set_env(handle: i64, slot: i64, value: i64) {
+    if slot < 0 || (slot as usize) >= FORGE_CLOSURE_ENV_SLOTS {
+        return;
+    }
+    if let Some(closure) = forge_closure_mut(handle) {
+        closure.env[slot as usize] = value;
+    }
+}
+
+/// Read a captured variable from a specific closure handle.
+#[no_mangle]
+pub unsafe extern "C" fn forge_closure_get_env(handle: i64, slot: i64) -> i64 {
+    if slot < 0 || (slot as usize) >= FORGE_CLOSURE_ENV_SLOTS {
+        return 0;
+    }
+    if let Some(closure) = forge_closure_ref(handle) {
+        closure.env[slot as usize]
     } else {
         0
     }

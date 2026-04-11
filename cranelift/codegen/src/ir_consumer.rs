@@ -987,15 +987,27 @@ fn compile_ir_function(
                             struct_regs.remove(&reg);
                         }
                     } else if let Some(&var) = named_vars.get(fname) {
-                        // Indirect call through function pointer variable
-                        let fn_ptr = builder.use_var(var);
+                        // Indirect call through closure handle variable
+                        let closure_handle = builder.use_var(var);
+                        let fn_ptr = if let Some(&closure_get_id) = runtime_funcs.get("forge_closure_get_fn") {
+                            let closure_get_ref = *func_ref_cache.entry(closure_get_id).or_insert_with(|| {
+                                codegen.module.declare_func_in_func(closure_get_id, builder.func)
+                            });
+                            let call = builder.ins().call(closure_get_ref, &[closure_handle]);
+                            builder.func.dfg.first_result(call)
+                        } else {
+                            closure_handle
+                        };
                         let mut sig = codegen.module.make_signature();
+                        sig.params.push(AbiParam::new(types::I64));
                         for _ in &args {
                             sig.params.push(AbiParam::new(types::I64));
                         }
                         sig.returns.push(AbiParam::new(types::I64));
                         let sig_ref = builder.import_signature(sig);
-                        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &args);
+                        let mut indirect_args = vec![closure_handle];
+                        indirect_args.extend(args.iter().copied());
+                        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &indirect_args);
                         regs.insert(reg, builder.func.dfg.first_result(call));
                         struct_regs.remove(&reg);
                         string_regs.remove(&reg);
@@ -1195,6 +1207,36 @@ fn compile_ir_function(
                 } else {
                     return Err(CompileError::ModuleError(format!(
                         "ir consumer: unknown function reference '{}' in {}",
+                        fname, func_name
+                    )));
+                }
+                reg_source_vars.remove(&reg);
+                struct_regs.remove(&reg);
+                string_regs.remove(&reg);
+                bytes_regs.remove(&reg);
+                float_regs.remove(&reg);
+            }
+
+            "closure_ref" if parts.len() >= 3 => {
+                let reg: usize = parts[1].parse().unwrap_or(0);
+                let fname = parts[2];
+                if let Some(&fid) = declared_funcs.get(fname) {
+                    let fref = *func_ref_cache
+                        .entry(fid)
+                        .or_insert_with(|| codegen.module.declare_func_in_func(fid, builder.func));
+                    let addr = builder.ins().func_addr(types::I64, fref);
+                    if let Some(&closure_new_id) = runtime_funcs.get("forge_closure_new") {
+                        let closure_new_ref = *func_ref_cache.entry(closure_new_id).or_insert_with(|| {
+                            codegen.module.declare_func_in_func(closure_new_id, builder.func)
+                        });
+                        let call = builder.ins().call(closure_new_ref, &[addr]);
+                        regs.insert(reg, builder.func.dfg.first_result(call));
+                    } else {
+                        regs.insert(reg, addr);
+                    }
+                } else {
+                    return Err(CompileError::ModuleError(format!(
+                        "ir consumer: unknown closure reference '{}' in {}",
                         fname, func_name
                     )));
                 }
