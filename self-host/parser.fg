@@ -311,8 +311,17 @@ pub fn parse_expression() -> Int:
         parser_report_error_here("E242", "expression nesting too deep", "")
         return add_leaf_with_position("error", "max recursion_depth exceeded")
     recursion_depth = recursion_depth + 1
-    left := parse_or_expression()
+    left := parse_catch_expression()
     recursion_depth = recursion_depth - 1
+    return left
+
+fn parse_catch_expression() -> Int:
+    mut left := parse_or_expression()
+    while check("kw_catch"):
+        advance_token()
+        fallback := parse_or_expression()
+        mut children: List[Int] := [left, fallback]
+        left = add_node_with_position("catch_expr", "", children)
     return left
 
 fn parse_or_expression() -> Int:
