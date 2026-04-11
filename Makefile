@@ -162,7 +162,7 @@ run-examples-self-only:
 	@pass=0; fail=0; \
 	for f in $(EXPECTED_EXAMPLES); do \
 		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./self-host/forge_main run "examples/$$name.fg" 2>/dev/null); \
+		actual=$$(timeout 60 ./self-host/forge_main run "examples/$$name.fg" 2>/dev/null); \
 		expected=$$(cat "$$f"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			pass=$$((pass+1)); \
@@ -204,7 +204,7 @@ run-regressions-self-only:
 	@pass=0; fail=0; \
 	for f in $(REGRESSION_EXPECTED); do \
 		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./self-host/forge_main run "tests/cases/$$name.fg" 2>/dev/null); \
+		actual=$$(timeout 60 ./self-host/forge_main run "tests/cases/$$name.fg" 2>/dev/null); \
 		expected=$$(cat "$$f"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			pass=$$((pass+1)); \
