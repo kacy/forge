@@ -1,6 +1,7 @@
 # spawn, await, select, and sync primitives
 
 import std.concurrent as concurrent
+import std.io as io
 import std.time as time
 from std.concurrent import await_ctx, send_ctx
 
@@ -49,6 +50,11 @@ fn main():
     closed.close()
     closed_send := send_ctx(closed, concurrent.background(), 1)
     print("send_ctx on closed: {closed_send.is_ok and closed_send.ok}")
+
+    tcp_pair := concurrent.with_timeout(concurrent.background(), 1)
+    time.delay(5)
+    tcp_result := io.from_fd(-1).read_ctx(tcp_pair.0, 8)
+    print("tcp read_ctx deadline: {tcp_result.is_err and tcp_result.err.is_deadline_exceeded()}")
 
     # sync primitives
     mu := Mutex()

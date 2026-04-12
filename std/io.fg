@@ -1453,6 +1453,27 @@ fn buffered_tcp_stream_read_internal(reader: BufferedTcpStream, max_bytes: Int) 
         buffered_tcp_stream_consume(reader.handle, take)
     return result
 
+fn buffered_tcp_stream_read_internal_ctx(reader: BufferedTcpStream, ctx: Context, max_bytes: Int) -> String!BlockingError:
+    if max_bytes <= 0:
+        return ""
+    if not buffered_tcp_stream_fds.contains_key(reader.handle):
+        return ""
+
+    mut result := ""
+    while result.len() < max_bytes:
+        mut cached := buffered_tcp_stream_cache_get(reader.handle)
+        if cached.len() == 0:
+            filled := buffered_tcp_stream_fill_ctx(reader.handle, ctx)!
+            if filled <= 0:
+                return result
+            cached = buffered_tcp_stream_cache_get(reader.handle)
+        mut take := max_bytes - result.len()
+        if take > cached.len():
+            take = cached.len()
+        result = result + cached.substring(0, take)
+        buffered_tcp_stream_consume(reader.handle, take)
+    return result
+
 fn buffered_tcp_stream_read_line_internal(reader: BufferedTcpStream) -> String!:
     if not buffered_tcp_stream_fds.contains_key(reader.handle):
         return ""
@@ -1462,6 +1483,26 @@ fn buffered_tcp_stream_read_line_internal(reader: BufferedTcpStream) -> String!:
         mut cached := buffered_tcp_stream_cache_get(reader.handle)
         if cached.len() == 0:
             filled := buffered_tcp_stream_fill(reader.handle)!
+            if filled <= 0:
+                return result
+            cached = buffered_tcp_stream_cache_get(reader.handle)
+        newline := find_newline(cached)
+        if newline >= 0:
+            result = result + cached.substring(0, newline)
+            buffered_tcp_stream_consume(reader.handle, newline + 1)
+            return trim_trailing_cr(result)
+        result = result + cached
+        buffered_tcp_stream_cache.insert(reader.handle, "")
+
+fn buffered_tcp_stream_read_line_internal_ctx(reader: BufferedTcpStream, ctx: Context) -> String!BlockingError:
+    if not buffered_tcp_stream_fds.contains_key(reader.handle):
+        return ""
+
+    mut result := ""
+    while true:
+        mut cached := buffered_tcp_stream_cache_get(reader.handle)
+        if cached.len() == 0:
+            filled := buffered_tcp_stream_fill_ctx(reader.handle, ctx)!
             if filled <= 0:
                 return result
             cached = buffered_tcp_stream_cache_get(reader.handle)
@@ -1486,6 +1527,19 @@ fn buffered_tcp_stream_fill(handle: Int) -> Int!:
     buffered_tcp_stream_cache.insert(handle, chunk)
     return chunk.len()
 
+fn buffered_tcp_stream_fill_ctx(handle: Int, ctx: Context) -> Int!BlockingError:
+    if not buffered_tcp_stream_fds.contains_key(handle):
+        return 0
+
+    fd := buffered_tcp_stream_fds[handle]
+    mut chunk_size := DEFAULT_CHUNK_SIZE
+    if buffered_tcp_stream_chunk_sizes.contains_key(handle):
+        chunk_size = buffered_tcp_stream_chunk_sizes[handle]
+
+    chunk := tcp_stream_read_ctx(TcpStream(fd), ctx, chunk_size)!
+    buffered_tcp_stream_cache.insert(handle, chunk)
+    return chunk.len()
+
 fn buffered_tcp_writer_write_internal(writer: BufferedTcpWriter, data: String) -> Int!:
     if not buffered_tcp_writer_fds.contains_key(writer.handle):
         return 0
@@ -1494,6 +1548,16 @@ fn buffered_tcp_writer_write_internal(writer: BufferedTcpWriter, data: String) -
     buffered_tcp_writer_cache.insert(writer.handle, cached + data)
     if buffered_tcp_writer_should_flush(writer.handle):
         buffered_tcp_writer_flush_internal(writer)!
+    return data.len()
+
+fn buffered_tcp_writer_write_internal_ctx(writer: BufferedTcpWriter, ctx: Context, data: String) -> Int!BlockingError:
+    if not buffered_tcp_writer_fds.contains_key(writer.handle):
+        return 0
+
+    cached := buffered_tcp_writer_cache_get(writer.handle)
+    buffered_tcp_writer_cache.insert(writer.handle, cached + data)
+    if buffered_tcp_writer_should_flush(writer.handle):
+        buffered_tcp_writer_flush_internal_ctx(writer, ctx)!
     return data.len()
 
 fn buffered_tcp_writer_flush_internal(writer: BufferedTcpWriter) -> Int!:
@@ -1506,6 +1570,19 @@ fn buffered_tcp_writer_flush_internal(writer: BufferedTcpWriter) -> Int!:
 
     fd := buffered_tcp_writer_fds[writer.handle]
     wrote := write_all_tcp_stream(TcpStream(fd), cached)!
+    buffered_tcp_writer_cache.insert(writer.handle, "")
+    return wrote
+
+fn buffered_tcp_writer_flush_internal_ctx(writer: BufferedTcpWriter, ctx: Context) -> Int!BlockingError:
+    if not buffered_tcp_writer_fds.contains_key(writer.handle):
+        return 0
+
+    cached := buffered_tcp_writer_cache_get(writer.handle)
+    if cached.len() == 0:
+        return 0
+
+    fd := buffered_tcp_writer_fds[writer.handle]
+    wrote := write_all_tcp_stream_ctx(TcpStream(fd), ctx, cached)!
     buffered_tcp_writer_cache.insert(writer.handle, "")
     return wrote
 
@@ -1829,8 +1906,14 @@ impl BufferedTcpStream:
     fn read(max_bytes: Int) -> String!:
         return buffered_tcp_stream_read(self, max_bytes)
 
+    fn read_ctx(ctx: Context, max_bytes: Int) -> String!BlockingError:
+        return buffered_tcp_stream_read_internal_ctx(self, ctx, max_bytes)
+
     fn read_line() -> String!:
         return buffered_tcp_stream_read_line(self)
+
+    fn read_line_ctx(ctx: Context) -> String!BlockingError:
+        return buffered_tcp_stream_read_line_internal_ctx(self, ctx)
 
 impl Reader for BufferedTcpStream:
     fn read(max_bytes: Int) -> String!:
@@ -1862,11 +1945,20 @@ impl BufferedTcpWriter:
     fn write(data: String) -> Int!:
         return buffered_tcp_writer_write(self, data)
 
+    fn write_ctx(ctx: Context, data: String) -> Int!BlockingError:
+        return buffered_tcp_writer_write_internal_ctx(self, ctx, data)
+
     fn write_all(data: String) -> Int!:
         return self.write(data)
 
+    fn write_all_ctx(ctx: Context, data: String) -> Int!BlockingError:
+        return self.write_ctx(ctx, data)
+
     fn flush() -> Int!:
         return buffered_tcp_writer_flush(self)
+
+    fn flush_ctx(ctx: Context) -> Int!BlockingError:
+        return buffered_tcp_writer_flush_internal_ctx(self, ctx)
 
 impl Writer for BufferedTcpWriter:
     fn write(data: String) -> Int!:

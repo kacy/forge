@@ -69,6 +69,18 @@ available helpers:
 - `await_ctx(task, ctx)`
 - `send_ctx(ch, ctx, value)`
 
+tcp stream waits can use the same context story through `std.io`:
+
+- `TcpStream.read_ctx(ctx, max_bytes)`
+- `TcpStream.read_all_ctx(ctx)`
+- `TcpStream.read_bytes_ctx(ctx, max_bytes)`
+- `TcpStream.write_ctx(ctx, data)`
+- `TcpStream.write_all_ctx(ctx, data)`
+- `BufferedTcpStream.read_ctx(ctx, max_bytes)`
+- `BufferedTcpStream.read_line_ctx(ctx)`
+- `BufferedTcpWriter.write_ctx(ctx, data)`
+- `BufferedTcpWriter.flush_ctx(ctx)`
+
 context cancellation is cooperative. cancelling a context stops the wait, not the task itself.
 
 ## tasks
@@ -107,4 +119,4 @@ things that are still intentionally explicit or still growing:
 
 - task cancellation is cooperative, not forceful
 - `recv_ctx(...)` is not in yet
-- blocking tcp helpers do not have `_ctx` variants yet
+- plain file io still does not have `_ctx` variants
