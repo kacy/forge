@@ -53,6 +53,7 @@ mut ir_lines: List[String] := []
 mut ir_next_reg := 0
 mut ir_next_label := 0
 mut ir_strings: List[String] := []
+mut ir_string_indices: Map[String, Int] := {}
 
 # --- current function locals ---
 mut ir_var_regs: Map[String, Int] := {}
@@ -103,6 +104,9 @@ mut ir_active_generic_params: List[String] := []
 mut ir_active_generic_concrete_types: List[String] := []
 mut ir_generic_runtime_subst: Map[String, String] := {}
 mut ir_active_generic_module_path := ""
+mut ir_root_items_cache: Map[Int, List[Int]] := {}
+mut ir_string_node_cache_roots: List[Int] := []
+mut ir_string_node_cache_values: List[String] := []
 
 fn ir_new_temp_name(prefix: String) -> String:
     return "__" + prefix + "_" + ir_next_reg.to_string() + "_" + ir_next_label.to_string()
@@ -111,6 +115,33 @@ fn ir_push_string(items: List[String], value: String) -> List[String]:
     mut updated: List[String] := items
     updated.push(value)
     return updated
+
+fn ir_encode_int_list(items: List[Int]) -> String:
+    mut encoded: List[String] := []
+    mut i := 0
+    while i < items.len():
+        encoded.push(items[i].to_string())
+        i = i + 1
+    return encoded.join(chr(9))
+
+fn ir_parse_cached_int(text: String) -> Int:
+    mut value := 0
+    mut i := 0
+    while i < text.len():
+        value = (value * 10) + (ord(text.substring(i, i + 1)) - ord("0"))
+        i = i + 1
+    return value
+
+fn ir_decode_int_list(encoded: String) -> List[Int]:
+    mut decoded: List[Int] := []
+    if encoded.len() == 0:
+        return decoded
+    parts := encoded.split(chr(9))
+    mut i := 0
+    while i < parts.len():
+        decoded.push(ir_parse_cached_int(parts[i]))
+        i = i + 1
+    return decoded
 
 pub fn set_import_roots(roots: List[Int], paths: List[String]):
     ir_preloaded_import_roots = roots
@@ -124,6 +155,7 @@ fn ir_reset_local_state():
     ir_next_reg = 0
     ir_next_label = 0
     ir_strings = []
+    ir_string_indices = {}
     ir_var_regs = {}
     ir_var_types = {}
     ir_map_value_types = {}
@@ -448,29 +480,47 @@ fn ir_find_free_vars(idx: Int, bound: List[String]) -> List[String]:
 
 fn ir_str(s: String) -> String:
     cleaned := ir_strip_quotes(s)
-    mut i := 0
-    while i < ir_strings.len():
-        if ir_strings[i] == cleaned:
-            return ir_string_symbol_name(i)
-        i = i + 1
+    if ir_string_indices.contains_key(cleaned):
+        return ir_string_symbol_name(ir_string_indices[cleaned])
     idx := ir_strings.len()
     ir_strings = ir_push_string(ir_strings, cleaned)
+    ir_string_indices.insert(cleaned, idx)
     return ir_string_symbol_name(idx)
 
-# --- collect strings (iterative to avoid deep recursion crashes) ---
-fn ir_collect_strings(idx: Int):
+fn ir_collect_string_nodes(idx: Int) -> List[Int]:
+    mut string_nodes: List[Int] := []
     mut stack: List[Int] := [idx]
     while stack.len() > 0:
         current := stack[stack.len() - 1]
         stack.remove(stack.len() - 1)
         node := get_node(current)
         if ir_is_string_literal_kind(node.kind):
-            ir_str(node.value)
+            string_nodes.push(current)
         kids := node.children
         mut i := 0
         while i < node.children.len():
             stack.push(kids[i])
             i = i + 1
+    return string_nodes
+
+fn ir_cached_string_nodes(root_idx: Int) -> List[Int]:
+    mut i := 0
+    while i < ir_string_node_cache_roots.len():
+        if ir_string_node_cache_roots[i] == root_idx:
+            return ir_decode_int_list(ir_string_node_cache_values[i])
+        i = i + 1
+    nodes := ir_collect_string_nodes(root_idx)
+    ir_string_node_cache_roots.push(root_idx)
+    ir_string_node_cache_values.push(ir_encode_int_list(nodes))
+    return nodes
+
+# --- collect strings (iterative to avoid deep recursion crashes) ---
+fn ir_collect_strings(idx: Int):
+    nodes := ir_cached_string_nodes(idx)
+    mut i := 0
+    while i < nodes.len():
+        ir_str(get_node(nodes[i]).value)
+        i = i + 1
 
 fn ir_retkind(type_name: String) -> String:
     if type_name.len() == 0:
@@ -666,6 +716,21 @@ fn ir_import_declares_global(module_path: String, name: String) -> Bool:
     return ir_import_declared_globals.contains_key(module_path + "." + name)
 
 fn ir_collect_import_declared_functions(root_idx: Int, module_path: String):
+    for item_idx in ir_root_items(root_idx):
+        node := get_node(item_idx)
+        if ir_is_fn_decl_kind(node.kind):
+            ir_import_declared_functions.insert(module_path + "." + ir_base_decl_name(node.value), true)
+        elif ir_is_binding_kind(node.kind):
+            ir_import_declared_globals.insert(module_path + "." + ir_binding_name(node), true)
+
+fn ir_record_generic_function_decl(item_idx: Int, node: Node, module_path: String):
+    mut full_name := node.value
+    if module_path.len() > 0:
+        full_name = ir_import_target_name(module_path, node.value)
+    ir_generic_decl_indices.insert(full_name, item_idx)
+    ir_generic_decl_module_paths.insert(full_name, module_path)
+
+fn ir_collect_preloaded_root_metadata(root_idx: Int, module_path: String):
     for item_idx in ir_root_items(root_idx):
         node := get_node(item_idx)
         if ir_is_fn_decl_kind(node.kind):
@@ -3406,12 +3471,15 @@ fn ir_collect_impl_methods(root_idx: Int, module_path: String):
             ir_collect_impl_method_signatures(node, module_path)
 
 fn ir_root_items(root_idx: Int) -> List[Int]:
+    if ir_root_items_cache.contains_key(root_idx):
+        return ir_root_items_cache[root_idx]
     root := get_node(root_idx)
     mut items: List[Int] := []
     mut i := 0
     while i < root.children.len():
         items.push(ir_unwrap_pub_child(root.children[i]))
         i = i + 1
+    ir_root_items_cache.insert(root_idx, items)
     return items
 
 fn ir_is_fn_decl_kind(kind: String) -> Bool:
@@ -3470,11 +3538,7 @@ fn ir_collect_generic_function_decls_from_root(root_idx: Int, module_path: Strin
     for item_idx in ir_root_items(root_idx):
         node := get_node(item_idx)
         if ir_is_fn_decl_kind(node.kind) and ir_has_generic_params(node):
-            mut full_name := node.value
-            if module_path.len() > 0:
-                full_name = ir_import_target_name(module_path, node.value)
-            ir_generic_decl_indices.insert(full_name, item_idx)
-            ir_generic_decl_module_paths.insert(full_name, module_path)
+            ir_record_generic_function_decl(item_idx, node, module_path)
 
 fn ir_collect_generic_function_decls(root_idx: Int):
     ir_generic_decl_indices = {}
@@ -4135,36 +4199,61 @@ fn ir_emit_string_table():
 fn ir_collect_root_import_metadata(root_idx: Int):
     ir_import_renames = {}
     ir_import_declared_functions = {}
+    ir_import_declared_globals = {}
     mut preload_i := 0
     while preload_i < ir_preloaded_import_roots.len():
-        ir_collect_import_declared_functions(ir_preloaded_import_roots[preload_i], ir_preloaded_import_paths[preload_i])
+        ir_collect_preloaded_root_metadata(ir_preloaded_import_roots[preload_i], ir_preloaded_import_paths[preload_i])
         preload_i = preload_i + 1
-    ir_collect_imports(root_idx)
 
-fn ir_collect_root_type_metadata(root_idx: Int):
+fn ir_collect_root_phase_one_metadata(root_idx: Int):
+    ir_func_returns = {}
+    ir_type_aliases = {}
+    ir_generic_decl_indices = {}
+    ir_generic_decl_module_paths = {}
+
+    mut preload_i := 0
+    while preload_i < ir_preloaded_import_roots.len():
+        mut module_path := ""
+        if preload_i < ir_preloaded_import_paths.len():
+            module_path = ir_preloaded_import_paths[preload_i]
+        ir_collect_generic_function_decls_from_root(ir_preloaded_import_roots[preload_i], module_path)
+        preload_i = preload_i + 1
+
+    for item_idx in ir_root_items(root_idx):
+        node := get_node(item_idx)
+        ir_collect_import_item(node)
+        if node.kind == "type_alias":
+            target := ir_type_alias_target(node)
+            if target.len() > 0:
+                ir_type_aliases.insert(node.value, target)
+        elif ir_is_fn_decl_kind(node.kind):
+            ir_record_function_return(node)
+            if ir_has_generic_params(node):
+                ir_record_generic_function_decl(item_idx, node, "")
+
+fn ir_collect_root_phase_two_metadata(root_idx: Int):
     ir_struct_names = {}
     ir_struct_field_lookup = {}
     ir_struct_field_index_lookup = {}
+    ir_impl_methods = {}
     ir_register_known_import_structs()
-
-    mut preload_struct_i := 0
-    while preload_struct_i < ir_preloaded_import_roots.len():
-        ir_collect_struct_decls(ir_preloaded_import_roots[preload_struct_i], false)
-        preload_struct_i = preload_struct_i + 1
-
-    ir_collect_struct_decls(root_idx, true)
-    ir_register_alias_structs(root_idx)
-
-fn ir_collect_root_callable_metadata(root_idx: Int):
-    ir_collect_generic_function_decls(root_idx)
-    ir_collect_function_returns(root_idx)
 
     mut preload_i := 0
     while preload_i < ir_preloaded_import_roots.len():
+        ir_collect_struct_decls(ir_preloaded_import_roots[preload_i], false)
         ir_collect_impl_methods(ir_preloaded_import_roots[preload_i], ir_preloaded_import_paths[preload_i])
         preload_i = preload_i + 1
 
-    ir_collect_impl_methods(root_idx, "")
+    for item_idx in ir_root_items(root_idx):
+        node := get_node(item_idx)
+        if node.kind == "struct_decl" or node.kind == "struct":
+            ir_collect_struct_decl(node, true)
+        elif node.kind == "enum_decl" or node.kind == "enum":
+            ir_collect_enum_decl(node, true)
+        elif node.kind == "impl_decl":
+            ir_collect_impl_method_signatures(node, "")
+
+    ir_register_alias_structs(root_idx)
 
 fn ir_emit_root_module(root_idx: Int, root: Node):
     ir_emit_global_bindings(root)
@@ -4195,12 +4284,11 @@ pub fn emit_ir(root_idx: Int) -> String:
     # collect aliases first so both type and callable metadata can resolve
     # through the same table.
     ir_collect_root_import_metadata(root_idx)
-    ir_collect_type_aliases(root_idx)
-    ir_collect_root_type_metadata(root_idx)
+    ir_collect_root_phase_one_metadata(root_idx)
+    ir_collect_root_phase_two_metadata(root_idx)
 
     ir_lambda_count = 0
     ir_lambda_bodies = []
-    ir_collect_root_callable_metadata(root_idx)
     ir_emit_root_module(root_idx, root)
     lines: List[String] := ir_lines
     ir_finish_module_emit()
