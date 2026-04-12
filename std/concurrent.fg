@@ -6,6 +6,10 @@ pub enum WaitError:
     Cancelled
     DeadlineExceeded
 
+pub struct BlockingError:
+    pub kind: Int
+    pub message: String
+
 pub struct Context:
     pub done_ch: Channel[Bool]
     pub state: Map[String, Int]
@@ -112,6 +116,20 @@ pub fn await_ctx[T](task: Task[T], ctx: Context) -> T!WaitError:
         time.delay(1)
     return await task
 
+pub fn blocking_cancelled() -> BlockingError:
+    return BlockingError(1, "cancelled")
+
+pub fn blocking_deadline_exceeded() -> BlockingError:
+    return BlockingError(2, "deadline exceeded")
+
+pub fn blocking_failed(message: String) -> BlockingError:
+    return BlockingError(3, message)
+
+pub fn blocking_from_wait(err: WaitError) -> BlockingError:
+    if err == WaitError.DeadlineExceeded:
+        return blocking_deadline_exceeded()
+    return blocking_cancelled()
+
 impl Context:
     fn done() -> Channel[Bool]:
         return self.done_ch
@@ -135,3 +153,13 @@ impl Ticker:
 
     fn stop():
         self.stop_ch.try_send(true)
+
+impl BlockingError:
+    fn is_cancelled() -> Bool:
+        return self.kind == 1
+
+    fn is_deadline_exceeded() -> Bool:
+        return self.kind == 2
+
+    fn is_failed() -> Bool:
+        return self.kind == 3

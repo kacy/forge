@@ -1,0 +1,8 @@
+output-ok:true
+output-status:0
+output-stdout:alpha
+output-stderr:beta
+run-timeout:true
+run-deadline:true
+wait-timeout:true
+wait-deadline:true

@@ -1,0 +1,33 @@
+import std.concurrent as concurrent
+import std.os.process as process
+from std.concurrent import WaitError
+
+fn main():
+    bg := concurrent.background()
+
+    output_result := process.command("sh").args(["-c", "printf alpha; printf beta >&2"]).output_ctx(bg)
+    print("output-ok:{output_result.is_ok}")
+    print("output-status:{output_result.ok.status}")
+    print("output-stdout:{output_result.ok.stdout}")
+    print("output-stderr:{output_result.ok.stderr}")
+
+    run_pair := concurrent.with_timeout(bg, 5)
+    run_ctx := run_pair.0
+    run_result := process.command("sh").args(["-c", "sleep 1"]).run_ctx(run_ctx)
+    print("run-timeout:{run_result.is_err}")
+    print("run-deadline:{run_result.err.is_deadline_exceeded()}")
+
+    started := process.start_shell("sleep 1")
+    if started.is_err:
+        print("wait-timeout:false")
+        print("wait-deadline:false")
+        return
+    proc := started.ok
+    wait_pair := concurrent.with_timeout(bg, 5)
+    wait_ctx := wait_pair.0
+    wait_result := proc.wait_ctx(wait_ctx)
+    print("wait-timeout:{wait_result.is_err}")
+    print("wait-deadline:{wait_result.err == WaitError.DeadlineExceeded}")
+    proc.kill()
+    proc.wait()
+    proc.close()
