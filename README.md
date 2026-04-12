@@ -30,6 +30,7 @@ make self-host
 
 - `README.md` for the high-level map
 - `docs/architecture.md` for the compiler pipeline and subsystem boundaries
+- `docs/concurrency.md` for channels, contexts, select, and task waits
 - `docs/contributing.md` for the development loop and smoke checks
 - `self-host/forge_main.fg` for the self-hosted frontend (lex/parse/check/fmt/lint/doc)
 - `cranelift/cli/src/main.rs` for the native backend CLI (build/run)
@@ -125,7 +126,7 @@ output via the Cranelift native backend.
 - optional types (`T?`)
 - tuples with field access (`t.0`, `t.1`)
 - type aliases
-- concurrency: spawn/await, Task[T], Mutex, WaitGroup, Semaphore, Channel
+- concurrency: spawn/await, Task[T], Mutex, WaitGroup, Semaphore, Channel, select, contexts, timers
 - multi-module imports with `from ... import`
 
 **standard library (16 modules):**

@@ -1,9 +1,6 @@
-//! Task system for spawn/await
-//!
-//! spawn creates a thread that calls a function pointer with an argument.
-//! await joins the thread and returns the result.
+//! task system for spawn/await
 
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 static TASKS: std::sync::OnceLock<Mutex<Vec<Option<TaskState>>>> = std::sync::OnceLock::new();
@@ -13,53 +10,139 @@ fn tasks() -> &'static Mutex<Vec<Option<TaskState>>> {
 }
 
 struct TaskState {
-    handle: JoinHandle<i64>,
+    handle: Option<JoinHandle<()>>,
+    shared: Arc<(Mutex<TaskShared>, Condvar)>,
 }
 
-/// Spawn a function call in a new thread.
-/// fn_ptr: pointer to a function (fn(i64) -> i64)
-/// arg: the argument to pass
-/// Returns a task handle (index into TASKS array + 1, 1-based)
+struct TaskShared {
+    done: bool,
+    result: i64,
+}
+
 #[no_mangle]
-pub unsafe extern "C" fn forge_spawn(fn_ptr: i64, arg: i64) -> i64 {
-    // Cast fn_ptr to a callable function pointer
-    let func: extern "C" fn(i64) -> i64 = std::mem::transmute(fn_ptr as *const ());
+pub unsafe extern "C" fn forge_spawn(closure_handle: i64) -> i64 {
+    if closure_handle == 0 {
+        return 0;
+    }
+
+    let shared = Arc::new((
+        Mutex::new(TaskShared {
+            done: false,
+            result: 0,
+        }),
+        Condvar::new(),
+    ));
+    let shared_clone = shared.clone();
 
     let handle = std::thread::spawn(move || {
-        func(arg)
+        let func_ptr = crate::forge_closure_get_fn(closure_handle);
+        if func_ptr == 0 {
+            let (lock, cvar) = &*shared_clone;
+            if let Ok(mut state) = lock.lock() {
+                state.done = true;
+                state.result = 0;
+                cvar.notify_all();
+            }
+            return;
+        }
+        let func: extern "C" fn(i64) -> i64 = std::mem::transmute(func_ptr as *const ());
+        let result = func(closure_handle);
+        let (lock, cvar) = &*shared_clone;
+        if let Ok(mut state) = lock.lock() {
+            state.done = true;
+            state.result = result;
+            cvar.notify_all();
+        }
     });
 
     let mut t = tasks().lock().unwrap();
     let idx = t.len();
-    t.push(Some(TaskState { handle }));
-    (idx as i64) + 1 // 1-based
+    t.push(Some(TaskState {
+        handle: Some(handle),
+        shared,
+    }));
+    (idx as i64) + 1
 }
 
-/// Await a task: join the thread and return its result.
-/// task_handle: 1-based index into TASKS array
-/// Returns the function's return value
 #[no_mangle]
 pub unsafe extern "C" fn forge_await(task_handle: i64) -> i64 {
     if task_handle <= 0 {
         return 0;
     }
     let idx = (task_handle - 1) as usize;
-    let state = {
+    let task_state = {
         let mut t = tasks().lock().unwrap();
         if idx < t.len() {
-            t[idx].take()
+            if let Some(task) = &mut t[idx] {
+                Some((task.shared.clone(), task.handle.take()))
+            } else {
+                None
+            }
         } else {
             None
         }
     };
 
-    match state {
-        Some(task) => {
-            match task.handle.join() {
-                Ok(result) => result,
-                Err(_) => 0,
+    match task_state {
+        Some((shared, handle)) => {
+            if let Some(join_handle) = handle {
+                let _ = join_handle.join();
             }
+            let (lock, cvar) = &*shared;
+            let mut state = lock.lock().unwrap();
+            while !state.done {
+                state = cvar.wait(state).unwrap();
+            }
+            state.result
         }
         None => 0,
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_task_is_done(task_handle: i64) -> i64 {
+    if task_handle <= 0 {
+        return 0;
+    }
+    let idx = (task_handle - 1) as usize;
+    let shared = {
+        let t = tasks().lock().unwrap();
+        if idx < t.len() {
+            if let Some(task) = &t[idx] {
+                Some(task.shared.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    if let Some(shared) = shared {
+        let (lock, _) = &*shared;
+        if let Ok(state) = lock.lock() {
+            return if state.done { 1 } else { 0 };
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_task_detach(task_handle: i64) {
+    if task_handle <= 0 {
+        return;
+    }
+    let idx = (task_handle - 1) as usize;
+    let handle = {
+        let mut t = tasks().lock().unwrap();
+        if idx < t.len() {
+            if let Some(task) = &mut t[idx] {
+                task.handle.take()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    drop(handle);
 }

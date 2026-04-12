@@ -11,6 +11,8 @@
 #   code := process.run_shell("ls -la")
 
 from std.io import ProcessStdin, ProcessStdout, ProcessStderr
+from std.concurrent import Context, BlockingError, WaitError, blocking_failed, blocking_from_wait
+import std.time as time
 
 pub struct Command:
     pub program: String
@@ -71,6 +73,52 @@ impl Command:
     fn output() -> Output!:
         return output(self)
 
+    fn run_ctx(ctx: Context) -> Int!BlockingError:
+        return run_ctx(self, ctx)
+
+    fn output_ctx(ctx: Context) -> Output!BlockingError:
+        return output_ctx(self, ctx)
+
+fn wait_worker(process: Process) -> Int:
+    return process.wait()
+
+fn read_stdout_worker(process: Process) -> String!:
+    return process.stdout().read_all()
+
+fn read_stderr_worker(process: Process) -> String!:
+    return process.stderr().read_all()
+
+fn wait_error(ctx: Context) -> WaitError:
+    if ctx.error_code() == 2:
+        return WaitError.DeadlineExceeded
+    return WaitError.Cancelled
+
+fn start_or_fail(cmd: Command) -> Process!BlockingError:
+    started := start(cmd)
+    if started.is_err:
+        fail blocking_failed(started.err)
+    return started.ok
+
+fn kill_and_reap(process: Process):
+    process.kill()
+    process.wait()
+    process.close()
+
+fn await_output_or_fail(process: Process, task: Task[String!]) -> String!BlockingError:
+    result := await task
+    if result.is_err:
+        process.close()
+        fail blocking_failed(result.err)
+    return result.ok
+
+pub fn wait_ctx(process: Process, ctx: Context) -> Int!WaitError:
+    task := spawn wait_worker(process)
+    while not task.is_done():
+        if ctx.is_cancelled():
+            fail wait_error(ctx)
+        time.delay(1)
+    return await task
+
 pub fn start(cmd: Command) -> Process!:
     handle := process_spawn_argv(cmd.program, cmd.argv, cmd.cwd_path, cmd.env_keys, cmd.env_values)!
     return Process(handle)
@@ -78,11 +126,39 @@ pub fn start(cmd: Command) -> Process!:
 pub fn run(cmd: Command) -> Int!:
     return output(cmd)!.status
 
+pub fn run_ctx(cmd: Command, ctx: Context) -> Int!BlockingError:
+    process := start_or_fail(cmd)!
+    wait_result := process.wait_ctx(ctx)
+    if wait_result.is_err:
+        kill_and_reap(process)
+        fail blocking_from_wait(wait_result.err)
+    status := wait_result.ok
+    process.close()
+    return status
+
 pub fn output(cmd: Command) -> Output!:
     handle := process_output_argv(cmd.program, cmd.argv, cmd.cwd_path, cmd.env_keys, cmd.env_values)!
     out := Output(process_output_status(handle), process_output_stdout(handle), process_output_stderr(handle))
     process_output_close(handle)
     return out
+
+pub fn output_ctx(cmd: Command, ctx: Context) -> Output!BlockingError:
+    process := start_or_fail(cmd)!
+    stdout_task := spawn read_stdout_worker(process)
+    stderr_task := spawn read_stderr_worker(process)
+    wait_result := process.wait_ctx(ctx)
+    if wait_result.is_err:
+        process.kill()
+        process.wait()
+        await stdout_task
+        await stderr_task
+        process.close()
+        fail blocking_from_wait(wait_result.err)
+    stdout := await_output_or_fail(process, stdout_task)!
+    stderr := await_output_or_fail(process, stderr_task)!
+    status := wait_result.ok
+    process.close()
+    return Output(status, stdout, stderr)
 
 impl Process:
     fn stdin() -> ProcessStdin:
@@ -96,6 +172,9 @@ impl Process:
 
     fn wait() -> Int:
         return process_wait(self.handle)
+
+    fn wait_ctx(ctx: Context) -> Int!WaitError:
+        return wait_ctx(self, ctx)
 
     fn kill() -> Bool:
         return process_kill(self.handle)

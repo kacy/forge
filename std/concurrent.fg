@@ -1,0 +1,200 @@
+# std.concurrent — contexts, timers, and task helpers
+
+import std.time as time
+
+pub enum WaitError:
+    Cancelled
+    DeadlineExceeded
+
+pub struct BlockingError:
+    pub kind: Int
+    pub message: String
+
+pub struct Context:
+    pub done_ch: Channel[Bool]
+    pub state: Map[String, Int]
+
+pub struct CancelToken:
+    pub done_ch: Channel[Bool]
+    pub state: Map[String, Int]
+
+pub struct Ticker:
+    pub tick_ch: Channel[Int]
+    pub stop_ch: Channel[Bool]
+
+pub enum RecvResult[T]:
+    Value(T)
+    Closed
+
+fn state_error_code(state: Map[String, Int]) -> Int:
+    return state.get_default("err", 0)
+
+fn state_deadline(state: Map[String, Int]) -> Int:
+    return state.get_default("deadline", -1)
+
+fn error_code_to_wait(code: Int) -> WaitError:
+    if code == 2:
+        return WaitError.DeadlineExceeded
+    return WaitError.Cancelled
+
+fn context_wait_error(ctx: Context) -> WaitError:
+    return error_code_to_wait(state_error_code(ctx.state))
+
+fn copy_state(state: Map[String, Int]) -> Map[String, Int]:
+    mut copied: Map[String, Int] := {}
+    for key in state:
+        copied.insert(key, state[key])
+    return copied
+
+fn make_child_context(parent: Context) -> (Context, CancelToken):
+    mut state := copy_state(parent.state)
+    state.insert("err", 0)
+    done_ch := Channel[Bool]()
+    ctx := Context(done_ch, state)
+    token := CancelToken(done_ch, state)
+    spawn watch_parent(parent, done_ch, state)
+    return (ctx, token)
+
+fn mark_context(done_ch: Channel[Bool], state: Map[String, Int], code: Int):
+    if state_error_code(state) != 0:
+        return
+    state.insert("err", code)
+    done_ch.close()
+
+fn watch_parent(parent: Context, done_ch: Channel[Bool], state: Map[String, Int]):
+    parent.done().recv()
+    mut code := parent.error_code()
+    if code == 0:
+        code = 1
+    mark_context(done_ch, state, code)
+
+fn watch_deadline(done_ch: Channel[Bool], state: Map[String, Int], at_ms: Int):
+    while state_error_code(state) == 0:
+        if time.now() >= at_ms:
+            mark_context(done_ch, state, 2)
+            return
+        time.delay(1)
+
+fn after_worker(ch: Channel[Int], ms: Int):
+    time.delay(ms)
+    ch.send(time.now())
+    ch.close()
+
+fn ticker_worker(ch: Channel[Int], stop_ch: Channel[Bool], ms: Int):
+    while stop_ch.len() == 0:
+        time.delay(ms)
+        if stop_ch.len() > 0:
+            return
+        ch.try_send(time.now())
+
+pub fn background() -> Context:
+    mut state: Map[String, Int] := {}
+    state.insert("err", 0)
+    state.insert("deadline", -1)
+    done_ch := Channel[Bool]()
+    return Context(done_ch, state)
+
+pub fn with_cancel(parent: Context) -> (Context, CancelToken):
+    return make_child_context(parent)
+
+pub fn with_deadline(parent: Context, at_ms: Int) -> (Context, CancelToken):
+    pair := make_child_context(parent)
+    ctx := pair.0
+    token := pair.1
+    ctx.state.insert("deadline", at_ms)
+    spawn watch_deadline(ctx.done_ch, ctx.state, at_ms)
+    return (ctx, token)
+
+pub fn with_timeout(parent: Context, ms: Int) -> (Context, CancelToken):
+    return with_deadline(parent, time.now() + ms)
+
+pub fn after(ms: Int) -> Channel[Int]:
+    ch := Channel[Int](1)
+    spawn after_worker(ch, ms)
+    return ch
+
+pub fn ticker(ms: Int) -> Ticker:
+    tick_ch := Channel[Int](1)
+    stop_ch := Channel[Bool](1)
+    spawn ticker_worker(tick_ch, stop_ch, ms)
+    return Ticker(tick_ch, stop_ch)
+
+pub fn await_ctx[T](task: Task[T], ctx: Context) -> T!WaitError:
+    while not task.is_done():
+        if ctx.is_cancelled():
+            fail context_wait_error(ctx)
+        time.delay(1)
+    return await task
+
+pub fn send_ctx[T](ch: Channel[T], ctx: Context, value: T) -> Bool!WaitError:
+    while true:
+        if ch.try_send(value):
+            return true
+        if ch.is_closed():
+            return false
+        if ctx.is_cancelled():
+            fail context_wait_error(ctx)
+        time.delay(1)
+
+pub fn recv_ctx[T](ch: Channel[T], ctx: Context) -> RecvResult[T]!WaitError:
+    while true:
+        picked := select:
+            value := ch.recv() => (1, value)
+            timeout 1 => (0, none)
+        if picked.0 == 1:
+            if picked.1 == none:
+                return RecvResult.Closed
+            return RecvResult.Value(picked.1?)
+        if ctx.is_cancelled():
+            fail context_wait_error(ctx)
+
+pub fn blocking_cancelled() -> BlockingError:
+    return BlockingError(1, "cancelled")
+
+pub fn blocking_deadline_exceeded() -> BlockingError:
+    return BlockingError(2, "deadline exceeded")
+
+pub fn blocking_failed(message: String) -> BlockingError:
+    return BlockingError(3, message)
+
+pub fn blocking_from_wait(err: WaitError) -> BlockingError:
+    if err == WaitError.DeadlineExceeded:
+        return blocking_deadline_exceeded()
+    return blocking_cancelled()
+
+impl Context:
+    fn done() -> Channel[Bool]:
+        return self.done_ch
+
+    fn is_cancelled() -> Bool:
+        return self.error_code() != 0
+
+    fn error_code() -> Int:
+        return state_error_code(self.state)
+
+    fn deadline() -> Int?:
+        at_ms := state_deadline(self.state)
+        if at_ms < 0:
+            return none
+        return at_ms
+
+impl CancelToken:
+    fn cancel():
+        mark_context(self.done_ch, self.state, 1)
+
+impl Ticker:
+    fn channel() -> Channel[Int]:
+        return self.tick_ch
+
+    fn stop():
+        self.stop_ch.try_send(true)
+
+impl BlockingError:
+    fn is_cancelled() -> Bool:
+        return self.kind == 1
+
+    fn is_deadline_exceeded() -> Bool:
+        return self.kind == 2
+
+    fn is_failed() -> Bool:
+        return self.kind == 3

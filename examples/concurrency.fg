@@ -1,10 +1,19 @@
-# spawn, await, and sync primitives
+# spawn, await, select, and sync primitives
+
+import std.concurrent as concurrent
+import std.io as io
+import std.time as time
+from std.concurrent import await_ctx, recv_ctx, send_ctx
 
 fn fetch(url: String) -> String:
     return "response from " + url
 
 fn compute(x: Int) -> Int:
     return x * 2
+
+fn slow_compute(ms: Int, value: Int) -> Int:
+    time.delay(ms)
+    return value
 
 fn main():
     # spawn wraps the return type in Task[T]
@@ -17,6 +26,39 @@ fn main():
     # spawn and await can be composed
     value := await spawn compute(21)
     print(value.to_string())
+
+    jobs := Channel[Int](1)
+    jobs.send(7)
+    picked := select:
+        msg := jobs.recv() => msg?
+        default => 0
+    print("select picked: {picked}")
+
+    timeout_pair := concurrent.with_timeout(concurrent.background(), 5)
+    timeout_ctx := timeout_pair.0
+    slow_task := spawn slow_compute(20, 99)
+    timeout_result := await_ctx(slow_task, timeout_ctx)
+    print("await_ctx timed out: {timeout_result.is_err}")
+    slow_task.detach()
+
+    ready := Channel[Int](1)
+    queued := send_ctx(ready, concurrent.background(), 5)
+    print("send_ctx ok: {queued.is_ok and queued.ok}")
+    print("send_ctx buffered len: {ready.len()}")
+
+    closed := Channel[Int]()
+    closed.close()
+    closed_send := send_ctx(closed, concurrent.background(), 1)
+    print("send_ctx on closed: {closed_send.is_ok and closed_send.ok}")
+
+    recv_pair := concurrent.with_timeout(concurrent.background(), 5)
+    recv_result := recv_ctx(Channel[Int](), recv_pair.0)
+    print("recv_ctx timed out: {recv_result.is_err}")
+
+    tcp_pair := concurrent.with_timeout(concurrent.background(), 1)
+    time.delay(5)
+    tcp_result := io.from_fd(-1).read_ctx(tcp_pair.0, 8)
+    print("tcp read_ctx deadline: {tcp_result.is_err and tcp_result.err.is_deadline_exceeded()}")
 
     # sync primitives
     mu := Mutex()

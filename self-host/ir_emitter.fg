@@ -44,8 +44,8 @@ STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,to_hex,b64_encode,chr,re
 BYTES_RETURNING_FUNCS := "bytes_from_string_utf8,read_file_bytes,file_read_bytes,tcp_read_bytes,process_read_bytes,process_read_err_bytes,byte_buffer_bytes,b64_decode,from_hex,bytes_slice,bytes_concat"
 LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks,json_object_keys"
 LIST_STRING_RETURNING_FUNCS := "sort_strings,zip,enumerate,toml_keys"
-BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty"
-VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear"
+BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty,send,try_send,close,is_closed,is_done"
+VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear,detach"
 STRING_RETURNING_METHODS := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at,join,list_join,read_file,env,chr"
 
 # --- emitted ir buffers ---
@@ -221,6 +221,10 @@ fn ir_resolve_type_hint(type_name: String) -> String:
         return "set_int"
     if resolved.contains("Set[") or resolved == "Set":
         return "set"
+    if resolved.contains("Channel[") or resolved == "Channel":
+        return "channel"
+    if resolved.contains("Task[") or resolved == "Task":
+        return "task"
     mut base := resolved
     if base.contains("["):
         base = base.substring(0, base.index_of("["))
@@ -604,6 +608,10 @@ fn ir_resolve_static_callee(idx: Int) -> ResolvedCallee:
     node := get_node(idx)
     if node.kind == "ident":
         return ir_ident_callee(node.value)
+    if node.kind == "index" and node.children.len() > 0:
+        base_node := get_node(node.children[0])
+        if base_node.kind == "ident" and base_node.value == "Channel":
+            return ResolvedCallee("Channel", false)
     if node.kind == "field_access":
         alias_name := ir_resolve_module_alias_call_name(idx)
         if alias_name.len() > 0:
@@ -892,9 +900,7 @@ fn ir_type_from_tid(tid: Int) -> String:
     if info.kind == "result":
         return "tuple"
     if info.kind == "optional":
-        if info.inner < 0:
-            return ""
-        info = get_type_info(info.inner)
+        return "tuple"
     if info.kind == "primitive":
         if info.name == "Int" or info.name == "UInt" or info.name == "Int8" or info.name == "Int16" or info.name == "Int32" or info.name == "Int64" or info.name == "UInt8" or info.name == "UInt16" or info.name == "UInt32" or info.name == "UInt64":
             return "int"
@@ -924,6 +930,8 @@ fn ir_type_from_tid(tid: Int) -> String:
         return "set"
     if info.kind == "tuple":
         return "tuple"
+    if info.kind == "enum":
+        return "int"
     if info.kind == "struct":
         return info.name
     if info.kind == "channel":
@@ -1091,6 +1099,17 @@ fn ir_known_string_method_return_type(meth: String) -> String:
     return ""
 
 fn ir_known_collection_method_return_type(obj_type: String, meth: String) -> String:
+    if obj_type == "channel" or obj_type.starts_with("channel:"):
+        if meth == "recv":
+            return "tuple"
+        if meth == "try_recv":
+            return "tuple"
+        if meth == "len" or meth == "cap":
+            return "int"
+        if meth == "send" or meth == "try_send" or meth == "close" or meth == "is_closed":
+            return "bool"
+    if (obj_type == "task" or obj_type.starts_with("task:")) and meth == "is_done":
+        return "bool"
     if meth == "index_of" and (obj_type == "list" or obj_type == "list_string" or obj_type.starts_with("list:")):
         return "int"
     if meth == "slice" or meth == "sort":
@@ -1113,7 +1132,7 @@ fn ir_known_method_return_type(obj_type: String, meth: String) -> String:
         return string_type
     if meth == "to_float":
         return "float"
-    if meth == "len":
+    if meth == "len" or meth == "cap":
         return "int"
     if (meth == "slice" or meth == "concat") and obj_type == "bytes":
         return "bytes"
@@ -1293,6 +1312,19 @@ fn ir_lookup_name_type(name: String) -> String:
         return "bool"
     return ""
 
+fn ir_optional_flag_field(obj_r: Int) -> Int:
+    r := ir_reg()
+    ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " 0 bool is_some")
+    return r
+
+fn ir_optional_value_field(obj_r: Int, opt_tid: Int) -> Int:
+    info := get_type_info(opt_tid)
+    if info.kind != "optional" or info.inner < 0:
+        return ir_zero_reg()
+    r := ir_reg()
+    ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " 8 " + ir_type_from_tid(info.inner) + " value")
+    return r
+
 fn ir_emit_value_for_target(val_idx: Int, target_type: String) -> Int:
     vn := get_node(val_idx)
     if vn.kind == "map" and vn.children.len() == 0 and target_type == "set":
@@ -1332,6 +1364,13 @@ fn ir_checked_target_type(target_idx: Int, fallback_name: String) -> String:
 fn ir_method_receiver_type(node: Node) -> String:
     if node.children.len() == 0:
         return ""
+    recv_tid := c_get_expr_type(node.children[0])
+    if recv_tid >= 0:
+        recv_info := get_type_info(recv_tid)
+        if recv_info.kind == "channel" and recv_info.inner >= 0:
+            return "channel:" + ir_type_from_tid(recv_info.inner)
+        if recv_info.kind == "task" and recv_info.inner >= 0:
+            return "task:" + ir_type_from_tid(recv_info.inner)
     checked := ir_checked_type(node.children[0])
     if checked.len() > 0:
         return checked
@@ -1435,6 +1474,8 @@ fn ir_method_emit_name(mname: String, obj_type: String) -> String:
     obj_is_map := obj_type == "map" or obj_type == "map_int"
     obj_is_set := obj_type == "set" or obj_type == "set_int"
     obj_is_list := obj_type == "list" or obj_type == "list_string" or obj_type.starts_with("list:")
+    obj_is_channel := obj_type == "channel" or obj_type.starts_with("channel:")
+    obj_is_task := obj_type == "task" or obj_type.starts_with("task:")
 
     mut emit_name := mname
     if mname == "to_string":
@@ -1458,7 +1499,34 @@ fn ir_method_emit_name(mname: String, obj_type: String) -> String:
         emit_name = ir_method_map_emit_name(mname, obj_type)
     elif obj_is_set:
         emit_name = ir_method_set_emit_name(mname, obj_type)
+    elif obj_is_channel:
+        if mname == "len":
+            emit_name = "forge_channel_len"
+        elif mname == "cap":
+            emit_name = "forge_channel_cap"
+        elif mname == "send":
+            emit_name = "forge_channel_send"
+        elif mname == "try_send":
+            emit_name = "forge_channel_try_send"
+        elif mname == "recv":
+            emit_name = "forge_channel_recv"
+        elif mname == "try_recv":
+            emit_name = "forge_channel_try_recv"
+        elif mname == "close":
+            emit_name = "forge_channel_close"
+        elif mname == "is_closed":
+            emit_name = "forge_channel_is_closed"
+    elif obj_is_task:
+        if mname == "is_done":
+            emit_name = "forge_task_is_done"
+        elif mname == "detach":
+            emit_name = "forge_task_detach"
     return emit_name
+
+fn ir_emit_optional_unwrap(node: Node) -> Int:
+    recv_r := ir_expr(node.children[0])
+    opt_tid := c_get_expr_type(node.children[0])
+    return ir_optional_value_field(recv_r, opt_tid)
 
 fn ir_collect_method_call_regs(node: Node) -> List[Int]:
     mut regs: List[Int] := []
@@ -1692,6 +1760,10 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
             generic_ret_type = ir_infer_type(idx)
         callee = ResolvedCallee(ir_queue_generic_specialization(callee.name, ir_infer_generic_concrete_types(callee.name, node), generic_ret_type), false)
     arg_regs := ir_collect_call_arg_regs(node, 1)
+    if callee.name == "Channel" and arg_regs.len() == 0:
+        zero_r := ir_reg()
+        ir_emit("iconst " + zero_r.to_string() + " 0")
+        arg_regs.push(zero_r)
 
     if ir_emit_tests and callee.name == "assert" and arg_regs.len() >= 1:
         return ir_emit_test_assert(arg_regs)
@@ -1807,6 +1879,15 @@ fn ir_emit_field_access(idx: Int, node: Node) -> Int:
         r := ir_reg()
         ir_emit("iconst " + r.to_string() + " 0")
         return r
+    recv_node := get_node(node.children[0])
+    if recv_node.kind == "ident":
+        lookup_key := recv_node.value + "." + fname
+        if ir_struct_field_index_lookup.contains_key(lookup_key):
+            if ir_struct_field_lookup.contains_key(lookup_key):
+                if ir_struct_field_lookup[lookup_key] == recv_node.value:
+                    r := ir_reg()
+                    ir_emit("iconst " + r.to_string() + " " + ir_struct_field_index_lookup[lookup_key])
+                    return r
     obj_r := ir_expr(node.children[0])
     r := ir_reg()
     ir_emit_named_field_access(r, obj_r, ir_field_lookup_key(node.children[0], fname), fname)
@@ -2037,6 +2118,195 @@ fn ir_emit_result_or_else(idx: Int, node: Node) -> Int:
     ir_emit("load " + r.to_string() + " " + temp_name)
     return r
 
+fn ir_emit_select_recv_probe(recv_idx: Int) -> Int:
+    recv_node := get_node(recv_idx)
+    if recv_node.kind != "method_call" or recv_node.children.len() == 0:
+        return ir_zero_reg()
+    ch_r := ir_expr(recv_node.children[0])
+    r := ir_reg()
+    ir_emit_call1(r, "forge_channel_try_recv", "tuple", ch_r)
+    return r
+
+fn ir_emit_select_send_probe(send_idx: Int) -> Int:
+    send_node := get_node(send_idx)
+    if send_node.kind != "method_call" or send_node.children.len() == 0:
+        return ir_zero_reg()
+    ch_r := ir_expr(send_node.children[0])
+    arg_idx := ir_method_call_arg_expr(send_node, 0)
+    if arg_idx < 0:
+        return ir_zero_reg()
+    val_r := ir_expr(arg_idx)
+    r := ir_reg()
+    ir_emit_call2(r, "forge_channel_try_send", "bool", ch_r, val_r)
+    return r
+
+fn ir_emit_select_arm_body(body_idx: Int, bind_name: String, bind_r: Int, bind_type: String) -> Int:
+    saved_vars := ir_copy_var_regs(ir_var_regs)
+    saved_types := ir_copy_var_types(ir_var_types)
+    if bind_name.len() > 0:
+        if bind_type.len() > 0:
+            ir_var_types.insert(bind_name, bind_type)
+        ir_emit("store " + bind_name + " " + bind_r.to_string())
+    body_node := get_node(body_idx)
+    mut body_r := ir_zero_reg()
+    if body_node.kind == "body":
+        if body_node.children.len() > 0:
+            body_r = ir_expr(body_node.children[0])
+    elif body_node.kind == "block":
+        ir_block(body_idx)
+    else:
+        body_r = ir_expr(body_idx)
+    ir_var_regs = saved_vars
+    ir_var_types = saved_types
+    return body_r
+
+fn ir_select_probe_arm_indices(node: Node) -> List[Int]:
+    mut probe_arms: List[Int] := []
+    mut i := 0
+    while i < node.children.len():
+        arm_idx := node.children[i]
+        arm_node := get_node(arm_idx)
+        if arm_node.kind == "select_recv_arm" or arm_node.kind == "select_send_arm":
+            probe_arms.push(arm_idx)
+        i = i + 1
+    return probe_arms
+
+fn ir_emit_select_probe_arm(arm_idx: Int, result_temp: String, end_l: String):
+    arm_node := get_node(arm_idx)
+    if arm_node.kind == "select_recv_arm" and arm_node.children.len() >= 2:
+        maybe_r := ir_emit_select_recv_probe(arm_node.children[0])
+        ready_r := ir_optional_flag_field(maybe_r)
+        hit_l := ir_label()
+        next_l := ir_label()
+        ir_emit("brif " + ready_r.to_string() + " " + hit_l + " " + next_l)
+        ir_emit("label " + hit_l)
+        body_r := ir_emit_select_arm_body(arm_node.children[1], arm_node.value, maybe_r, ir_checked_type(arm_node.children[0]))
+        ir_emit("store " + result_temp + " " + body_r.to_string())
+        ir_emit("jmp " + end_l)
+        ir_emit("label " + next_l)
+    elif arm_node.kind == "select_send_arm" and arm_node.children.len() >= 2:
+        ready_r := ir_emit_select_send_probe(arm_node.children[0])
+        hit_l := ir_label()
+        next_l := ir_label()
+        ir_emit("brif " + ready_r.to_string() + " " + hit_l + " " + next_l)
+        ir_emit("label " + hit_l)
+        body_r := ir_emit_select_arm_body(arm_node.children[1], "", 0, "")
+        ir_emit("store " + result_temp + " " + body_r.to_string())
+        ir_emit("jmp " + end_l)
+        ir_emit("label " + next_l)
+
+fn ir_emit_select_expr(node: Node) -> Int:
+    result_temp := ir_new_temp_name("select")
+    mut timeout_idx := 0 - 1
+    mut default_idx := 0 - 1
+    probe_arms := ir_select_probe_arm_indices(node)
+    probe_count := probe_arms.len()
+    mut i := 0
+    while i < node.children.len():
+        arm_node := get_node(node.children[i])
+        if arm_node.kind == "select_timeout_arm" and timeout_idx < 0:
+            timeout_idx = node.children[i]
+        elif arm_node.kind == "select_default_arm" and default_idx < 0:
+            default_idx = node.children[i]
+        i = i + 1
+
+    mut deadline_name := ""
+    if timeout_idx >= 0:
+        deadline_name = ir_new_temp_name("select_deadline")
+        timeout_node := get_node(timeout_idx)
+        timeout_r := ir_expr(timeout_node.children[0])
+        now_r := ir_reg()
+        ir_emit_call0(now_r, "time", "int")
+        deadline_r := ir_reg()
+        ir_emit("add " + deadline_r.to_string() + " " + now_r.to_string() + " " + timeout_r.to_string())
+        ir_emit("store " + deadline_name + " " + deadline_r.to_string())
+
+    loop_l := ir_label()
+    end_l := ir_label()
+    ir_emit("label " + loop_l)
+
+    mut offset_name := ""
+    if probe_count > 1:
+        offset_name = ir_new_temp_name("select_offset")
+        count_r := ir_reg()
+        ir_emit("iconst " + count_r.to_string() + " " + probe_count.to_string())
+        seed_r := ir_reg()
+        ir_emit_call1(seed_r, "forge_select_next_index", "int", count_r)
+        ir_emit("store " + offset_name + " " + seed_r.to_string())
+
+    if probe_count <= 1:
+        if probe_count == 1:
+            ir_emit_select_probe_arm(probe_arms[0], result_temp, end_l)
+    else:
+        probe_done_l := ir_label()
+        offset_r := ir_reg()
+        ir_emit("load " + offset_r.to_string() + " " + offset_name)
+        i = 0
+        while i < probe_count:
+            case_l := ir_label()
+            next_case_l := ir_label()
+            match_r := ir_reg()
+            case_r := ir_reg()
+            ir_emit("iconst " + case_r.to_string() + " " + i.to_string())
+            ir_emit("eq " + match_r.to_string() + " " + offset_r.to_string() + " " + case_r.to_string())
+            ir_emit("brif " + match_r.to_string() + " " + case_l + " " + next_case_l)
+            ir_emit("label " + case_l)
+            mut j := 0
+            while j < probe_count:
+                probe_idx := (i + j) % probe_count
+                ir_emit_select_probe_arm(probe_arms[probe_idx], result_temp, end_l)
+                j = j + 1
+            ir_emit("jmp " + probe_done_l)
+            ir_emit("label " + next_case_l)
+            i = i + 1
+        ir_emit("label " + probe_done_l)
+
+    if default_idx >= 0:
+        default_node := get_node(default_idx)
+        if default_node.children.len() > 0:
+            body_r := ir_emit_select_arm_body(default_node.children[0], "", 0, "")
+            ir_emit("store " + result_temp + " " + body_r.to_string())
+            ir_emit("jmp " + end_l)
+
+    if timeout_idx >= 0:
+        now_r := ir_reg()
+        ir_emit_call0(now_r, "time", "int")
+        deadline_r := ir_reg()
+        ir_emit("load " + deadline_r.to_string() + " " + deadline_name)
+        expired_r := ir_reg()
+        ir_emit("gte " + expired_r.to_string() + " " + now_r.to_string() + " " + deadline_r.to_string())
+        timeout_l := ir_label()
+        wait_l := ir_label()
+        ir_emit("brif " + expired_r.to_string() + " " + timeout_l + " " + wait_l)
+        ir_emit("label " + timeout_l)
+        timeout_node := get_node(timeout_idx)
+        body_r := ir_emit_select_arm_body(timeout_node.children[1], "", 0, "")
+        ir_emit("store " + result_temp + " " + body_r.to_string())
+        ir_emit("jmp " + end_l)
+        ir_emit("label " + wait_l)
+
+    delay_r := ir_reg()
+    if probe_count > 1:
+        next_offset_r := ir_reg()
+        cur_offset_r := ir_reg()
+        one_r := ir_reg()
+        count_r := ir_reg()
+        ir_emit("load " + cur_offset_r.to_string() + " " + offset_name)
+        ir_emit("iconst " + one_r.to_string() + " 1")
+        ir_emit("iconst " + count_r.to_string() + " " + probe_count.to_string())
+        next_sum_r := ir_reg()
+        ir_emit("add " + next_sum_r.to_string() + " " + cur_offset_r.to_string() + " " + one_r.to_string())
+        ir_emit("mod " + next_offset_r.to_string() + " " + next_sum_r.to_string() + " " + count_r.to_string())
+        ir_emit("store " + offset_name + " " + next_offset_r.to_string())
+    ir_emit("iconst " + delay_r.to_string() + " 1")
+    sleep_r := ir_reg()
+    ir_emit_call1(sleep_r, "sleep", "unknown", delay_r)
+    ir_emit("jmp " + loop_l)
+    ir_emit("label " + end_l)
+    r := ir_reg()
+    ir_emit("load " + r.to_string() + " " + result_temp)
+    return r
+
 # --- method call dispatch (extracted from ir_expr) ---
 fn ir_emit_method_call(idx: Int) -> Int:
     node := get_node(idx)
@@ -2212,6 +2482,43 @@ fn ir_emit_lambda(idx: Int) -> Int:
     ir_emit_lambda_capture_setup(r, parts.captures)
     return r
 
+fn ir_emit_spawn_wrapper(call_idx: Int) -> Int:
+    wrapper_name := "__spawn_" + ir_lambda_count.to_string()
+    ir_lambda_count = ir_lambda_count + 1
+    mut captures: List[String] := []
+    call_node := get_node(call_idx)
+    if call_node.children.len() > 0:
+        callee := ir_resolve_static_callee(call_node.children[0])
+        if callee.name.len() == 0:
+            captures = ir_find_free_vars(call_node.children[0], [])
+        mut i := 1
+        while i < call_node.children.len():
+            free_in_arg := ir_find_free_vars(call_node.children[i], [])
+            mut j := 0
+            while j < free_in_arg.len():
+                if not ir_list_contains(captures, free_in_arg[j]):
+                    captures.push(free_in_arg[j])
+                j = j + 1
+            i = i + 1
+
+    saved_regs := ir_next_reg
+    saved_vars := ir_copy_var_regs(ir_var_regs)
+    saved_types := ir_copy_var_types(ir_var_types)
+    saved_lines := ir_copy_lines(ir_lines)
+
+    ir_reset_lambda_emit_state()
+    ir_emit_func_header(wrapper_name, 1, "unknown")
+    ir_emit_lambda_hidden_param()
+    ir_emit_lambda_capture_loads(captures)
+    ir_emit("ret " + ir_expr(call_idx).to_string())
+    ir_emit_lambda_default_return()
+    ir_finish_lambda_emit(saved_regs, saved_vars, saved_types, saved_lines)
+
+    closure_r := ir_reg()
+    ir_emit("closure_ref " + closure_r.to_string() + " " + wrapper_name)
+    ir_emit_lambda_capture_setup(closure_r, captures)
+    return closure_r
+
 fn ir_emit_int_literal(node: Node) -> Int:
     r := ir_reg()
     ir_emit("iconst " + r.to_string() + " " + node.value)
@@ -2273,24 +2580,9 @@ fn ir_emit_spawn_expr(node: Node) -> Int:
     if node.children.len() > 0:
         inner := get_node(node.children[0])
         if inner.kind == "call":
-            mut spawn_fname := "unknown"
-            mut spawn_arg_r := 0 - 1
-            mut i := 0
-            while i < inner.children.len():
-                sc := inner.children[i]
-                scn := get_node(sc)
-                if scn.kind == "ident" and spawn_fname == "unknown":
-                    spawn_fname = scn.value
-                if scn.kind == "arg" and spawn_arg_r < 0 and scn.children.len() > 0:
-                    spawn_arg_r = ir_expr(scn.children[0])
-                i = i + 1
-            if spawn_arg_r < 0:
-                spawn_arg_r = ir_reg()
-                ir_emit("iconst " + spawn_arg_r.to_string() + " 0")
-            fn_r := ir_reg()
-            ir_emit("funcref " + fn_r.to_string() + " " + spawn_fname)
+            closure_r := ir_emit_spawn_wrapper(node.children[0])
             r := ir_reg()
-            ir_emit_call2(r, "spawn", "unknown", fn_r, spawn_arg_r)
+            ir_emit_call1(r, "spawn", "unknown", closure_r)
             return r
     r := ir_reg()
     ir_emit("iconst " + r.to_string() + " 0")
@@ -2465,6 +2757,9 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         ir_emit("iconst " + r.to_string() + " 0")
         return r
 
+    if kind == "unwrap":
+        return ir_emit_optional_unwrap(node)
+
     if kind == "try" or kind == "try_expr":
         return ir_emit_try_expr(node)
 
@@ -2485,6 +2780,9 @@ fn ir_expr_complex(idx: Int, node: Node) -> Int:
         r := ir_reg()
         ir_emit("load " + r.to_string() + " " + temp_name)
         return r
+
+    if kind == "select_expr":
+        return ir_emit_select_expr(node)
 
     if kind == "fail":
         return ir_emit_fail_expr(node)
@@ -2510,6 +2808,8 @@ fn ir_stmt_is_expr(kind: String) -> Bool:
     if kind == "await" or kind == "try" or kind == "try_expr":
         return true
     if kind == "catch_expr":
+        return true
+    if kind == "select_expr":
         return true
     return kind == "fail"
 
