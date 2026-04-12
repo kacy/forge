@@ -132,5 +132,4 @@ the current concurrency story is strong enough for:
 things that are still intentionally explicit or still growing:
 
 - task cancellation is cooperative, not forceful
-- `recv_ctx(...)` is not in yet
 - plain file io still does not have `_ctx` variants

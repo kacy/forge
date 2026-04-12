@@ -32,11 +32,28 @@ fn state_error_code(state: Map[String, Int]) -> Int:
 fn state_deadline(state: Map[String, Int]) -> Int:
     return state.get_default("deadline", -1)
 
+fn error_code_to_wait(code: Int) -> WaitError:
+    if code == 2:
+        return WaitError.DeadlineExceeded
+    return WaitError.Cancelled
+
+fn context_wait_error(ctx: Context) -> WaitError:
+    return error_code_to_wait(state_error_code(ctx.state))
+
 fn copy_state(state: Map[String, Int]) -> Map[String, Int]:
     mut copied: Map[String, Int] := {}
     for key in state:
         copied.insert(key, state[key])
     return copied
+
+fn make_child_context(parent: Context) -> (Context, CancelToken):
+    mut state := copy_state(parent.state)
+    state.insert("err", 0)
+    done_ch := Channel[Bool]()
+    ctx := Context(done_ch, state)
+    token := CancelToken(done_ch, state)
+    spawn watch_parent(parent, done_ch, state)
+    return (ctx, token)
 
 fn mark_context(done_ch: Channel[Bool], state: Map[String, Int], code: Int):
     if state_error_code(state) != 0:
@@ -78,22 +95,13 @@ pub fn background() -> Context:
     return Context(done_ch, state)
 
 pub fn with_cancel(parent: Context) -> (Context, CancelToken):
-    mut state := copy_state(parent.state)
-    state.insert("err", 0)
-    done_ch := Channel[Bool]()
-    ctx := Context(done_ch, state)
-    token := CancelToken(done_ch, state)
-    spawn watch_parent(parent, done_ch, state)
-    return (ctx, token)
+    return make_child_context(parent)
 
 pub fn with_deadline(parent: Context, at_ms: Int) -> (Context, CancelToken):
-    mut state := copy_state(parent.state)
-    state.insert("err", 0)
-    state.insert("deadline", at_ms)
-    done_ch := Channel[Bool]()
-    ctx := Context(done_ch, state)
-    token := CancelToken(done_ch, state)
-    spawn watch_parent(parent, done_ch, state)
+    pair := make_child_context(parent)
+    ctx := pair.0
+    token := pair.1
+    ctx.state.insert("deadline", at_ms)
     spawn watch_deadline(ctx.done_ch, ctx.state, at_ms)
     return (ctx, token)
 
@@ -114,9 +122,7 @@ pub fn ticker(ms: Int) -> Ticker:
 pub fn await_ctx[T](task: Task[T], ctx: Context) -> T!WaitError:
     while not task.is_done():
         if ctx.is_cancelled():
-            if ctx.error_code() == 2:
-                fail WaitError.DeadlineExceeded
-            fail WaitError.Cancelled
+            fail context_wait_error(ctx)
         time.delay(1)
     return await task
 
@@ -127,9 +133,7 @@ pub fn send_ctx[T](ch: Channel[T], ctx: Context, value: T) -> Bool!WaitError:
         if ch.is_closed():
             return false
         if ctx.is_cancelled():
-            if ctx.error_code() == 2:
-                fail WaitError.DeadlineExceeded
-            fail WaitError.Cancelled
+            fail context_wait_error(ctx)
         time.delay(1)
 
 pub fn recv_ctx[T](ch: Channel[T], ctx: Context) -> RecvResult[T]!WaitError:
@@ -142,9 +146,7 @@ pub fn recv_ctx[T](ch: Channel[T], ctx: Context) -> RecvResult[T]!WaitError:
                 return RecvResult.Closed
             return RecvResult.Value(picked.1?)
         if ctx.is_cancelled():
-            if ctx.error_code() == 2:
-                fail WaitError.DeadlineExceeded
-            fail WaitError.Cancelled
+            fail context_wait_error(ctx)
 
 pub fn blocking_cancelled() -> BlockingError:
     return BlockingError(1, "cancelled")

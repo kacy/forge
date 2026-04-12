@@ -88,13 +88,34 @@ fn read_stdout_worker(process: Process) -> String!:
 fn read_stderr_worker(process: Process) -> String!:
     return process.stderr().read_all()
 
+fn wait_error(ctx: Context) -> WaitError:
+    if ctx.error_code() == 2:
+        return WaitError.DeadlineExceeded
+    return WaitError.Cancelled
+
+fn start_or_fail(cmd: Command) -> Process!BlockingError:
+    started := start(cmd)
+    if started.is_err:
+        fail blocking_failed(started.err)
+    return started.ok
+
+fn kill_and_reap(process: Process):
+    process.kill()
+    process.wait()
+    process.close()
+
+fn await_output_or_fail(process: Process, task: Task[String!]) -> String!BlockingError:
+    result := await task
+    if result.is_err:
+        process.close()
+        fail blocking_failed(result.err)
+    return result.ok
+
 pub fn wait_ctx(process: Process, ctx: Context) -> Int!WaitError:
     task := spawn wait_worker(process)
     while not task.is_done():
         if ctx.is_cancelled():
-            if ctx.error_code() == 2:
-                fail WaitError.DeadlineExceeded
-            fail WaitError.Cancelled
+            fail wait_error(ctx)
         time.delay(1)
     return await task
 
@@ -106,15 +127,10 @@ pub fn run(cmd: Command) -> Int!:
     return output(cmd)!.status
 
 pub fn run_ctx(cmd: Command, ctx: Context) -> Int!BlockingError:
-    started := start(cmd)
-    if started.is_err:
-        fail blocking_failed(started.err)
-    process := started.ok
+    process := start_or_fail(cmd)!
     wait_result := process.wait_ctx(ctx)
     if wait_result.is_err:
-        process.kill()
-        process.wait()
-        process.close()
+        kill_and_reap(process)
         fail blocking_from_wait(wait_result.err)
     status := wait_result.ok
     process.close()
@@ -127,10 +143,7 @@ pub fn output(cmd: Command) -> Output!:
     return out
 
 pub fn output_ctx(cmd: Command, ctx: Context) -> Output!BlockingError:
-    started := start(cmd)
-    if started.is_err:
-        fail blocking_failed(started.err)
-    process := started.ok
+    process := start_or_fail(cmd)!
     stdout_task := spawn read_stdout_worker(process)
     stderr_task := spawn read_stderr_worker(process)
     wait_result := process.wait_ctx(ctx)
@@ -141,17 +154,11 @@ pub fn output_ctx(cmd: Command, ctx: Context) -> Output!BlockingError:
         await stderr_task
         process.close()
         fail blocking_from_wait(wait_result.err)
-    stdout_result := await stdout_task
-    if stdout_result.is_err:
-        process.close()
-        fail blocking_failed(stdout_result.err)
-    stderr_result := await stderr_task
-    if stderr_result.is_err:
-        process.close()
-        fail blocking_failed(stderr_result.err)
+    stdout := await_output_or_fail(process, stdout_task)!
+    stderr := await_output_or_fail(process, stderr_task)!
     status := wait_result.ok
     process.close()
-    return Output(status, stdout_result.ok, stderr_result.ok)
+    return Output(status, stdout, stderr)
 
 impl Process:
     fn stdin() -> ProcessStdin:
