@@ -4,3 +4,5 @@ send-ready:30
 send-value:3
 recv-timeout:7
 timeout-fired:12
+fair-left:true
+fair-right:true

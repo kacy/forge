@@ -445,6 +445,7 @@ pub fn declare_runtime_functions(
         ("forge_channel_close", "forge_channel_close", &[I64], &[I64]),
         ("is_closed", "forge_channel_is_closed", &[I64], &[I64]),
         ("forge_channel_is_closed", "forge_channel_is_closed", &[I64], &[I64]),
+        ("forge_select_next_index", "forge_select_next_index", &[I64], &[I64]),
         ("forge_channel_len", "forge_channel_len", &[I64], &[I64]),
         ("forge_channel_cap", "forge_channel_cap", &[I64], &[I64]),
         ("forge_task_is_done", "forge_task_is_done", &[I64], &[I64]),

@@ -38,3 +38,22 @@ fn main():
         msg := idle.recv() => msg?
         timeout 5 => 12
     print("timeout-fired:{timed_out}")
+
+    mut left_picks := 0
+    mut right_picks := 0
+    mut i := 0
+    while i < 6:
+        left := Channel[Int](1)
+        right := Channel[Int](1)
+        left.send(1)
+        right.send(2)
+        picked := select:
+            l := left.recv() => l?
+            r := right.recv() => r?
+        if picked == 1:
+            left_picks = left_picks + 1
+        else:
+            right_picks = right_picks + 1
+        i = i + 1
+    print("fair-left:{left_picks > 0}")
+    print("fair-right:{right_picks > 0}")

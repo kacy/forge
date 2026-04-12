@@ -1,7 +1,10 @@
 //! channel support for task communication
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+
+static SELECT_COUNTER: AtomicI64 = AtomicI64::new(0);
 
 struct ChannelState {
     queue: VecDeque<i64>,
@@ -220,6 +223,15 @@ pub unsafe extern "C" fn forge_channel_is_closed(handle: i64) -> i64 {
     let (lock, _) = &**channel;
     let state = lock.lock().unwrap();
     if state.closed { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn forge_select_next_index(count: i64) -> i64 {
+    if count <= 1 {
+        return 0;
+    }
+    let next = SELECT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    next.rem_euclid(count)
 }
 
 #[no_mangle]

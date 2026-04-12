@@ -2160,10 +2160,47 @@ fn ir_emit_select_arm_body(body_idx: Int, bind_name: String, bind_r: Int, bind_t
     ir_var_types = saved_types
     return body_r
 
+fn ir_select_probe_arm_indices(node: Node) -> List[Int]:
+    mut probe_arms: List[Int] := []
+    mut i := 0
+    while i < node.children.len():
+        arm_idx := node.children[i]
+        arm_node := get_node(arm_idx)
+        if arm_node.kind == "select_recv_arm" or arm_node.kind == "select_send_arm":
+            probe_arms.push(arm_idx)
+        i = i + 1
+    return probe_arms
+
+fn ir_emit_select_probe_arm(arm_idx: Int, result_temp: String, end_l: String):
+    arm_node := get_node(arm_idx)
+    if arm_node.kind == "select_recv_arm" and arm_node.children.len() >= 2:
+        maybe_r := ir_emit_select_recv_probe(arm_node.children[0])
+        ready_r := ir_optional_flag_field(maybe_r)
+        hit_l := ir_label()
+        next_l := ir_label()
+        ir_emit("brif " + ready_r.to_string() + " " + hit_l + " " + next_l)
+        ir_emit("label " + hit_l)
+        body_r := ir_emit_select_arm_body(arm_node.children[1], arm_node.value, maybe_r, ir_checked_type(arm_node.children[0]))
+        ir_emit("store " + result_temp + " " + body_r.to_string())
+        ir_emit("jmp " + end_l)
+        ir_emit("label " + next_l)
+    elif arm_node.kind == "select_send_arm" and arm_node.children.len() >= 2:
+        ready_r := ir_emit_select_send_probe(arm_node.children[0])
+        hit_l := ir_label()
+        next_l := ir_label()
+        ir_emit("brif " + ready_r.to_string() + " " + hit_l + " " + next_l)
+        ir_emit("label " + hit_l)
+        body_r := ir_emit_select_arm_body(arm_node.children[1], "", 0, "")
+        ir_emit("store " + result_temp + " " + body_r.to_string())
+        ir_emit("jmp " + end_l)
+        ir_emit("label " + next_l)
+
 fn ir_emit_select_expr(node: Node) -> Int:
     result_temp := ir_new_temp_name("select")
     mut timeout_idx := 0 - 1
     mut default_idx := 0 - 1
+    probe_arms := ir_select_probe_arm_indices(node)
+    probe_count := probe_arms.len()
     mut i := 0
     while i < node.children.len():
         arm_node := get_node(node.children[i])
@@ -2188,32 +2225,41 @@ fn ir_emit_select_expr(node: Node) -> Int:
     end_l := ir_label()
     ir_emit("label " + loop_l)
 
-    i = 0
-    while i < node.children.len():
-        arm_idx := node.children[i]
-        arm_node := get_node(arm_idx)
-        if arm_node.kind == "select_recv_arm" and arm_node.children.len() >= 2:
-            maybe_r := ir_emit_select_recv_probe(arm_node.children[0])
-            ready_r := ir_optional_flag_field(maybe_r)
-            hit_l := ir_label()
-            next_l := ir_label()
-            ir_emit("brif " + ready_r.to_string() + " " + hit_l + " " + next_l)
-            ir_emit("label " + hit_l)
-            body_r := ir_emit_select_arm_body(arm_node.children[1], arm_node.value, maybe_r, ir_checked_type(arm_node.children[0]))
-            ir_emit("store " + result_temp + " " + body_r.to_string())
-            ir_emit("jmp " + end_l)
-            ir_emit("label " + next_l)
-        elif arm_node.kind == "select_send_arm" and arm_node.children.len() >= 2:
-            ready_r := ir_emit_select_send_probe(arm_node.children[0])
-            hit_l := ir_label()
-            next_l := ir_label()
-            ir_emit("brif " + ready_r.to_string() + " " + hit_l + " " + next_l)
-            ir_emit("label " + hit_l)
-            body_r := ir_emit_select_arm_body(arm_node.children[1], "", 0, "")
-            ir_emit("store " + result_temp + " " + body_r.to_string())
-            ir_emit("jmp " + end_l)
-            ir_emit("label " + next_l)
-        i = i + 1
+    mut offset_name := ""
+    if probe_count > 1:
+        offset_name = ir_new_temp_name("select_offset")
+        count_r := ir_reg()
+        ir_emit("iconst " + count_r.to_string() + " " + probe_count.to_string())
+        seed_r := ir_reg()
+        ir_emit_call1(seed_r, "forge_select_next_index", "int", count_r)
+        ir_emit("store " + offset_name + " " + seed_r.to_string())
+
+    if probe_count <= 1:
+        if probe_count == 1:
+            ir_emit_select_probe_arm(probe_arms[0], result_temp, end_l)
+    else:
+        probe_done_l := ir_label()
+        offset_r := ir_reg()
+        ir_emit("load " + offset_r.to_string() + " " + offset_name)
+        i = 0
+        while i < probe_count:
+            case_l := ir_label()
+            next_case_l := ir_label()
+            match_r := ir_reg()
+            case_r := ir_reg()
+            ir_emit("iconst " + case_r.to_string() + " " + i.to_string())
+            ir_emit("eq " + match_r.to_string() + " " + offset_r.to_string() + " " + case_r.to_string())
+            ir_emit("brif " + match_r.to_string() + " " + case_l + " " + next_case_l)
+            ir_emit("label " + case_l)
+            mut j := 0
+            while j < probe_count:
+                probe_idx := (i + j) % probe_count
+                ir_emit_select_probe_arm(probe_arms[probe_idx], result_temp, end_l)
+                j = j + 1
+            ir_emit("jmp " + probe_done_l)
+            ir_emit("label " + next_case_l)
+            i = i + 1
+        ir_emit("label " + probe_done_l)
 
     if default_idx >= 0:
         default_node := get_node(default_idx)
@@ -2240,6 +2286,18 @@ fn ir_emit_select_expr(node: Node) -> Int:
         ir_emit("label " + wait_l)
 
     delay_r := ir_reg()
+    if probe_count > 1:
+        next_offset_r := ir_reg()
+        cur_offset_r := ir_reg()
+        one_r := ir_reg()
+        count_r := ir_reg()
+        ir_emit("load " + cur_offset_r.to_string() + " " + offset_name)
+        ir_emit("iconst " + one_r.to_string() + " 1")
+        ir_emit("iconst " + count_r.to_string() + " " + probe_count.to_string())
+        next_sum_r := ir_reg()
+        ir_emit("add " + next_sum_r.to_string() + " " + cur_offset_r.to_string() + " " + one_r.to_string())
+        ir_emit("mod " + next_offset_r.to_string() + " " + next_sum_r.to_string() + " " + count_r.to_string())
+        ir_emit("store " + offset_name + " " + next_offset_r.to_string())
     ir_emit("iconst " + delay_r.to_string() + " 1")
     sleep_r := ir_reg()
     ir_emit_call1(sleep_r, "sleep", "unknown", delay_r)
