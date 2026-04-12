@@ -22,6 +22,10 @@ pub struct Ticker:
     pub tick_ch: Channel[Int]
     pub stop_ch: Channel[Bool]
 
+pub enum RecvResult[T]:
+    Value(T)
+    Closed
+
 fn state_error_code(state: Map[String, Int]) -> Int:
     return state.get_default("err", 0)
 
@@ -127,6 +131,20 @@ pub fn send_ctx[T](ch: Channel[T], ctx: Context, value: T) -> Bool!WaitError:
                 fail WaitError.DeadlineExceeded
             fail WaitError.Cancelled
         time.delay(1)
+
+pub fn recv_ctx[T](ch: Channel[T], ctx: Context) -> RecvResult[T]!WaitError:
+    while true:
+        picked := select:
+            value := ch.recv() => (1, value)
+            timeout 1 => (0, none)
+        if picked.0 == 1:
+            if picked.1 == none:
+                return RecvResult.Closed
+            return RecvResult.Value(picked.1?)
+        if ctx.is_cancelled():
+            if ctx.error_code() == 2:
+                fail WaitError.DeadlineExceeded
+            fail WaitError.Cancelled
 
 pub fn blocking_cancelled() -> BlockingError:
     return BlockingError(1, "cancelled")

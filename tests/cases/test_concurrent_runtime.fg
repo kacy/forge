@@ -1,6 +1,6 @@
 import std.concurrent as concurrent
 import std.time as time
-from std.concurrent import await_ctx, send_ctx, WaitError
+from std.concurrent import await_ctx, recv_ctx, send_ctx, WaitError
 
 fn slow_value(ms: Int, value: Int) -> Int:
     time.delay(ms)
@@ -64,6 +64,10 @@ fn main():
     blocked := Channel[Int]()
     send_timeout := send_ctx(blocked, send_pair.0, 12)
     print("send-ctx-timeout:{send_timeout.is_err}")
+
+    recv_pair := concurrent.with_timeout(concurrent.background(), 5)
+    recv_timeout := recv_ctx(blocked, recv_pair.0)
+    print("recv-ctx-timeout:{recv_timeout.is_err}")
 
     ready := Channel[Int](1)
     send_ready := send_ctx(ready, concurrent.background(), 33)

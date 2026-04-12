@@ -16,6 +16,7 @@ timeout-deadline-set:true
 await-timeout:true
 await-deadline:true
 send-ctx-timeout:true
+recv-ctx-timeout:true
 send-ctx-ready:true
 ready-len:1
 closed-before:false

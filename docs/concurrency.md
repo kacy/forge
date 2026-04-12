@@ -68,6 +68,7 @@ available helpers:
 - `ticker(ms)`
 - `await_ctx(task, ctx)`
 - `send_ctx(ch, ctx, value)`
+- `recv_ctx(ch, ctx)`
 
 tcp stream waits can use the same context story through `std.io`:
 

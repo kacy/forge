@@ -5,5 +5,6 @@ await_ctx timed out: true
 send_ctx ok: true
 send_ctx buffered len: 1
 send_ctx on closed: false
+recv_ctx timed out: true
 tcp read_ctx deadline: true
 concurrency works
