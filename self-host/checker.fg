@@ -2997,6 +2997,9 @@ fn check_channel_method_call(method: String, info: TypeInfo, args: List[Int], sc
     if method == "close":
         expect_no_arguments("Channel.close", args)
         return tid_bool
+    if method == "is_closed":
+        expect_no_arguments("Channel.is_closed", args)
+        return tid_bool
     if method == "len":
         expect_no_arguments("Channel.len", args)
         return tid_int

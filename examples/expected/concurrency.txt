@@ -2,4 +2,7 @@ response from https://example.com
 42
 select picked: 7
 await_ctx timed out: true
+send_ctx ok: true
+send_ctx buffered len: 1
+send_ctx on closed: false
 concurrency works

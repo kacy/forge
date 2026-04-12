@@ -8,7 +8,7 @@ pub mod waitgroup;
 
 // Re-export FFI functions for use by the codegen
 pub use channel::{
-    forge_channel_cap, forge_channel_close, forge_channel_free, forge_channel_len,
+    forge_channel_cap, forge_channel_close, forge_channel_free, forge_channel_is_closed, forge_channel_len,
     forge_channel_new, forge_channel_recv, forge_channel_send, forge_channel_try_recv,
     forge_channel_try_send,
 };

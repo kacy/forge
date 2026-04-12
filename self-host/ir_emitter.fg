@@ -44,7 +44,7 @@ STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,to_hex,b64_encode,chr,re
 BYTES_RETURNING_FUNCS := "bytes_from_string_utf8,read_file_bytes,file_read_bytes,tcp_read_bytes,process_read_bytes,process_read_err_bytes,byte_buffer_bytes,b64_decode,from_hex,bytes_slice,bytes_concat"
 LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks,json_object_keys"
 LIST_STRING_RETURNING_FUNCS := "sort_strings,zip,enumerate,toml_keys"
-BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty,send,try_send,close,is_done"
+BOOL_RETURNING_METHODS := "contains,starts_with,ends_with,is_empty,string_contains,string_is_empty,contains_key,map_contains_key,map_contains_ikey,map_is_empty,set_contains,set_contains_int,set_is_empty,list_contains,list_contains_string,list_is_empty,send,try_send,close,is_closed,is_done"
 VOID_METHODS := "sort,sort_strings,reverse,clear,push,remove,insert,add,list_remove,list_clear,list_reverse,map_insert,map_insert_ikey,map_remove,map_remove_ikey,map_clear,set_add,set_add_int,set_remove,set_remove_int,set_clear,detach"
 STRING_RETURNING_METHODS := "trim,substring,to_upper,to_lower,reverse,replace,repeat,pad_left,pad_right,char_at,join,list_join,read_file,env,chr"
 
@@ -221,6 +221,10 @@ fn ir_resolve_type_hint(type_name: String) -> String:
         return "set_int"
     if resolved.contains("Set[") or resolved == "Set":
         return "set"
+    if resolved.contains("Channel[") or resolved == "Channel":
+        return "channel"
+    if resolved.contains("Task[") or resolved == "Task":
+        return "task"
     mut base := resolved
     if base.contains("["):
         base = base.substring(0, base.index_of("["))
@@ -1095,16 +1099,16 @@ fn ir_known_string_method_return_type(meth: String) -> String:
     return ""
 
 fn ir_known_collection_method_return_type(obj_type: String, meth: String) -> String:
-    if obj_type.starts_with("channel:"):
+    if obj_type == "channel" or obj_type.starts_with("channel:"):
         if meth == "recv":
             return "tuple"
         if meth == "try_recv":
             return "tuple"
         if meth == "len" or meth == "cap":
             return "int"
-        if meth == "send" or meth == "try_send" or meth == "close":
+        if meth == "send" or meth == "try_send" or meth == "close" or meth == "is_closed":
             return "bool"
-    if obj_type.starts_with("task:") and meth == "is_done":
+    if (obj_type == "task" or obj_type.starts_with("task:")) and meth == "is_done":
         return "bool"
     if meth == "index_of" and (obj_type == "list" or obj_type == "list_string" or obj_type.starts_with("list:")):
         return "int"
@@ -1470,8 +1474,8 @@ fn ir_method_emit_name(mname: String, obj_type: String) -> String:
     obj_is_map := obj_type == "map" or obj_type == "map_int"
     obj_is_set := obj_type == "set" or obj_type == "set_int"
     obj_is_list := obj_type == "list" or obj_type == "list_string" or obj_type.starts_with("list:")
-    obj_is_channel := obj_type.starts_with("channel:")
-    obj_is_task := obj_type.starts_with("task:")
+    obj_is_channel := obj_type == "channel" or obj_type.starts_with("channel:")
+    obj_is_task := obj_type == "task" or obj_type.starts_with("task:")
 
     mut emit_name := mname
     if mname == "to_string":
@@ -1510,6 +1514,8 @@ fn ir_method_emit_name(mname: String, obj_type: String) -> String:
             emit_name = "forge_channel_try_recv"
         elif mname == "close":
             emit_name = "forge_channel_close"
+        elif mname == "is_closed":
+            emit_name = "forge_channel_is_closed"
     elif obj_is_task:
         if mname == "is_done":
             emit_name = "forge_task_is_done"

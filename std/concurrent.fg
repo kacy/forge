@@ -116,6 +116,18 @@ pub fn await_ctx[T](task: Task[T], ctx: Context) -> T!WaitError:
         time.delay(1)
     return await task
 
+pub fn send_ctx[T](ch: Channel[T], ctx: Context, value: T) -> Bool!WaitError:
+    while true:
+        if ch.try_send(value):
+            return true
+        if ch.is_closed():
+            return false
+        if ctx.is_cancelled():
+            if ctx.error_code() == 2:
+                fail WaitError.DeadlineExceeded
+            fail WaitError.Cancelled
+        time.delay(1)
+
 pub fn blocking_cancelled() -> BlockingError:
     return BlockingError(1, "cancelled")
 
@@ -140,8 +152,11 @@ impl Context:
     fn error_code() -> Int:
         return state_error_code(self.state)
 
-    fn deadline() -> Int:
-        return state_deadline(self.state)
+    fn deadline() -> Int?:
+        at_ms := state_deadline(self.state)
+        if at_ms < 0:
+            return none
+        return at_ms
 
 impl CancelToken:
     fn cancel():

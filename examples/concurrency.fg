@@ -2,7 +2,7 @@
 
 import std.concurrent as concurrent
 import std.time as time
-from std.concurrent import await_ctx
+from std.concurrent import await_ctx, send_ctx
 
 fn fetch(url: String) -> String:
     return "response from " + url
@@ -38,7 +38,17 @@ fn main():
     slow_task := spawn slow_compute(20, 99)
     timeout_result := await_ctx(slow_task, timeout_ctx)
     print("await_ctx timed out: {timeout_result.is_err}")
-    await slow_task
+    slow_task.detach()
+
+    ready := Channel[Int](1)
+    queued := send_ctx(ready, concurrent.background(), 5)
+    print("send_ctx ok: {queued.is_ok and queued.ok}")
+    print("send_ctx buffered len: {ready.len()}")
+
+    closed := Channel[Int]()
+    closed.close()
+    closed_send := send_ctx(closed, concurrent.background(), 1)
+    print("send_ctx on closed: {closed_send.is_ok and closed_send.ok}")
 
     # sync primitives
     mu := Mutex()

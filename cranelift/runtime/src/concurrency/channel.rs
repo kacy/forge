@@ -212,6 +212,17 @@ pub unsafe extern "C" fn forge_channel_cap(handle: i64) -> i64 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn forge_channel_is_closed(handle: i64) -> i64 {
+    if handle == 0 {
+        return 1;
+    }
+    let channel = &*(handle as *mut ForgeChannelHandle);
+    let (lock, _) = &**channel;
+    let state = lock.lock().unwrap();
+    if state.closed { 1 } else { 0 }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn forge_channel_free(handle: i64) {
     if handle != 0 {
         let _ = Box::from_raw(handle as *mut ForgeChannelHandle);
