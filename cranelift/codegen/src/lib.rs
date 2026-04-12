@@ -167,6 +167,7 @@ pub fn declare_runtime_functions(
         ("forge_list_join", "forge_list_join", &[I64, I64], &[I64]),
         ("forge_list_get_value", "forge_list_get_value", &[I64, I64], &[I64]),
         ("forge_list_len", "forge_list_len", &[I64], &[I64]),
+        ("forge_list_pop", "forge_list_pop", &[I64], &[I64]),
         ("forge_auto_len", "forge_auto_len", &[I64], &[I64]),
         ("forge_list_map", "forge_list_map", &[I64, I64], &[I64]),
         ("forge_list_filter", "forge_list_filter", &[I64, I64], &[I64]),
