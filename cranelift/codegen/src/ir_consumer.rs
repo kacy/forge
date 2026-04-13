@@ -32,6 +32,9 @@
 use crate::{CodeGen, CompileError};
 use cranelift::prelude::*;
 use cranelift_module::{FuncId, Linkage, Module};
+use forge_runtime::collections::list::{
+    LIST_IMPL_ELEM_SIZE_OFFSET, LIST_IMPL_VALUES8_LEN_OFFSET, LIST_IMPL_VALUES8_PTR_OFFSET,
+};
 use std::collections::{HashMap, HashSet};
 
 #[cfg(forge_cranelift_new_api)]
@@ -45,6 +48,89 @@ fn declare_i64_var(builder: &mut FunctionBuilder<'_>, next_var_id: &mut u32) -> 
     *next_var_id += 1;
     builder.declare_var(var, types::I64);
     var
+}
+
+fn inline_list_get_value(
+    builder: &mut FunctionBuilder<'_>,
+    list: Value,
+    index: Value,
+    checked: bool,
+) -> Value {
+    let zero = builder.ins().iconst(types::I64, 0);
+    let done = builder.create_block();
+    builder.append_block_param(done, types::I64);
+
+    let list_is_null = builder.ins().icmp_imm(IntCC::Equal, list, 0);
+    let null_block = builder.create_block();
+    let after_null = builder.create_block();
+    builder.ins().brif(list_is_null, null_block, &[], after_null, &[]);
+    builder.switch_to_block(null_block);
+    builder.ins().jump(done, &[zero]);
+    builder.switch_to_block(after_null);
+
+    let index_is_negative = builder.ins().icmp_imm(IntCC::SignedLessThan, index, 0);
+    let neg_block = builder.create_block();
+    let after_neg = builder.create_block();
+    builder.ins().brif(index_is_negative, neg_block, &[], after_neg, &[]);
+    builder.switch_to_block(neg_block);
+    builder.ins().jump(done, &[zero]);
+    builder.switch_to_block(after_neg);
+
+    let elem_size = builder.ins().load(
+        types::I64,
+        MemFlags::new(),
+        list,
+        LIST_IMPL_ELEM_SIZE_OFFSET,
+    );
+    let is_eight = builder.ins().icmp_imm(IntCC::Equal, elem_size, 8);
+    let size_fail = builder.create_block();
+    let after_size = builder.create_block();
+    builder.ins().brif(is_eight, after_size, &[], size_fail, &[]);
+    builder.switch_to_block(size_fail);
+    builder.ins().jump(done, &[zero]);
+    builder.switch_to_block(after_size);
+
+    if checked {
+        let len = builder.ins().load(
+            types::I64,
+            MemFlags::new(),
+            list,
+            LIST_IMPL_VALUES8_LEN_OFFSET,
+        );
+        let out_of_bounds = builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+        let bounds_fail = builder.create_block();
+        let after_bounds = builder.create_block();
+        builder
+            .ins()
+            .brif(out_of_bounds, bounds_fail, &[], after_bounds, &[]);
+        builder.switch_to_block(bounds_fail);
+        builder.ins().jump(done, &[zero]);
+        builder.switch_to_block(after_bounds);
+    }
+
+    let data_ptr = builder.ins().load(
+        types::I64,
+        MemFlags::new(),
+        list,
+        LIST_IMPL_VALUES8_PTR_OFFSET,
+    );
+    let data_is_null = builder.ins().icmp_imm(IntCC::Equal, data_ptr, 0);
+    let ptr_fail = builder.create_block();
+    let load_block = builder.create_block();
+    builder.ins().brif(data_is_null, ptr_fail, &[], load_block, &[]);
+    builder.switch_to_block(ptr_fail);
+    builder.ins().jump(done, &[zero]);
+    builder.switch_to_block(load_block);
+
+    let byte_offset = builder.ins().ishl_imm(index, 3);
+    let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
+    let value = builder.ins().load(types::I64, MemFlags::new(), elem_addr, 0);
+    builder.ins().jump(done, &[value]);
+
+    builder.switch_to_block(done);
+    builder.block_params(done)[0]
 }
 
 /// Compile IR text to native code via Cranelift
@@ -900,6 +986,27 @@ fn compile_ir_function(
                         if j + arg_start < parts.len() {
                             args.push(get_reg(&regs, parts[j + arg_start]));
                         }
+                    }
+                    if (fname == "forge_list_get_value"
+                        || fname == "forge_list_get_value_unchecked")
+                        && args.len() == 2
+                    {
+                        let inlined = inline_list_get_value(
+                            &mut builder,
+                            args[0],
+                            args[1],
+                            fname == "forge_list_get_value",
+                        );
+                        regs.insert(reg, inlined);
+                        string_regs.remove(&reg);
+                        bytes_regs.remove(&reg);
+                        float_regs.remove(&reg);
+                        if let Some(struct_name) = explicit_struct_name_from_retkind(retkind) {
+                            struct_regs.insert(reg, struct_name.to_string());
+                        } else {
+                            struct_regs.remove(&reg);
+                        }
+                        continue;
                     }
                     // Look up function: user-defined first, then a direct runtime import key.
                     let mut runtime_call = false;
