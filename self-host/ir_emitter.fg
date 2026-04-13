@@ -559,7 +559,7 @@ fn ir_is_declared_callable(name: String) -> Bool:
 
 fn ir_runtime_call_name(name: String) -> String:
     if name == "print":
-        return "forge_smart_print"
+        return "forge_print_cstr"
     if name == "spawn":
         return "forge_spawn"
     if name == "await":
