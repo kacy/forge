@@ -29,12 +29,17 @@ pub struct ListImpl {
     pub elements: Vec<Vec<u8>>,
     /// Packed storage for 8-byte values and handles.
     pub values8: Vec<i64>,
+    /// Cached pointer to 8-byte storage for native inlined reads.
+    pub values8_ptr: *const i64,
+    /// Cached length for 8-byte storage.
+    pub values8_len: usize,
 }
 
 /// Magic number to identify ListImpl pointers
 pub const LIST_MAGIC: u32 = 0x464F5247;
 
 /// Type tag for list elements
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub enum ListTypeTag {
     Primitive, // Int, Float, Bool - stored by value
@@ -43,19 +48,41 @@ pub enum ListTypeTag {
     Map,       // Map - needs retain/release
 }
 
+pub const LIST_IMPL_ELEM_SIZE_OFFSET: i32 = std::mem::offset_of!(ListImpl, elem_size) as i32;
+pub const LIST_IMPL_VALUES8_PTR_OFFSET: i32 = std::mem::offset_of!(ListImpl, values8_ptr) as i32;
+pub const LIST_IMPL_VALUES8_LEN_OFFSET: i32 = std::mem::offset_of!(ListImpl, values8_len) as i32;
+
 impl ListImpl {
     fn new(elem_size: usize, type_tag: ListTypeTag) -> Self {
-        ListImpl {
+        let mut list = ListImpl {
             magic: LIST_MAGIC,
             elements: Vec::new(),
             values8: Vec::new(),
+            values8_ptr: std::ptr::null(),
+            values8_len: 0,
             elem_size,
             type_tag,
-        }
+        };
+        list.sync_value_view();
+        list
     }
 
     fn uses_value_storage(&self) -> bool {
         self.elem_size == 8
+    }
+
+    fn sync_value_view(&mut self) {
+        if self.uses_value_storage() {
+            self.values8_len = self.values8.len();
+            self.values8_ptr = if self.values8_len == 0 {
+                std::ptr::null()
+            } else {
+                self.values8.as_ptr()
+            };
+        } else {
+            self.values8_len = 0;
+            self.values8_ptr = std::ptr::null();
+        }
     }
 
     fn len(&self) -> usize {
@@ -70,6 +97,7 @@ impl ListImpl {
         if self.uses_value_storage() {
             self.values8
                 .push(unsafe { std::ptr::read_unaligned(elem.as_ptr() as *const i64) });
+            self.sync_value_view();
         } else {
             self.elements.push(elem.to_vec());
         }
@@ -78,6 +106,7 @@ impl ListImpl {
     fn push_value(&mut self, value: i64) {
         if self.uses_value_storage() {
             self.values8.push(value);
+            self.sync_value_view();
         } else {
             let bytes = value.to_ne_bytes();
             let elem_len = self.elem_size.min(bytes.len());
@@ -87,7 +116,9 @@ impl ListImpl {
 
     fn pop(&mut self) -> Option<Vec<u8>> {
         if self.uses_value_storage() {
-            self.values8.pop().map(|value| value.to_ne_bytes().to_vec())
+            let popped = self.values8.pop().map(|value| value.to_ne_bytes().to_vec());
+            self.sync_value_view();
+            popped
         } else {
             self.elements.pop()
         }
@@ -140,6 +171,7 @@ impl ListImpl {
             if index <= self.values8.len() {
                 self.values8
                     .insert(index, unsafe { std::ptr::read_unaligned(elem.as_ptr() as *const i64) });
+                self.sync_value_view();
             }
         } else if index <= self.elements.len() {
             self.elements.insert(index, elem.to_vec());
@@ -149,7 +181,9 @@ impl ListImpl {
     fn remove(&mut self, index: usize) -> Option<Vec<u8>> {
         if self.uses_value_storage() {
             if index < self.values8.len() {
-                Some(self.values8.remove(index).to_ne_bytes().to_vec())
+                let removed = Some(self.values8.remove(index).to_ne_bytes().to_vec());
+                self.sync_value_view();
+                removed
             } else {
                 None
             }
@@ -163,6 +197,7 @@ impl ListImpl {
     fn clear(&mut self) {
         if self.uses_value_storage() {
             self.values8.clear();
+            self.sync_value_view();
         } else {
             self.elements.clear();
         }
@@ -741,6 +776,7 @@ pub unsafe extern "C" fn forge_list_reverse(list: ForgeList) {
     let impl_ref = &mut *(list.ptr as *mut ListImpl);
     if impl_ref.uses_value_storage() {
         impl_ref.values8.reverse();
+        impl_ref.sync_value_view();
     } else {
         impl_ref.elements.reverse();
     }
