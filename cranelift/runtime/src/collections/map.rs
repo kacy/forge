@@ -45,6 +45,8 @@ impl Hash for MapKey {
 pub struct MapImpl {
     /// The actual hash map storing key -> value mappings
     data: HashMap<MapKey, Vec<u8>>,
+    /// Specialized storage for int-key maps with 8-byte scalar values
+    int_values8: Option<HashMap<i64, i64>>,
     /// Type tag for keys (0=int, 1=string)
     key_type: KeyType,
     /// Size of values in bytes
@@ -62,8 +64,14 @@ pub enum KeyType {
 
 impl MapImpl {
     fn new(key_type: KeyType, val_size: usize, val_is_heap: bool) -> Self {
+        let int_values8 = if matches!(key_type, KeyType::Int) && val_size == 8 && !val_is_heap {
+            Some(HashMap::new())
+        } else {
+            None
+        };
         MapImpl {
             data: HashMap::new(),
+            int_values8,
             key_type,
             val_size,
             val_is_heap,
@@ -71,7 +79,10 @@ impl MapImpl {
     }
 
     fn len(&self) -> usize {
-        self.data.len()
+        match &self.int_values8 {
+            Some(data) => data.len(),
+            None => self.data.len(),
+        }
     }
 
     fn insert(&mut self, key: MapKey, value: Vec<u8>) -> Option<Vec<u8>> {
@@ -91,15 +102,60 @@ impl MapImpl {
     }
 
     fn clear(&mut self) {
-        self.data.clear();
+        if let Some(data) = &mut self.int_values8 {
+            data.clear();
+        } else {
+            self.data.clear();
+        }
     }
 
     fn keys(&self) -> Vec<MapKey> {
-        self.data.keys().cloned().collect()
+        match &self.int_values8 {
+            Some(data) => data.keys().map(|key| MapKey::Int(*key)).collect(),
+            None => self.data.keys().cloned().collect(),
+        }
     }
 
     fn values(&self) -> Vec<Vec<u8>> {
-        self.data.values().cloned().collect()
+        match &self.int_values8 {
+            Some(data) => data
+                .values()
+                .map(|value| value.to_le_bytes().to_vec())
+                .collect(),
+            None => self.data.values().cloned().collect(),
+        }
+    }
+
+    fn uses_int_values8(&self) -> bool {
+        self.int_values8.is_some()
+    }
+
+    fn insert_int_value(&mut self, key: i64, value: i64) -> Option<i64> {
+        match &mut self.int_values8 {
+            Some(data) => data.insert(key, value),
+            None => None,
+        }
+    }
+
+    fn get_int_value(&self, key: i64) -> Option<i64> {
+        match &self.int_values8 {
+            Some(data) => data.get(&key).copied(),
+            None => None,
+        }
+    }
+
+    fn contains_int_key(&self, key: i64) -> bool {
+        match &self.int_values8 {
+            Some(data) => data.contains_key(&key),
+            None => false,
+        }
+    }
+
+    fn remove_int_value(&mut self, key: i64) -> Option<i64> {
+        match &mut self.int_values8 {
+            Some(data) => data.remove(&key),
+            None => None,
+        }
     }
 }
 
@@ -186,6 +242,13 @@ pub unsafe extern "C" fn forge_map_insert_int(
 
     // Copy value data
     let val_slice = std::slice::from_raw_parts(value, val_size as usize);
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_INSERTS, 1);
+        let int_value = i64::from_le_bytes(val_slice[..8].try_into().unwrap_or([0u8; 8]));
+        impl_ref.insert_int_value(key, int_value);
+        return;
+    }
+    crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_INSERTS, 1);
     let val_vec = val_slice.to_vec();
 
     // Release old value if present
@@ -292,6 +355,18 @@ pub unsafe extern "C" fn forge_map_get_int(
         return false;
     }
 
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_GETS, 1);
+        match impl_ref.get_int_value(key) {
+            Some(value) => {
+                let bytes = value.to_le_bytes();
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+                true
+            }
+            None => false,
+        }
+    } else {
+        crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_GETS, 1);
     match impl_ref.get(&MapKey::Int(key)) {
         Some(val_data) => {
             std::ptr::copy_nonoverlapping(val_data.as_ptr(), out, val_data.len());
@@ -305,6 +380,7 @@ pub unsafe extern "C" fn forge_map_get_int(
             true
         }
         None => false,
+    }
     }
 }
 
@@ -370,7 +446,13 @@ pub extern "C" fn forge_map_contains_int(map: ForgeMap, key: i64) -> bool {
             return false;
         }
 
-        impl_ref.contains_key(&MapKey::Int(key))
+        if impl_ref.uses_int_values8() {
+            crate::perf_count(&crate::PERF_MAP_INT_FAST_CONTAINS, 1);
+            impl_ref.contains_int_key(key)
+        } else {
+            crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_CONTAINS, 1);
+            impl_ref.contains_key(&MapKey::Int(key))
+        }
     }
 }
 
@@ -417,6 +499,11 @@ pub unsafe extern "C" fn forge_map_remove_int(map: *mut ForgeMap, key: i64, val_
         return false;
     }
 
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_REMOVES, 1);
+        return impl_ref.remove_int_value(key).is_some();
+    }
+    crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_REMOVES, 1);
     let map_key = MapKey::Int(key);
 
     // Release value before removal
@@ -714,12 +801,18 @@ pub unsafe extern "C" fn forge_map_get_default_ikey(map_handle: i64, key: i64, d
     let impl_ref = &*(map_handle as *const MapImpl);
     crate::ensure_perf_stats_registered();
     crate::perf_count(&crate::PERF_MAP_INT_GETS, 1);
-    let map_key = MapKey::Int(key);
-    match impl_ref.get(&map_key) {
-        Some(val_data) if val_data.len() >= 8 => {
-            i64::from_le_bytes(val_data[..8].try_into().unwrap_or([0u8; 8]))
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_GETS, 1);
+        impl_ref.get_int_value(key).unwrap_or(default)
+    } else {
+        crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_GETS, 1);
+        let map_key = MapKey::Int(key);
+        match impl_ref.get(&map_key) {
+            Some(val_data) if val_data.len() >= 8 => {
+                i64::from_le_bytes(val_data[..8].try_into().unwrap_or([0u8; 8]))
+            }
+            _ => default,
         }
-        _ => default,
     }
 }
 
@@ -758,8 +851,14 @@ pub unsafe extern "C" fn forge_map_insert_ikey(map_handle: i64, key: i64, value:
     let impl_ref = &mut *(map_handle as *mut MapImpl);
     crate::ensure_perf_stats_registered();
     crate::perf_count(&crate::PERF_MAP_INT_INSERTS, 1);
-    let val_bytes = value.to_le_bytes().to_vec();
-    impl_ref.insert(MapKey::Int(key), val_bytes);
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_INSERTS, 1);
+        impl_ref.insert_int_value(key, value);
+    } else {
+        crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_INSERTS, 1);
+        let val_bytes = value.to_le_bytes().to_vec();
+        impl_ref.insert(MapKey::Int(key), val_bytes);
+    }
 }
 
 /// Get an i64 value by integer key. Returns 0 if the key is not found.
@@ -776,11 +875,17 @@ pub unsafe extern "C" fn forge_map_get_ikey(map_handle: i64, key: i64) -> i64 {
     crate::ensure_perf_stats_registered();
     crate::perf_count(&crate::PERF_MAP_INT_GETS, 1);
 
-    match impl_ref.get(&MapKey::Int(key)) {
-        Some(val_data) if val_data.len() >= 8 => {
-            i64::from_le_bytes(val_data[..8].try_into().unwrap_or([0u8; 8]))
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_GETS, 1);
+        impl_ref.get_int_value(key).unwrap_or(0)
+    } else {
+        crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_GETS, 1);
+        match impl_ref.get(&MapKey::Int(key)) {
+            Some(val_data) if val_data.len() >= 8 => {
+                i64::from_le_bytes(val_data[..8].try_into().unwrap_or([0u8; 8]))
+            }
+            _ => 0,
         }
-        _ => 0,
     }
 }
 
@@ -798,7 +903,15 @@ pub unsafe extern "C" fn forge_map_contains_ikey(map_handle: i64, key: i64) -> i
     crate::ensure_perf_stats_registered();
     crate::perf_count(&crate::PERF_MAP_INT_CONTAINS, 1);
 
-    if impl_ref.contains_key(&MapKey::Int(key)) {
+    let contains = if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_CONTAINS, 1);
+        impl_ref.contains_int_key(key)
+    } else {
+        crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_CONTAINS, 1);
+        impl_ref.contains_key(&MapKey::Int(key))
+    };
+
+    if contains {
         1
     } else {
         0
@@ -818,7 +931,13 @@ pub unsafe extern "C" fn forge_map_remove_ikey(map_handle: i64, key: i64) {
     let impl_ref = &mut *(map_handle as *mut MapImpl);
     crate::ensure_perf_stats_registered();
     crate::perf_count(&crate::PERF_MAP_INT_REMOVES, 1);
-    impl_ref.remove(&MapKey::Int(key));
+    if impl_ref.uses_int_values8() {
+        crate::perf_count(&crate::PERF_MAP_INT_FAST_REMOVES, 1);
+        impl_ref.remove_int_value(key);
+    } else {
+        crate::perf_count(&crate::PERF_MAP_INT_FALLBACK_REMOVES, 1);
+        impl_ref.remove(&MapKey::Int(key));
+    }
 }
 
 /// Get map length by handle (accepts raw MapImpl pointer as i64).

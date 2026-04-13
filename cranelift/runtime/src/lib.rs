@@ -60,6 +60,14 @@ pub static PERF_MAP_INT_CONTAINS: AtomicUsize = AtomicUsize::new(0);
 pub static PERF_MAP_STRING_CONTAINS: AtomicUsize = AtomicUsize::new(0);
 pub static PERF_MAP_INT_REMOVES: AtomicUsize = AtomicUsize::new(0);
 pub static PERF_MAP_STRING_REMOVES: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FAST_INSERTS: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FAST_GETS: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FAST_CONTAINS: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FAST_REMOVES: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FALLBACK_INSERTS: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FALLBACK_GETS: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FALLBACK_CONTAINS: AtomicUsize = AtomicUsize::new(0);
+pub static PERF_MAP_INT_FALLBACK_REMOVES: AtomicUsize = AtomicUsize::new(0);
 
 static PERF_STATS_ENABLED: OnceLock<bool> = OnceLock::new();
 static PERF_STATS_REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -167,6 +175,17 @@ pub fn dump_perf_stats() {
         PERF_MAP_INT_GETS.load(Ordering::Relaxed),
         PERF_MAP_INT_CONTAINS.load(Ordering::Relaxed),
         PERF_MAP_INT_REMOVES.load(Ordering::Relaxed)
+    );
+    eprintln!(
+        "  map int path: fast_insert={} fast_get={} fast_contains={} fast_remove={} fallback_insert={} fallback_get={} fallback_contains={} fallback_remove={}",
+        PERF_MAP_INT_FAST_INSERTS.load(Ordering::Relaxed),
+        PERF_MAP_INT_FAST_GETS.load(Ordering::Relaxed),
+        PERF_MAP_INT_FAST_CONTAINS.load(Ordering::Relaxed),
+        PERF_MAP_INT_FAST_REMOVES.load(Ordering::Relaxed),
+        PERF_MAP_INT_FALLBACK_INSERTS.load(Ordering::Relaxed),
+        PERF_MAP_INT_FALLBACK_GETS.load(Ordering::Relaxed),
+        PERF_MAP_INT_FALLBACK_CONTAINS.load(Ordering::Relaxed),
+        PERF_MAP_INT_FALLBACK_REMOVES.load(Ordering::Relaxed)
     );
     eprintln!(
         "  map string ops: insert={} get={} contains={} remove={}",
