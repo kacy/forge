@@ -14,10 +14,8 @@
 pub mod arc;
 pub mod collections;
 pub mod concurrency;
-pub mod json;
 pub mod ffi_util;
 pub mod string;
-pub mod toml;
 
 use crate::collections::list::ForgeList;
 use parking_lot::Mutex;
@@ -2764,144 +2762,17 @@ pub unsafe extern "C" fn forge_log_error(msg: *const i8) {
     }
 }
 
-/// Get directory part of a path
-///
-/// # Safety
-/// path must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn forge_path_dir(path: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-
-    if path.is_null() {
-        return std::ptr::null_mut();
-    }
-    let len = crate::string::forge_cstring_len(path) as usize;
-    let slice = std::slice::from_raw_parts(path as *const u8, len);
-    if let Ok(path_str) = std::str::from_utf8(slice) {
-        let raw_dir = std::path::Path::new(path_str)
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or(".");
-        // Return "." for empty parent (bare filename like "file.txt")
-        let dir = if raw_dir.is_empty() { "." } else { raw_dir };
-        let dir_bytes = dir.as_bytes();
-        let layout = Layout::from_size_align(dir_bytes.len() + 1, 1).unwrap();
-        let ptr = alloc(layout) as *mut i8;
-        if !ptr.is_null() {
-            std::ptr::copy_nonoverlapping(dir_bytes.as_ptr(), ptr as *mut u8, dir_bytes.len());
-            *ptr.add(dir_bytes.len()) = 0;
-        }
-        ptr
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-/// Get file name (basename) of a path
-///
-/// # Safety
-/// path must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn forge_path_basename(path: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-
-    if path.is_null() {
-        return std::ptr::null_mut();
-    }
-    let len = crate::string::forge_cstring_len(path) as usize;
-    let slice = std::slice::from_raw_parts(path as *const u8, len);
-    if let Ok(path_str) = std::str::from_utf8(slice) {
-        let name = std::path::Path::new(path_str)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        let name_bytes = name.as_bytes();
-        let layout = Layout::from_size_align(name_bytes.len() + 1, 1).unwrap();
-        let ptr = alloc(layout) as *mut i8;
-        if !ptr.is_null() {
-            std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), ptr as *mut u8, name_bytes.len());
-            *ptr.add(name_bytes.len()) = 0;
-        }
-        ptr
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-/// Stub: parse JSON — returns empty pointer (not yet implemented)
-#[no_mangle]
-pub unsafe extern "C" fn forge_json_parse(s: *const i8) -> i64 {
-    let result = json::forge_json_parse_real(s);
-    if result > 0 {
-        return result;
-    }
-    // Check if it looks like a URL (contains "://")
-    let input_len = crate::string::forge_cstring_len(s) as usize;
-    let slice = std::slice::from_raw_parts(s as *const u8, input_len);
-    if let Ok(str_val) = std::str::from_utf8(slice) {
-        if str_val.contains("://") {
-            return forge_strdup(s) as i64;
-        }
-        // Try TOML parse if it looks like TOML (contains key = value)
-        if str_val.contains('=') && !str_val.starts_with('{') && !str_val.starts_with('[') {
-            let toml_result = toml::forge_toml_parse(s);
-            if toml_result > 0 {
-                return -toml_result; // Negative = TOML handle
-            }
-        }
-    }
-    -1 // Use -1 as the "parse failed" sentinel (distinct from TOML handles which are <= -2)
-}
-
-/// Smart to_string for Unknown-typed values: distinguishes heap string pointers
-/// from small integers (JSON/TOML handles) using address range heuristics.
+/// Smart to_string for Unknown-typed values: distinguishes likely heap string
+/// pointers from small integer-like values using address range heuristics.
 #[no_mangle]
 pub unsafe extern "C" fn forge_smart_to_string(val: i64) -> *mut i8 {
-    // Negative values: TOML handles or -1 sentinel → convert as integer
-    // Small positive values (< 1_000_000): likely JSON arena handles → convert as integer
-    // Large positive values: likely heap-allocated C string pointers → strdup
+    // Small-magnitude values are treated as integers.
+    // Large positive values are treated as heap-allocated C string pointers.
     if val <= 0 || (val > 0 && val < 1_000_000) {
         forge_int_to_cstr(val)
     } else {
         forge_strdup(val as *const i8)
     }
-}
-
-/// Smart print: auto-converts integers to strings, prints cstrings directly
-#[no_mangle]
-pub unsafe extern "C" fn forge_smart_print(val: i64) {
-    let s = forge_smart_to_string(val);
-    if !s.is_null() {
-        forge_print_cstr(s);
-    } else {
-        println!();
-    }
-}
-
-/// Smart encode: if arg is a JSON handle (small positive int), use JSON encode.
-/// Otherwise treat as a C string and do URL percent-encoding.
-#[no_mangle]
-pub unsafe extern "C" fn forge_smart_encode(val: i64) -> *mut i8 {
-    // JSON arena handles are small positive integers (1-based index)
-    // C string pointers are large positive integers (heap addresses)
-    // Heuristic: if val < 100000, it's likely a JSON handle
-    if val > 0 && val < 100000 {
-        json::forge_json_encode(val)
-    } else {
-        forge_url_encode(val as *const i8)
-    }
-}
-
-// TOML parse moved to toml.rs module
-
-/// Stub: parse URL — returns empty pointer (not yet implemented)
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_parse(s: *const i8) -> *mut i8 {
-    // URL "parse" just stores the URL string — accessors extract parts
-    if s.is_null() {
-        return std::ptr::null_mut();
-    }
-    forge_strdup(s)
 }
 
 /// Identity function — returns its argument unchanged
@@ -3537,103 +3408,6 @@ pub unsafe extern "C" fn forge_byte_buffer_clear(handle: i64) {
 }
 
 /// Split string into a list of single-character strings (chars)
-/// Get path extension
-///
-/// # Safety
-/// path must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn forge_path_ext(path: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    if path.is_null() {
-        return std::ptr::null_mut();
-    }
-    let len = crate::string::forge_cstring_len(path) as usize;
-    let slice = std::slice::from_raw_parts(path as *const u8, len);
-    if let Ok(path_str) = std::str::from_utf8(slice) {
-        let raw_ext = std::path::Path::new(path_str)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        // Prepend dot to match expected behavior: "txt" -> ".txt"
-        let ext = if raw_ext.is_empty() {
-            String::new()
-        } else {
-            format!(".{}", raw_ext)
-        };
-        let ext_bytes = ext.as_bytes();
-        let layout = Layout::from_size_align(ext_bytes.len() + 1, 1).unwrap();
-        let ptr = alloc(layout) as *mut i8;
-        if !ptr.is_null() {
-            std::ptr::copy_nonoverlapping(ext_bytes.as_ptr(), ptr as *mut u8, ext_bytes.len());
-            *ptr.add(ext_bytes.len()) = 0;
-        }
-        ptr
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-/// Get path stem (filename without extension)
-///
-/// # Safety
-/// path must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn forge_path_stem(path: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    if path.is_null() {
-        return std::ptr::null_mut();
-    }
-    let len = crate::string::forge_cstring_len(path) as usize;
-    let slice = std::slice::from_raw_parts(path as *const u8, len);
-    if let Ok(path_str) = std::str::from_utf8(slice) {
-        let stem = std::path::Path::new(path_str)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        let bytes = stem.as_bytes();
-        let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
-        let ptr = alloc(layout) as *mut i8;
-        if !ptr.is_null() {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
-            *ptr.add(bytes.len()) = 0;
-        }
-        ptr
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-/// Join two path components
-///
-/// # Safety
-/// Both must be valid null-terminated C strings
-#[no_mangle]
-pub unsafe extern "C" fn forge_path_join(base: *const i8, component: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    if base.is_null() {
-        return forge_strdup(component);
-    }
-    if component.is_null() {
-        return forge_strdup(base);
-    }
-    let base_len = crate::string::forge_cstring_len(base) as usize;
-    let comp_len = crate::string::forge_cstring_len(component) as usize;
-    let base_s =
-        std::str::from_utf8(std::slice::from_raw_parts(base as *const u8, base_len)).unwrap_or("");
-    let comp_s = std::str::from_utf8(std::slice::from_raw_parts(component as *const u8, comp_len))
-        .unwrap_or("");
-    let joined = std::path::Path::new(base_s).join(comp_s);
-    let s = joined.to_str().unwrap_or("").to_string();
-    let bytes = s.as_bytes();
-    let layout = Layout::from_size_align(bytes.len() + 1, 1).unwrap();
-    let ptr = alloc(layout) as *mut i8;
-    if !ptr.is_null() {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
-        *ptr.add(bytes.len()) = 0;
-    }
-    ptr
-}
-
 /// Return type of a value as string (stub — returns "any")
 #[no_mangle]
 pub extern "C" fn forge_type_of(_val: i64) -> *mut i8 {
@@ -3653,28 +3427,6 @@ pub extern "C" fn forge_type_of(_val: i64) -> *mut i8 {
 #[no_mangle]
 pub extern "C" fn forge_second(_a: i64, b: i64) -> i64 {
     b
-}
-
-/// Check if a path (file or dir) exists
-///
-/// # Safety
-/// path must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn forge_path_exists(path: *const i8) -> i64 {
-    if path.is_null() {
-        return 0;
-    }
-    let len = crate::string::forge_cstring_len(path) as usize;
-    let slice = std::slice::from_raw_parts(path as *const u8, len);
-    if let Ok(path_str) = std::str::from_utf8(slice) {
-        if std::path::Path::new(path_str).exists() {
-            1
-        } else {
-            0
-        }
-    } else {
-        0
-    }
 }
 
 fn forge_read_process_stream<R: std::io::Read>(reader: &mut R, max_bytes: i64) -> *mut i8 {
@@ -4164,184 +3916,6 @@ pub extern "C" fn forge_process_kill(handle: i64) -> i64 {
 pub extern "C" fn forge_process_close(handle: i64) {
     let mut handles = process_handles().lock();
     handles.remove(&handle);
-}
-
-/// Get the scheme component of a URL string
-///
-/// # Safety
-/// url must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_scheme(url: i64) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    let url_ptr = url as *const i8;
-    if url_ptr.is_null() {
-        return forge_cstring_empty();
-    }
-    let len = crate::string::forge_cstring_len(url_ptr) as usize;
-    let slice = std::slice::from_raw_parts(url_ptr as *const u8, len);
-    let s = std::str::from_utf8(slice).unwrap_or("");
-    // Extract scheme: everything before "://"
-    let scheme = if let Some(idx) = s.find("://") {
-        &s[..idx]
-    } else {
-        ""
-    };
-    let bytes = scheme.as_bytes();
-    let layout = Layout::array::<u8>(bytes.len() + 1).unwrap();
-    let ptr = alloc(layout) as *mut i8;
-    if !ptr.is_null() {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
-        *ptr.add(bytes.len()) = 0;
-    }
-    ptr
-}
-
-/// Extract host from a parsed URL (stored as C string)
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_host(url: i64) -> *mut i8 {
-    let s = url_as_str(url);
-    let host = url_extract_host(s);
-    crate::ffi_util::alloc_cstring(host)
-}
-
-/// Extract port from a parsed URL. Returns -1 if no port specified.
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_port(url: i64) -> i64 {
-    let s = url_as_str(url);
-    // After scheme://, find host:port
-    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
-    let authority = after_scheme.split('/').next().unwrap_or("");
-    let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
-    if let Some(colon) = auth_no_at.rfind(':') {
-        auth_no_at[colon + 1..].parse::<i64>().unwrap_or(-1)
-    } else {
-        -1
-    }
-}
-
-/// Extract path from a parsed URL
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_path(url: i64) -> *mut i8 {
-    let s = url_as_str(url);
-    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
-    let after_authority = after_scheme.find('/').map(|i| &after_scheme[i..]).unwrap_or("/");
-    let path = after_authority.split('?').next().unwrap_or(after_authority);
-    let path = path.split('#').next().unwrap_or(path);
-    crate::ffi_util::alloc_cstring(path)
-}
-
-/// Extract query string from a parsed URL (without '?')
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_query(url: i64) -> *mut i8 {
-    let s = url_as_str(url);
-    let query = if let Some(q_idx) = s.find('?') {
-        let after_q = &s[q_idx + 1..];
-        after_q.split('#').next().unwrap_or("")
-    } else {
-        ""
-    };
-    crate::ffi_util::alloc_cstring(query)
-}
-
-/// Extract fragment from a parsed URL (without '#')
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_fragment(url: i64) -> *mut i8 {
-    let s = url_as_str(url);
-    let fragment = if let Some(f_idx) = s.find('#') {
-        &s[f_idx + 1..]
-    } else {
-        ""
-    };
-    crate::ffi_util::alloc_cstring(fragment)
-}
-
-/// Reconstruct URL string (identity since we store the raw URL)
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_to_string(url: i64) -> *mut i8 {
-    if url == 0 {
-        return forge_cstring_empty();
-    }
-    forge_strdup(url as *const i8)
-}
-
-/// Percent-encode a string
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_encode(s: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    if s.is_null() {
-        return forge_cstring_empty();
-    }
-    let len = crate::string::forge_cstring_len(s) as usize;
-    let input = std::slice::from_raw_parts(s as *const u8, len);
-    // Worst case: every byte becomes %XX (3x expansion)
-    let layout = Layout::from_size_align(len * 3 + 1, 1).unwrap();
-    let ptr = alloc(layout) as *mut u8;
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let mut di = 0;
-    for &b in input {
-        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
-            *ptr.add(di) = b;
-            di += 1;
-        } else {
-            const HEX: &[u8] = b"0123456789ABCDEF";
-            *ptr.add(di) = b'%';
-            *ptr.add(di + 1) = HEX[(b >> 4) as usize];
-            *ptr.add(di + 2) = HEX[(b & 0xf) as usize];
-            di += 3;
-        }
-    }
-    *ptr.add(di) = 0;
-    ptr as *mut i8
-}
-
-/// Percent-decode a string
-#[no_mangle]
-pub unsafe extern "C" fn forge_url_decode(s: *const i8) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    if s.is_null() {
-        return forge_cstring_empty();
-    }
-    let len = crate::string::forge_cstring_len(s) as usize;
-    let input = std::slice::from_raw_parts(s as *const u8, len);
-    let layout = Layout::from_size_align(len + 1, 1).unwrap();
-    let ptr = alloc(layout) as *mut u8;
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let mut si = 0;
-    let mut di = 0;
-    while si < len {
-        if input[si] == b'%' && si + 2 < len {
-            let hi = hex_digit(input[si + 1]);
-            let lo = hex_digit(input[si + 2]);
-            *ptr.add(di) = (hi << 4) | lo;
-            si += 3;
-        } else if input[si] == b'+' {
-            *ptr.add(di) = b' ';
-            si += 1;
-        } else {
-            *ptr.add(di) = input[si];
-            si += 1;
-        }
-        di += 1;
-    }
-    *ptr.add(di) = 0;
-    ptr as *mut i8
-}
-
-// Helper: get URL string from handle
-unsafe fn url_as_str(url: i64) -> &'static str {
-    crate::ffi_util::cstr_to_str(url as *const i8)
-}
-
-// Helper: extract host from URL string
-fn url_extract_host(s: &str) -> &str {
-    let after_scheme = s.find("://").map(|i| &s[i + 3..]).unwrap_or(s);
-    let authority = after_scheme.split('/').next().unwrap_or("");
-    let auth_no_at = authority.rsplit('@').next().unwrap_or(authority);
-    auth_no_at.split(':').next().unwrap_or("")
 }
 
 /// Allocate a zeroed block of `num_fields * 8` bytes for struct storage.

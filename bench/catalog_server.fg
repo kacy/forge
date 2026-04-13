@@ -399,11 +399,11 @@ fn search_json_bytes(team_id: Int, region_id: Int, active_filter: Int, min_score
     return out.bytes()
 
 fn batch_score_json_bytes(root: Int) -> Bytes!:
-    team_id := find_team_id(json_get_string(json_object_get(root, "team")))
-    region_id := find_region_id(json_get_string(json_object_get(root, "region")))
-    mut min_score := json_get_int(json_object_get(root, "min_score"))
-    mut limit := json_get_int(json_object_get(root, "limit"))
-    mut multiplier := json_get_int(json_object_get(root, "multiplier"))
+    team_id := find_team_id(json.get_string(json.object_get(root, "team")))
+    region_id := find_region_id(json.get_string(json.object_get(root, "region")))
+    mut min_score := json.get_int(json.object_get(root, "min_score"))
+    mut limit := json.get_int(json.object_get(root, "limit"))
+    mut multiplier := json.get_int(json.object_get(root, "multiplier"))
 
     if min_score < 0:
         min_score = 0
@@ -412,7 +412,7 @@ fn batch_score_json_bytes(root: Int) -> Bytes!:
     if multiplier <= 0:
         multiplier = 3
 
-    active_filter := parse_active_filter(json_get_string(json_object_get(root, "active")))
+    active_filter := parse_active_filter(json.get_string(json.object_get(root, "active")))
     ids_out := bytes.buffer()
     mut ids_written := 0
     mut count := 0
