@@ -14,10 +14,8 @@
 pub mod arc;
 pub mod collections;
 pub mod concurrency;
-pub mod json;
 pub mod ffi_util;
 pub mod string;
-pub mod toml;
 
 use crate::collections::list::ForgeList;
 use parking_lot::Mutex;
@@ -2764,46 +2762,18 @@ pub unsafe extern "C" fn forge_log_error(msg: *const i8) {
     }
 }
 
-/// Stub: parse JSON — returns empty pointer (not yet implemented)
-#[no_mangle]
-pub unsafe extern "C" fn forge_json_parse(s: *const i8) -> i64 {
-    let result = json::forge_json_parse_real(s);
-    if result > 0 {
-        return result;
-    }
-    // Check if it looks like a URL (contains "://")
-    let input_len = crate::string::forge_cstring_len(s) as usize;
-    let slice = std::slice::from_raw_parts(s as *const u8, input_len);
-    if let Ok(str_val) = std::str::from_utf8(slice) {
-        if str_val.contains("://") {
-            return forge_strdup(s) as i64;
-        }
-        // Try TOML parse if it looks like TOML (contains key = value)
-        if str_val.contains('=') && !str_val.starts_with('{') && !str_val.starts_with('[') {
-            let toml_result = toml::forge_toml_parse(s);
-            if toml_result > 0 {
-                return -toml_result; // Negative = TOML handle
-            }
-        }
-    }
-    -1 // Use -1 as the "parse failed" sentinel (distinct from TOML handles which are <= -2)
-}
-
-/// Smart to_string for Unknown-typed values: distinguishes heap string pointers
-/// from small integers (JSON/TOML handles) using address range heuristics.
+/// Smart to_string for Unknown-typed values: distinguishes likely heap string
+/// pointers from small integer-like values using address range heuristics.
 #[no_mangle]
 pub unsafe extern "C" fn forge_smart_to_string(val: i64) -> *mut i8 {
-    // Negative values: TOML handles or -1 sentinel → convert as integer
-    // Small positive values (< 1_000_000): likely JSON arena handles → convert as integer
-    // Large positive values: likely heap-allocated C string pointers → strdup
+    // Small-magnitude values are treated as integers.
+    // Large positive values are treated as heap-allocated C string pointers.
     if val <= 0 || (val > 0 && val < 1_000_000) {
         forge_int_to_cstr(val)
     } else {
         forge_strdup(val as *const i8)
     }
 }
-
-// TOML parse moved to toml.rs module
 
 /// Identity function — returns its argument unchanged
 #[no_mangle]
