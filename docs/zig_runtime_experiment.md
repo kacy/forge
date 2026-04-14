@@ -27,6 +27,12 @@ build or run with the runtime flag:
 the zig runtime library is built from `cranelift/runtime-zig/` and linked as
 `libforge_runtime_zig.a`.
 
+there is also a curated smoke target now:
+
+```sh
+make zig-runtime-smoke
+```
+
 ## current scope
 
 the experiment is still incomplete, but it is well past the original smoke-only

@@ -1,4 +1,4 @@
-.PHONY: build self-host bootstrap bootstrap-verify bootstrap-ir-checks bootstrap-ir-checks-only bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test clean
+.PHONY: build self-host bootstrap bootstrap-verify bootstrap-ir-checks bootstrap-ir-checks-only bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only zig-runtime-smoke test clean
 
 NONDETERMINISTIC_EXAMPLES := net_basics net_echo
 EXPECTED_EXAMPLES := $(filter-out $(addprefix examples/expected/,$(addsuffix .txt,$(NONDETERMINISTIC_EXAMPLES))),$(wildcard examples/expected/*.txt))
@@ -17,6 +17,24 @@ PARITY_EXAMPLES := \
 	matrix_math \
 	self_host_patterns \
 	wildcard_import
+
+ZIG_RUNTIME_SMOKE_RUNS := \
+	examples/hello.fg \
+	examples/json_ops.fg \
+	examples/toml_ops.fg \
+	examples/url_ops.fg \
+	examples/path_ops.fg \
+	examples/concurrency.fg \
+	examples/data_pipeline.fg \
+	examples/http_api.fg \
+	examples/http_apps.fg \
+	examples/http_websocket_app.fg \
+	examples/websocket_echo.fg \
+	examples/websocket_chat.fg \
+	tests/cases/test_channel_runtime.fg \
+	tests/cases/test_concurrent_runtime.fg \
+	tests/cases/test_http_app_helpers.fg \
+	tests/cases/test_http_websocket_app.fg
 
 IR_FIXED_POINT_SOURCES := \
 	examples/hello.fg \
@@ -255,6 +273,30 @@ run-live-websocket-tests-self-only:
 	echo "$$pass passed, $$fail failed"; \
 	if [ $$fail -gt 0 ]; then exit 1; fi; \
 	echo "all self-hosted live websocket smoke tests passed"
+
+zig-runtime-smoke: build
+	@echo "--- zig runtime smoke ---"
+	@./target/release/forge build --runtime zig examples/hello.fg >/dev/null
+	@pass=0; fail=0; \
+	for f in $(ZIG_RUNTIME_SMOKE_RUNS); do \
+		if timeout 20 ./target/release/forge run --runtime zig "$$f" >/dev/null 2>&1; then \
+			pass=$$((pass+1)); \
+			echo "ok   $$f"; \
+		else \
+			echo "FAIL $$f"; \
+			fail=$$((fail+1)); \
+		fi; \
+	done; \
+	if timeout 20 ./target/release/forge test --runtime zig tests/cases/test_test_declarations.fg >/dev/null 2>&1; then \
+		pass=$$((pass+1)); \
+		echo "ok   tests/cases/test_test_declarations.fg"; \
+	else \
+		echo "FAIL tests/cases/test_test_declarations.fg"; \
+		fail=$$((fail+1)); \
+	fi; \
+	echo "$$pass passed, $$fail failed"; \
+	if [ $$fail -gt 0 ]; then exit 1; fi; \
+	echo "zig runtime smoke passed"
 
 parity-examples: self-host parity-examples-only
 
