@@ -1488,6 +1488,50 @@ pub export fn forge_list_contains_int(list_handle: i64, value: i64) i64 {
     return 0;
 }
 
+pub export fn forge_list_index_of_int(list_handle: i64, value: i64) i64 {
+    const list = listFromHandle(list_handle) orelse return -1;
+    if (list.values8_ptr == null) return -1;
+    for (list.values8_ptr.?[0..list.values8_len], 0..) |item, idx| {
+        if (item == value) return @intCast(idx);
+    }
+    return -1;
+}
+
+pub export fn forge_list_slice(list_handle: i64, start: i64, end: i64) i64 {
+    const result = forge_list_new_default();
+    const list = listFromHandle(list_handle) orelse return result;
+    if (list.values8_ptr == null) return result;
+    const len: i64 = @intCast(list.values8_len);
+    const from: usize = @intCast(std.math.clamp(start, 0, len));
+    const to: usize = @intCast(std.math.clamp(end, @as(i64, @intCast(from)), len));
+    for (list.values8_ptr.?[from..to]) |item| {
+        forge_list_push_value(result, item);
+    }
+    return result;
+}
+
+pub export fn forge_list_sort(list_handle: i64) void {
+    const list = listFromHandle(list_handle) orelse return;
+    if (list.values8_ptr == null) return;
+    std.mem.sort(i64, list.values8_ptr.?[0..list.values8_len], {}, comptime std.sort.asc(i64));
+}
+
+pub export fn forge_list_sort_strings(list_handle: i64) void {
+    const list = listFromHandle(list_handle) orelse return;
+    if (list.values8_ptr == null) return;
+
+    const Ctx = struct {};
+    const less = struct {
+        fn cmp(_: Ctx, a: i64, b: i64) bool {
+            const a_ptr: [*c]const u8 = @ptrFromInt(@as(usize, @intCast(a)));
+            const b_ptr: [*c]const u8 = @ptrFromInt(@as(usize, @intCast(b)));
+            return std.mem.order(u8, span(a_ptr), span(b_ptr)) == .lt;
+        }
+    }.cmp;
+
+    std.mem.sort(i64, list.values8_ptr.?[0..list.values8_len], Ctx{}, less);
+}
+
 pub export fn forge_list_join(list_handle: i64, sep: [*c]const u8) [*c]u8 {
     const list = listFromHandle(list_handle) orelse return null;
     if (list.values8_len == 0 or list.values8_ptr == null) return allocCString("");
@@ -1916,6 +1960,50 @@ pub export fn forge_cstring_pad_left(s: [*c]const u8, width: i64, fill: [*c]cons
     @memcpy(out[pad .. pad + text.len], text);
     out[target_width] = 0;
     return out.ptr;
+}
+
+pub export fn forge_cstring_pad_right(s: [*c]const u8, width: i64, fill: [*c]const u8) [*c]u8 {
+    if (s == null) return null;
+    const text = span(s);
+    const target_width: usize = if (width > 0) @intCast(width) else 0;
+    if (text.len >= target_width) return allocCString(text);
+    const fill_char: u8 = if (fill != null and fill[0] != 0) fill[0] else ' ';
+    const out = allocator.alloc(u8, target_width + 1) catch unsupported("out of memory");
+    @memcpy(out[0..text.len], text);
+    @memset(out[text.len..target_width], fill_char);
+    out[target_width] = 0;
+    return out.ptr;
+}
+
+pub export fn forge_cstring_repeat(s: [*c]const u8, n: i64) [*c]u8 {
+    if (s == null or n <= 0) return allocCString("");
+    const text = span(s);
+    const count: usize = @intCast(n);
+    const total = text.len * count;
+    const out = allocator.alloc(u8, total + 1) catch unsupported("out of memory");
+    var cursor: usize = 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        @memcpy(out[cursor .. cursor + text.len], text);
+        cursor += text.len;
+    }
+    out[total] = 0;
+    return out.ptr;
+}
+
+pub export fn forge_cstring_chars(s: [*c]const u8) i64 {
+    const list = forge_list_new_default();
+    if (s == null) return list;
+    for (span(s)) |byte| {
+        const one = [_]u8{byte};
+        forge_list_push_value(list, @intCast(@intFromPtr(allocCString(one[0..]))));
+    }
+    return list;
+}
+
+pub export fn forge_cstring_is_empty(s: [*c]const u8) i64 {
+    if (s == null) return 1;
+    return if (s[0] == 0) 1 else 0;
 }
 
 pub export fn forge_string_split_to_list(s: [*c]const u8, delim: [*c]const u8) i64 {
