@@ -411,6 +411,20 @@ pub export fn forge_map_get_cstr(map_handle: i64, key: [*c]const u8) i64 {
     return 0;
 }
 
+pub export fn forge_map_contains_cstr(map_handle: i64, key: [*c]const u8) i64 {
+    const map = mapFromHandle(map_handle) orelse return 0;
+    const key_bytes = span(key);
+    for (map.string_entries.items) |entry| {
+        if (std.mem.eql(u8, entry.key, key_bytes)) return 1;
+    }
+    return 0;
+}
+
+pub export fn forge_map_get_default_cstr(map_handle: i64, key: [*c]const u8, default: i64) i64 {
+    const value = forge_map_get_cstr(map_handle, key);
+    return if (value == 0) default else value;
+}
+
 pub export fn forge_map_insert_ikey(map_handle: i64, key: i64, value: i64) void {
     const map = mapFromHandle(map_handle) orelse return;
     for (map.int_entries.items) |*entry| {
@@ -428,6 +442,31 @@ pub export fn forge_map_get_ikey(map_handle: i64, key: i64) i64 {
         if (entry.key == key) return entry.value;
     }
     return 0;
+}
+
+pub export fn forge_map_contains_ikey(map_handle: i64, key: i64) i64 {
+    const map = mapFromHandle(map_handle) orelse return 0;
+    for (map.int_entries.items) |entry| {
+        if (entry.key == key) return 1;
+    }
+    return 0;
+}
+
+pub export fn forge_map_get_default_ikey(map_handle: i64, key: i64, default: i64) i64 {
+    const map = mapFromHandle(map_handle) orelse return default;
+    for (map.int_entries.items) |entry| {
+        if (entry.key == key) return entry.value;
+    }
+    return default;
+}
+
+pub export fn forge_map_keys_cstr(map_handle: i64) i64 {
+    const map = mapFromHandle(map_handle) orelse return forge_list_new_default();
+    const list_handle = forge_list_new_default();
+    for (map.string_entries.items) |entry| {
+        forge_list_push_value(list_handle, @intCast(@intFromPtr(allocCString(entry.key))));
+    }
+    return list_handle;
 }
 
 pub export fn forge_set_new_default() i64 {
