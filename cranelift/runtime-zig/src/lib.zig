@@ -438,6 +438,17 @@ pub export fn forge_float_to_cstr(n: f64) [*c]u8 {
     return allocCString(text);
 }
 
+pub export fn forge_fmt_float(n: f64, precision: i64) [*c]u8 {
+    const digits: usize = @intCast(@max(precision, 0));
+    var fmt_buf: [32]u8 = undefined;
+    var buf: [256]u8 = undefined;
+    const fmt = std.fmt.bufPrintZ(&fmt_buf, "%%.{d}f", .{digits}) catch unreachable;
+    const written = c.snprintf(@ptrCast(&buf), buf.len, fmt.ptr, n);
+    if (written <= 0) return allocCString("");
+    const len: usize = @min(@as(usize, @intCast(written)), buf.len - 1);
+    return allocCString(buf[0..len]);
+}
+
 pub export fn forge_bool_to_cstr(value: i64) [*c]u8 {
     return allocCString(if (value != 0) "true" else "false");
 }
@@ -573,9 +584,8 @@ pub export fn forge_random_string(len: i64) [*c]u8 {
 
 pub export fn forge_args() i64 {
     const list = forge_list_new_default();
-    const args = std.process.argsAlloc(allocator) catch return list;
-    for (args) |arg| {
-        forge_list_push_value(list, @intCast(@intFromPtr(allocCString(arg))));
+    for (std.os.argv) |arg| {
+        forge_list_push_value(list, @intCast(@intFromPtr(allocCString(std.mem.sliceTo(arg, 0)))));
     }
     return list;
 }
@@ -1676,6 +1686,24 @@ pub export fn forge_set_clear_handle(set_handle: i64) void {
 
 pub export fn forge_set_is_empty_handle(set_handle: i64) i64 {
     return if (forge_set_len_handle(set_handle) == 0) 1 else 0;
+}
+
+pub export fn forge_set_to_list_cstr(set_handle: i64) i64 {
+    const list = forge_list_new_default();
+    const set = setFromHandle(set_handle) orelse return list;
+    for (set.string_items.items) |item| {
+        forge_list_push_value(list, @intCast(@intFromPtr(allocCString(item))));
+    }
+    return list;
+}
+
+pub export fn forge_set_to_list_int_handle(set_handle: i64) i64 {
+    const list = forge_list_new_default();
+    const set = setFromHandle(set_handle) orelse return list;
+    for (set.items.items) |item| {
+        forge_list_push_value(list, item);
+    }
+    return list;
 }
 
 pub export fn forge_cstring_substring(s: [*c]const u8, start: i64, end: i64) [*c]u8 {
