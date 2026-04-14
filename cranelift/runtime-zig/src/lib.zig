@@ -23,6 +23,10 @@ const FileHandle = struct {
     fd: c_int,
 };
 
+const ProcessHandle = struct {
+    child: std.process.Child,
+};
+
 const Task = struct {
     mutex: std.Thread.Mutex = .{},
     cond: std.Thread.Condition = .{},
@@ -185,6 +189,11 @@ fn byteBufferFromHandle(handle: i64) ?*ForgeByteBuffer {
 }
 
 fn fileFromHandle(handle: i64) ?*FileHandle {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn processFromHandle(handle: i64) ?*ProcessHandle {
     if (handle == 0) return null;
     return @ptrFromInt(@as(usize, @intCast(handle)));
 }
@@ -472,31 +481,72 @@ pub export fn forge_tcp_set_timeout(_: i64, _: i64) void {}
 
 pub export fn forge_tcp_close(_: i64) void {}
 
-pub export fn forge_process_spawn(_: [*c]const u8) i64 {
-    return 0;
+pub export fn forge_process_spawn(cmd: [*c]const u8) i64 {
+    if (cmd == null) return 0;
+    const command = span(cmd);
+    const argv = [_][]const u8{ "/bin/sh", "-lc", command };
+    const handle = allocator.create(ProcessHandle) catch unsupported("out of memory");
+    handle.* = .{
+        .child = std.process.Child.init(&argv, allocator),
+    };
+    handle.child.stdin_behavior = .Pipe;
+    handle.child.stdout_behavior = .Pipe;
+    handle.child.stderr_behavior = .Pipe;
+    handle.child.spawn() catch {
+        allocator.destroy(handle);
+        return 0;
+    };
+    return @intCast(@intFromPtr(handle));
 }
 
-pub export fn forge_process_write_bytes(_: i64, _: i64) i64 {
-    return 0;
+pub export fn forge_process_write_bytes(handle: i64, data: i64) i64 {
+    const process = processFromHandle(handle) orelse return 0;
+    const bytes = bytesFromHandle(data) orelse return 0;
+    const stdin_file = process.child.stdin orelse return 0;
+    const n = stdin_file.write(bytes.data) catch return 0;
+    return @intCast(n);
 }
 
-pub export fn forge_process_read_bytes(_: i64, _: i64) i64 {
-    return 0;
+pub export fn forge_process_read_bytes(handle: i64, max_bytes: i64) i64 {
+    const process = processFromHandle(handle) orelse return 0;
+    const stdout_file = process.child.stdout orelse return allocBytesFromSlice("");
+    const size: usize = if (max_bytes > 0) @intCast(max_bytes) else 4096;
+    const buf = allocator.alloc(u8, size) catch unsupported("out of memory");
+    const n = stdout_file.read(buf) catch return 0;
+    return allocBytesFromSlice(buf[0..n]);
 }
 
-pub export fn forge_process_read_err_bytes(_: i64, _: i64) i64 {
-    return 0;
+pub export fn forge_process_read_err_bytes(handle: i64, max_bytes: i64) i64 {
+    const process = processFromHandle(handle) orelse return 0;
+    const stderr_file = process.child.stderr orelse return allocBytesFromSlice("");
+    const size: usize = if (max_bytes > 0) @intCast(max_bytes) else 4096;
+    const buf = allocator.alloc(u8, size) catch unsupported("out of memory");
+    const n = stderr_file.read(buf) catch return 0;
+    return allocBytesFromSlice(buf[0..n]);
 }
 
-pub export fn forge_process_wait(_: i64) i64 {
-    return 0;
+pub export fn forge_process_wait(handle: i64) i64 {
+    const process = processFromHandle(handle) orelse return -1;
+    const term = process.child.wait() catch return -1;
+    return switch (term) {
+        .Exited => |code| code,
+        else => -1,
+    };
 }
 
-pub export fn forge_process_kill(_: i64) i64 {
-    return 0;
+pub export fn forge_process_kill(handle: i64) i64 {
+    const process = processFromHandle(handle) orelse return 0;
+    _ = process.child.kill() catch return 0;
+    return 1;
 }
 
-pub export fn forge_process_close(_: i64) void {}
+pub export fn forge_process_close(handle: i64) void {
+    const process = processFromHandle(handle) orelse return;
+    if (process.child.stdin) |*stdin_file| stdin_file.close();
+    if (process.child.stdout) |*stdout_file| stdout_file.close();
+    if (process.child.stderr) |*stderr_file| stderr_file.close();
+    allocator.destroy(process);
+}
 
 pub export fn forge_spawn(closure_handle: i64) i64 {
     if (closure_handle == 0) return 0;
