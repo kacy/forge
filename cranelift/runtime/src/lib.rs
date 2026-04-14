@@ -2775,12 +2775,6 @@ pub unsafe extern "C" fn forge_smart_to_string(val: i64) -> *mut i8 {
     }
 }
 
-/// Identity function — returns its argument unchanged
-#[no_mangle]
-pub extern "C" fn forge_identity(x: i64) -> i64 {
-    x
-}
-
 /// Spawn a child process and return a process handle
 ///
 /// # Safety
