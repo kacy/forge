@@ -17,6 +17,29 @@ const ForgeByteBuffer = struct {
     data: std.ArrayListUnmanaged(u8) = .{},
 };
 
+const Task = struct {
+    mutex: std.Thread.Mutex = .{},
+    cond: std.Thread.Condition = .{},
+    done: bool = false,
+    result: i64 = 0,
+    thread: ?std.Thread = null,
+};
+
+const ChannelState = struct {
+    queue: std.ArrayListUnmanaged(i64) = .{},
+    capacity: usize = 0,
+    closed: bool = false,
+    pending_value: ?i64 = null,
+    receiver_waiting: usize = 0,
+    sender_waiting: usize = 0,
+};
+
+const Channel = struct {
+    mutex: std.Thread.Mutex = .{},
+    cond: std.Thread.Condition = .{},
+    state: ChannelState,
+};
+
 const forge_closure_env_slots = 16;
 
 const ForgeClosure = struct {
@@ -76,6 +99,8 @@ const SetImpl = struct {
     string_items: std.ArrayListUnmanaged([]u8) = .{},
     string_mode: bool = false,
 };
+
+var select_counter = std.atomic.Value(i64).init(0);
 
 fn unsupported(message: []const u8) noreturn {
     _ = c.fprintf(c.stderr, "forge zig runtime: %s\n", message.ptr);
@@ -139,6 +164,16 @@ fn closureFromHandle(handle: i64) ?*ForgeClosure {
     return @ptrFromInt(@as(usize, @intCast(handle)));
 }
 
+fn taskFromHandle(handle: i64) ?*Task {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn channelFromHandle(handle: i64) ?*Channel {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
 fn listSlice(list: *ListImpl) []i64 {
     if (list.values8_ptr == null or list.values8_cap == 0) return &.{};
     const ptr = list.values8_ptr.?;
@@ -181,6 +216,30 @@ fn allocBytesFromSlice(bytes: []const u8) i64 {
     const handle = allocator.create(ForgeBytes) catch unsupported("out of memory");
     handle.* = .{ .data = duped };
     return @intCast(@intFromPtr(handle));
+}
+
+fn optionalTuple(is_some: bool, value: i64) i64 {
+    const tuple = forge_struct_alloc(2);
+    if (tuple == 0) return 0;
+    const ptr: [*]i64 = @ptrFromInt(@as(usize, @intCast(tuple)));
+    ptr[0] = if (is_some) 1 else 0;
+    ptr[1] = value;
+    return tuple;
+}
+
+fn taskWorker(task: *Task, closure_handle: i64) void {
+    const func_ptr = forge_closure_get_fn(closure_handle);
+    var result: i64 = 0;
+    if (func_ptr != 0) {
+        const func: *const fn (i64) callconv(.c) i64 = @ptrFromInt(@as(usize, @intCast(func_ptr)));
+        result = func(closure_handle);
+    }
+
+    task.mutex.lock();
+    defer task.mutex.unlock();
+    task.done = true;
+    task.result = result;
+    task.cond.broadcast();
 }
 
 pub export fn forge_print_cstr(ptr: [*c]const u8) void {
@@ -271,6 +330,209 @@ pub export fn forge_closure_get_env(handle: i64, slot: i64) i64 {
     if (slot < 0 or slot >= forge_closure_env_slots) return 0;
     const closure = closureFromHandle(handle) orelse return 0;
     return closure.env[@intCast(slot)];
+}
+
+pub export fn forge_sleep(ms: i64) void {
+    if (ms <= 0) return;
+    std.Thread.sleep(@as(u64, @intCast(ms)) * std.time.ns_per_ms);
+}
+
+pub export fn forge_time() i64 {
+    return std.time.milliTimestamp();
+}
+
+pub export fn forge_format_time_fmt(timestamp_ms: i64, _: [*c]const u8) [*c]u8 {
+    return forge_int_to_cstr(@divTrunc(timestamp_ms, 1000));
+}
+
+pub export fn forge_spawn(closure_handle: i64) i64 {
+    if (closure_handle == 0) return 0;
+    const task = allocator.create(Task) catch unsupported("out of memory");
+    task.* = .{};
+    task.thread = std.Thread.spawn(.{}, taskWorker, .{ task, closure_handle }) catch unsupported("failed to spawn thread");
+    return @intCast(@intFromPtr(task));
+}
+
+pub export fn forge_await(task_handle: i64) i64 {
+    const task = taskFromHandle(task_handle) orelse return 0;
+    if (task.thread) |thread| {
+        thread.join();
+        task.thread = null;
+    }
+    task.mutex.lock();
+    defer task.mutex.unlock();
+    while (!task.done) {
+        task.cond.wait(&task.mutex);
+    }
+    return task.result;
+}
+
+pub export fn forge_task_is_done(task_handle: i64) i64 {
+    const task = taskFromHandle(task_handle) orelse return 0;
+    task.mutex.lock();
+    defer task.mutex.unlock();
+    return if (task.done) 1 else 0;
+}
+
+pub export fn forge_task_detach(task_handle: i64) void {
+    const task = taskFromHandle(task_handle) orelse return;
+    if (task.thread) |thread| {
+        thread.detach();
+        task.thread = null;
+    }
+}
+
+pub export fn forge_channel_new(capacity: i64) i64 {
+    const channel = allocator.create(Channel) catch unsupported("out of memory");
+    channel.* = .{
+        .state = .{
+            .capacity = @intCast(@max(capacity, 0)),
+        },
+    };
+    return @intCast(@intFromPtr(channel));
+}
+
+pub export fn forge_channel_send(handle: i64, value: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return 0;
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+
+    if (channel.state.closed) return 0;
+
+    if (channel.state.capacity == 0) {
+        while (!channel.state.closed) {
+            if (channel.state.receiver_waiting > 0 and channel.state.pending_value == null) {
+                channel.state.pending_value = value;
+                channel.cond.broadcast();
+                while (!channel.state.closed and channel.state.pending_value != null) {
+                    channel.cond.wait(&channel.mutex);
+                }
+                return if (channel.state.closed) 0 else 1;
+            }
+            channel.state.sender_waiting += 1;
+            channel.cond.wait(&channel.mutex);
+            channel.state.sender_waiting -= 1;
+        }
+        return 0;
+    }
+
+    while (!channel.state.closed and channel.state.queue.items.len >= channel.state.capacity) {
+        channel.state.sender_waiting += 1;
+        channel.cond.wait(&channel.mutex);
+        channel.state.sender_waiting -= 1;
+    }
+
+    if (channel.state.closed) return 0;
+    channel.state.queue.append(allocator, value) catch unsupported("out of memory");
+    channel.cond.broadcast();
+    return 1;
+}
+
+pub export fn forge_channel_try_send(handle: i64, value: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return 0;
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+
+    if (channel.state.closed) return 0;
+
+    if (channel.state.capacity == 0) {
+        if (channel.state.receiver_waiting == 0 or channel.state.pending_value != null) return 0;
+        channel.state.pending_value = value;
+        channel.cond.broadcast();
+        return 1;
+    }
+
+    if (channel.state.queue.items.len >= channel.state.capacity) return 0;
+    channel.state.queue.append(allocator, value) catch unsupported("out of memory");
+    channel.cond.broadcast();
+    return 1;
+}
+
+pub export fn forge_channel_recv(handle: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return optionalTuple(false, 0);
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+
+    while (true) {
+        if (channel.state.queue.items.len > 0) {
+            const value = channel.state.queue.orderedRemove(0);
+            channel.cond.broadcast();
+            return optionalTuple(true, value);
+        }
+
+        if (channel.state.capacity == 0) {
+            if (channel.state.pending_value) |value| {
+                channel.state.pending_value = null;
+                channel.cond.broadcast();
+                return optionalTuple(true, value);
+            }
+        }
+
+        if (channel.state.closed) return optionalTuple(false, 0);
+
+        channel.state.receiver_waiting += 1;
+        channel.cond.broadcast();
+        channel.cond.wait(&channel.mutex);
+        channel.state.receiver_waiting -= 1;
+    }
+}
+
+pub export fn forge_channel_try_recv(handle: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return optionalTuple(false, 0);
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+
+    if (channel.state.queue.items.len > 0) {
+        const value = channel.state.queue.orderedRemove(0);
+        channel.cond.broadcast();
+        return optionalTuple(true, value);
+    }
+    if (channel.state.capacity == 0) {
+        if (channel.state.pending_value) |value| {
+            channel.state.pending_value = null;
+            channel.cond.broadcast();
+            return optionalTuple(true, value);
+        }
+    }
+    return optionalTuple(false, 0);
+}
+
+pub export fn forge_channel_close(handle: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return 0;
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+    if (channel.state.closed) return 0;
+    channel.state.closed = true;
+    channel.state.pending_value = null;
+    channel.cond.broadcast();
+    return 1;
+}
+
+pub export fn forge_channel_len(handle: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return 0;
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+    return @intCast(channel.state.queue.items.len);
+}
+
+pub export fn forge_channel_cap(handle: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return 0;
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+    return @intCast(channel.state.capacity);
+}
+
+pub export fn forge_channel_is_closed(handle: i64) i64 {
+    const channel = channelFromHandle(handle) orelse return 1;
+    channel.mutex.lock();
+    defer channel.mutex.unlock();
+    return if (channel.state.closed) 1 else 0;
+}
+
+pub export fn forge_select_next_index(count: i64) i64 {
+    if (count <= 1) return 0;
+    const next = select_counter.fetchAdd(1, .monotonic);
+    return @mod(next, count);
 }
 
 pub export fn forge_list_new_default() i64 {
