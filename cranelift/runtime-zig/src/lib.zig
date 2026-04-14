@@ -663,6 +663,36 @@ pub export fn forge_random_string(len: i64) [*c]u8 {
 
 pub export fn forge_args() i64 {
     const list = forge_list_new_default();
+    const proc_file = std.fs.openFileAbsolute("/proc/self/cmdline", .{}) catch {
+        for (std.os.argv) |arg| {
+            forge_list_push_value(list, @intCast(@intFromPtr(allocCString(std.mem.sliceTo(arg, 0)))));
+        }
+        return list;
+    };
+    defer proc_file.close();
+
+    const data = proc_file.readToEndAlloc(allocator, 1 << 20) catch {
+        for (std.os.argv) |arg| {
+            forge_list_push_value(list, @intCast(@intFromPtr(allocCString(std.mem.sliceTo(arg, 0)))));
+        }
+        return list;
+    };
+    defer allocator.free(data);
+
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < data.len) : (i += 1) {
+        if (data[i] != 0) continue;
+        if (i > start) {
+            forge_list_push_value(list, @intCast(@intFromPtr(allocCString(data[start..i]))));
+        }
+        start = i + 1;
+    }
+    if (listFromHandle(list)) |result| {
+        if (result.values8_len > 0) {
+            return list;
+        }
+    }
     for (std.os.argv) |arg| {
         forge_list_push_value(list, @intCast(@intFromPtr(allocCString(std.mem.sliceTo(arg, 0)))));
     }
@@ -2139,6 +2169,14 @@ pub export fn forge_byte_buffer_write(handle: i64, data: i64) i64 {
     const bytes = bytesFromHandle(data) orelse return 0;
     buffer.data.appendSlice(allocator, bytes.data) catch unsupported("out of memory");
     return @intCast(bytes.data.len);
+}
+
+pub export fn forge_byte_buffer_write_cstr(handle: i64, data: [*c]const u8) i64 {
+    const buffer = byteBufferFromHandle(handle) orelse return 0;
+    if (data == null) return 0;
+    const text = span(data);
+    buffer.data.appendSlice(allocator, text) catch unsupported("out of memory");
+    return @intCast(text.len);
 }
 
 pub export fn forge_byte_buffer_write_byte(handle: i64, value: i64) i64 {

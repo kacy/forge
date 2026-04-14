@@ -195,6 +195,7 @@ pub fn declare_runtime_functions(
         ("byte_buffer_new", "forge_byte_buffer_new", &[], &[I64]),
         ("byte_buffer_with_capacity", "forge_byte_buffer_with_capacity", &[I64], &[I64]),
         ("byte_buffer_write", "forge_byte_buffer_write", &[I64, I64], &[I64]),
+        ("byte_buffer_write_cstr", "forge_byte_buffer_write_cstr", &[I64, I64], &[I64]),
         ("byte_buffer_write_byte", "forge_byte_buffer_write_byte", &[I64, I64], &[I64]),
         ("byte_buffer_bytes", "forge_byte_buffer_bytes", &[I64], &[I64]),
         ("byte_buffer_clear", "forge_byte_buffer_clear", &[I64], &[]),

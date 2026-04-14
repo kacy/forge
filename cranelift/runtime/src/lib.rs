@@ -3279,6 +3279,23 @@ pub unsafe extern "C" fn forge_byte_buffer_write(handle: i64, data: i64) -> i64 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn forge_byte_buffer_write_cstr(handle: i64, data: *const i8) -> i64 {
+    let Some(buffer) = forge_byte_buffer_mut(handle) else {
+        return 0;
+    };
+    if data.is_null() {
+        return 0;
+    }
+    let len = crate::string::forge_cstring_len(data) as usize;
+    let bytes = std::slice::from_raw_parts(data as *const u8, len);
+    ensure_perf_stats_registered();
+    perf_count(&PERF_BYTE_BUFFER_WRITES, 1);
+    perf_count(&PERF_BYTE_BUFFER_WRITE_BYTES, bytes.len());
+    buffer.data.extend_from_slice(bytes);
+    bytes.len() as i64
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn forge_byte_buffer_write_byte(handle: i64, value: i64) -> i64 {
     let Some(buffer) = forge_byte_buffer_mut(handle) else {
         return 0;
