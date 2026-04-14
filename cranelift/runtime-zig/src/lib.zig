@@ -6,6 +6,7 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
+    @cInclude("sys/stat.h");
     @cInclude("unistd.h");
 });
 
@@ -305,6 +306,15 @@ fn openFile(path: [*c]const u8, flags: c_int) i64 {
     return @intCast(@intFromPtr(handle));
 }
 
+fn writeFileBytes(path: []const u8, data: []const u8, flags: c_int) i64 {
+    const path_z = allocCString(path);
+    const fd = c.open(@ptrCast(path_z), flags, @as(c_uint, 0o666));
+    if (fd < 0) return 0;
+    defer _ = c.close(fd);
+    const n = c.write(fd, data.ptr, data.len);
+    return if (n < 0) 0 else 1;
+}
+
 pub export fn forge_print_cstr(ptr: [*c]const u8) void {
     if (ptr == null) return;
     _ = c.puts(@ptrCast(ptr));
@@ -408,6 +418,63 @@ pub export fn forge_format_time_fmt(timestamp_ms: i64, _: [*c]const u8) [*c]u8 {
     return forge_int_to_cstr(@divTrunc(timestamp_ms, 1000));
 }
 
+pub export fn forge_env(name: [*c]const u8) [*c]const u8 {
+    if (name == null) return allocCString("");
+    const value = c.getenv(@ptrCast(name));
+    if (value == null) return allocCString("");
+    return allocCString(span(@ptrCast(value)));
+}
+
+pub export fn forge_os_getcwd() [*c]const u8 {
+    const path = std.fs.cwd().realpathAlloc(allocator, ".") catch return null;
+    return allocCString(path);
+}
+
+pub export fn forge_os_chdir(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    return if (c.chdir(@ptrCast(path)) == 0) 1 else 0;
+}
+
+pub export fn forge_os_temp_dir() [*c]const u8 {
+    const tmp = c.getenv("TMPDIR");
+    if (tmp != null and tmp[0] != 0) return allocCString(span(@ptrCast(tmp)));
+    return allocCString("/tmp");
+}
+
+pub export fn forge_os_home_dir() [*c]const u8 {
+    const home = c.getenv("HOME");
+    if (home != null and home[0] != 0) return allocCString(span(@ptrCast(home)));
+    const profile = c.getenv("USERPROFILE");
+    if (profile != null and profile[0] != 0) return allocCString(span(@ptrCast(profile)));
+    return null;
+}
+
+pub export fn forge_os_set_env(name: [*c]const u8, value: [*c]const u8) i64 {
+    if (name == null or value == null) return 0;
+    return if (c.setenv(@ptrCast(name), @ptrCast(value), 1) == 0) 1 else 0;
+}
+
+pub export fn forge_os_unset_env(name: [*c]const u8) i64 {
+    if (name == null) return 0;
+    return if (c.unsetenv(@ptrCast(name)) == 0) 1 else 0;
+}
+
+pub export fn forge_random_int(min: i64, max: i64) i64 {
+    if (min >= max) return min;
+    const range: u64 = @intCast(max - min + 1);
+    const stamp: u64 = @intCast(@abs(std.time.nanoTimestamp()));
+    return min + @as(i64, @intCast(stamp % range));
+}
+
+pub export fn forge_args() i64 {
+    const list = forge_list_new_default();
+    const args = std.process.argsAlloc(allocator) catch return list;
+    for (args) |arg| {
+        forge_list_push_value(list, @intCast(@intFromPtr(allocCString(arg))));
+    }
+    return list;
+}
+
 pub export fn forge_input() [*c]u8 {
     var out = std.ArrayListUnmanaged(u8){};
     defer out.deinit(allocator);
@@ -455,6 +522,103 @@ pub export fn forge_file_write_bytes(handle: i64, data: i64) i64 {
 pub export fn forge_file_close(handle: i64) void {
     const file = fileFromHandle(handle) orelse return;
     _ = c.close(file.fd);
+}
+
+pub export fn forge_file_exists(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    std.fs.cwd().access(span(path), .{}) catch return 0;
+    return 1;
+}
+
+pub export fn forge_dir_exists(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    var dir = std.fs.cwd().openDir(span(path), .{}) catch return 0;
+    dir.close();
+    return 1;
+}
+
+pub export fn forge_mkdir(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    std.fs.cwd().makePath(span(path)) catch return 0;
+    return 1;
+}
+
+pub export fn forge_remove_dir(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    std.fs.cwd().deleteDir(span(path)) catch return 0;
+    return 1;
+}
+
+pub export fn forge_remove_tree(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    std.fs.cwd().deleteTree(span(path)) catch return 0;
+    return 1;
+}
+
+pub export fn forge_file_size(path: [*c]const u8) i64 {
+    if (path == null) return -1;
+    const stat = std.fs.cwd().statFile(span(path)) catch return -1;
+    return @intCast(stat.size);
+}
+
+pub export fn forge_remove_file(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    std.fs.cwd().deleteFile(span(path)) catch return 0;
+    return 1;
+}
+
+pub export fn forge_rename_file(from: [*c]const u8, to: [*c]const u8) i64 {
+    if (from == null or to == null) return 0;
+    std.fs.renameAbsolute(span(from), span(to)) catch {
+        std.fs.cwd().rename(span(from), span(to)) catch return 0;
+    };
+    return 1;
+}
+
+pub export fn forge_read_file(path: [*c]const u8) [*c]u8 {
+    if (path == null) return null;
+    const contents = std.fs.cwd().readFileAlloc(allocator, span(path), std.math.maxInt(usize)) catch return null;
+    return allocCString(contents);
+}
+
+pub export fn forge_read_file_bytes(path: [*c]const u8) i64 {
+    if (path == null) return 0;
+    const contents = std.fs.cwd().readFileAlloc(allocator, span(path), std.math.maxInt(usize)) catch return 0;
+    return allocBytesFromSlice(contents);
+}
+
+pub export fn forge_write_file(path: [*c]const u8, content: [*c]const u8) i64 {
+    if (path == null or content == null) return 0;
+    return writeFileBytes(span(path), span(content), c.O_WRONLY | c.O_CREAT | c.O_TRUNC);
+}
+
+pub export fn forge_write_file_bytes(path: [*c]const u8, content: i64) i64 {
+    if (path == null) return 0;
+    const bytes = bytesFromHandle(content) orelse return 0;
+    return writeFileBytes(span(path), bytes.data, c.O_WRONLY | c.O_CREAT | c.O_TRUNC);
+}
+
+pub export fn forge_append_file(path: [*c]const u8, content: [*c]const u8) i64 {
+    if (path == null or content == null) return 0;
+    return writeFileBytes(span(path), span(content), c.O_WRONLY | c.O_CREAT | c.O_APPEND);
+}
+
+pub export fn forge_append_file_bytes(path: [*c]const u8, content: i64) i64 {
+    if (path == null) return 0;
+    const bytes = bytesFromHandle(content) orelse return 0;
+    return writeFileBytes(span(path), bytes.data, c.O_WRONLY | c.O_CREAT | c.O_APPEND);
+}
+
+pub export fn forge_list_dir(path: [*c]const u8) i64 {
+    if (path == null) return forge_list_new_default();
+    var dir = std.fs.cwd().openDir(span(path), .{ .iterate = true }) catch return forge_list_new_default();
+    defer dir.close();
+    var it = dir.iterate();
+    const list = forge_list_new_default();
+    while (it.next() catch null) |entry| {
+        forge_list_push_value(list, @intCast(@intFromPtr(allocCString(entry.name))));
+    }
+    return list;
 }
 
 pub export fn forge_tcp_connect(_: [*c]const u8, _: i64) i64 {
