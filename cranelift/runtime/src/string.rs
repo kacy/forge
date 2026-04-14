@@ -202,46 +202,6 @@ pub unsafe extern "C" fn forge_string_concat(a: ForgeString, b: ForgeString) -> 
     forge_from_internal(Arc::from(result))
 }
 
-/// Check string equality
-#[no_mangle]
-pub extern "C" fn forge_string_eq(a: ForgeString, b: ForgeString) -> bool {
-    if a.len != b.len {
-        return false;
-    }
-    if a.len == 0 {
-        return true;
-    }
-    if std::ptr::eq(a.ptr, b.ptr) {
-        return true;
-    }
-
-    unsafe {
-        let a_slice = std::slice::from_raw_parts(a.ptr, a.len as usize);
-        let b_slice = std::slice::from_raw_parts(b.ptr, b.len as usize);
-        a_slice == b_slice
-    }
-}
-
-/// String less-than comparison (lexicographic)
-#[no_mangle]
-pub extern "C" fn forge_string_lt(a: ForgeString, b: ForgeString) -> bool {
-    unsafe {
-        let a_internal = internal_from_forge(a);
-        let b_internal = internal_from_forge(b);
-        a_internal < b_internal
-    }
-}
-
-/// String greater-than comparison (lexicographic)
-#[no_mangle]
-pub extern "C" fn forge_string_gt(a: ForgeString, b: ForgeString) -> bool {
-    unsafe {
-        let a_internal = internal_from_forge(a);
-        let b_internal = internal_from_forge(b);
-        a_internal > b_internal
-    }
-}
-
 /// Get string length in bytes
 #[no_mangle]
 pub extern "C" fn forge_string_len(s: ForgeString) -> i64 {
