@@ -382,6 +382,14 @@ pub export fn forge_cstring_compare(a: [*c]const u8, b: [*c]const u8) i64 {
     return cmpCStrings(a, b);
 }
 
+pub export fn forge_cstring_lte(a: [*c]const u8, b: [*c]const u8) i64 {
+    return if (cmpCStrings(a, b) <= 0) 1 else 0;
+}
+
+pub export fn forge_cstring_gte(a: [*c]const u8, b: [*c]const u8) i64 {
+    return if (cmpCStrings(a, b) >= 0) 1 else 0;
+}
+
 pub export fn forge_cstring_len(s: [*c]const u8) i64 {
     return @intCast(strlen(s));
 }
@@ -407,6 +415,15 @@ pub export fn forge_float_to_cstr(n: f64) [*c]u8 {
 
 pub export fn forge_bool_to_cstr(value: i64) [*c]u8 {
     return allocCString(if (value != 0) "true" else "false");
+}
+
+pub export fn forge_int_to_float(n: i64) f64 {
+    return @floatFromInt(n);
+}
+
+pub export fn forge_parse_int(s: [*c]const u8) i64 {
+    if (s == null) return 0;
+    return std.fmt.parseInt(i64, span(s), 10) catch 0;
 }
 
 pub export fn forge_chr_cstr(n: i64) [*c]u8 {
@@ -1492,6 +1509,17 @@ pub export fn forge_map_remove_cstr(map_handle: i64, key: [*c]const u8) void {
     while (idx < map.string_entries.items.len) : (idx += 1) {
         if (std.mem.eql(u8, map.string_entries.items[idx].key, key_bytes)) {
             _ = map.string_entries.swapRemove(idx);
+            return;
+        }
+    }
+}
+
+pub export fn forge_map_remove_ikey(map_handle: i64, key: i64) void {
+    const map = mapFromHandle(map_handle) orelse return;
+    var idx: usize = 0;
+    while (idx < map.int_entries.items.len) : (idx += 1) {
+        if (map.int_entries.items[idx].key == key) {
+            _ = map.int_entries.swapRemove(idx);
             return;
         }
     }
