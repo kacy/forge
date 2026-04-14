@@ -362,26 +362,6 @@ pub unsafe extern "C" fn forge_closure_get_env(handle: i64, slot: i64) -> i64 {
     }
 }
 
-/// Initialize the runtime
-///
-/// # Safety
-/// Must be called before any other runtime functions
-#[no_mangle]
-pub unsafe extern "C" fn forge_runtime_init() {
-    ensure_perf_stats_registered();
-    arc::init_cycle_collector();
-}
-
-/// Clean up the runtime
-///
-/// # Safety
-/// Should be called at program exit
-#[no_mangle]
-pub unsafe extern "C" fn forge_runtime_shutdown() {
-    arc::shutdown_cycle_collector();
-    dump_perf_stats();
-}
-
 /// Print a string to stdout
 ///
 /// # Safety
