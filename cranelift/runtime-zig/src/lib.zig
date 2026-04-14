@@ -329,6 +329,19 @@ pub export fn forge_list_len(list_handle: i64) i64 {
     return @intCast(list.values8_len);
 }
 
+pub export fn forge_list_is_empty(list_handle: i64) i64 {
+    return if (forge_list_len(list_handle) == 0) 1 else 0;
+}
+
+pub export fn forge_list_contains_int(list_handle: i64, value: i64) i64 {
+    const list = listFromHandle(list_handle) orelse return 0;
+    if (list.values8_ptr == null) return 0;
+    for (list.values8_ptr.?[0..list.values8_len]) |item| {
+        if (item == value) return 1;
+    }
+    return 0;
+}
+
 pub export fn forge_list_join(list_handle: i64, sep: [*c]const u8) [*c]u8 {
     const list = listFromHandle(list_handle) orelse return null;
     if (list.values8_len == 0 or list.values8_ptr == null) return allocCString("");
@@ -357,6 +370,31 @@ pub export fn forge_list_join(list_handle: i64, sep: [*c]const u8) [*c]u8 {
     }
     out[cursor] = 0;
     return out.ptr;
+}
+
+pub export fn forge_list_remove_value(list_handle: i64, index: i64) i64 {
+    const list = listFromHandle(list_handle) orelse return 0;
+    if (index < 0) return 0;
+    const idx: usize = @intCast(index);
+    if (idx >= list.values8_len or list.values8_ptr == null) return 0;
+    const slice = list.values8_ptr.?[0..list.values8_len];
+    var i = idx;
+    while (i + 1 < list.values8_len) : (i += 1) {
+        slice[i] = slice[i + 1];
+    }
+    list.values8_len -= 1;
+    return 1;
+}
+
+pub export fn forge_list_reverse_value(list_handle: i64) void {
+    const list = listFromHandle(list_handle) orelse return;
+    if (list.values8_ptr == null) return;
+    std.mem.reverse(i64, list.values8_ptr.?[0..list.values8_len]);
+}
+
+pub export fn forge_list_clear_value(list_handle: i64) void {
+    const list = listFromHandle(list_handle) orelse return;
+    list.values8_len = 0;
 }
 
 pub export fn forge_auto_len(ptr: i64) i64 {
@@ -471,6 +509,43 @@ pub export fn forge_map_keys_cstr(map_handle: i64) i64 {
     return list_handle;
 }
 
+pub export fn forge_map_remove_cstr(map_handle: i64, key: [*c]const u8) void {
+    const map = mapFromHandle(map_handle) orelse return;
+    const key_bytes = span(key);
+    var idx: usize = 0;
+    while (idx < map.string_entries.items.len) : (idx += 1) {
+        if (std.mem.eql(u8, map.string_entries.items[idx].key, key_bytes)) {
+            _ = map.string_entries.swapRemove(idx);
+            return;
+        }
+    }
+}
+
+pub export fn forge_map_values_handle(map_handle: i64) i64 {
+    const map = mapFromHandle(map_handle) orelse return forge_list_new_default();
+    const list_handle = forge_list_new_default();
+    if (map.kind == 1) {
+        for (map.string_entries.items) |entry| {
+            forge_list_push_value(list_handle, entry.value);
+        }
+    } else {
+        for (map.int_entries.items) |entry| {
+            forge_list_push_value(list_handle, entry.value);
+        }
+    }
+    return list_handle;
+}
+
+pub export fn forge_map_clear_handle(map_handle: i64) void {
+    const map = mapFromHandle(map_handle) orelse return;
+    map.string_entries.clearRetainingCapacity();
+    map.int_entries.clearRetainingCapacity();
+}
+
+pub export fn forge_map_is_empty_handle(map_handle: i64) i64 {
+    return if (forge_map_len_handle(map_handle) == 0) 1 else 0;
+}
+
 pub export fn forge_set_new_default() i64 {
     return forge_set_new_handle(0);
 }
@@ -526,6 +601,28 @@ pub export fn forge_set_contains_cstr(set_handle: i64, elem: [*c]const u8) i64 {
         if (std.mem.eql(u8, item, elem_bytes)) return 1;
     }
     return 0;
+}
+
+pub export fn forge_set_remove_cstr(set_handle: i64, elem: [*c]const u8) void {
+    const set = setFromHandle(set_handle) orelse return;
+    const elem_bytes = span(elem);
+    var idx: usize = 0;
+    while (idx < set.string_items.items.len) : (idx += 1) {
+        if (std.mem.eql(u8, set.string_items.items[idx], elem_bytes)) {
+            _ = set.string_items.swapRemove(idx);
+            return;
+        }
+    }
+}
+
+pub export fn forge_set_clear_handle(set_handle: i64) void {
+    const set = setFromHandle(set_handle) orelse return;
+    set.items.clearRetainingCapacity();
+    set.string_items.clearRetainingCapacity();
+}
+
+pub export fn forge_set_is_empty_handle(set_handle: i64) i64 {
+    return if (forge_set_len_handle(set_handle) == 0) 1 else 0;
 }
 
 pub export fn forge_cstring_substring(s: [*c]const u8, start: i64, end: i64) [*c]u8 {
