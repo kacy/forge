@@ -555,40 +555,6 @@ pub unsafe extern "C" fn forge_cstring_eq(a: *const i8, b: *const i8) -> i64 {
     }
 }
 
-/// Compare two C strings lexicographically (like strcmp).
-/// Returns negative if a < b, 0 if equal, positive if a > b.
-#[no_mangle]
-pub unsafe extern "C" fn forge_cstring_cmp(a: *const i8, b: *const i8) -> i64 {
-    if a.is_null() && b.is_null() {
-        return 0;
-    }
-    if a.is_null() {
-        return -1;
-    }
-    if b.is_null() {
-        return 1;
-    }
-
-    let mut pa = a;
-    let mut pb = b;
-
-    loop {
-        let ca = *pa as u8;
-        let cb = *pb as u8;
-
-        if ca != cb {
-            return (ca as i64) - (cb as i64);
-        }
-
-        if ca == 0 {
-            return 0;
-        }
-
-        pa = pa.add(1);
-        pb = pb.add(1);
-    }
-}
-
 /// Get ASCII value of first char in C string (ord)
 #[no_mangle]
 pub unsafe extern "C" fn forge_ord_cstr(s: *const i8) -> i64 {
@@ -642,22 +608,6 @@ pub extern "C" fn forge_assert_ne(a: i64, b: i64) {
         TEST_FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
         eprintln!("Assertion failed: {} == {}", a, b);
     }
-}
-
-/// Check if any test failed
-#[no_mangle]
-pub extern "C" fn forge_test_result() -> i64 {
-    if TEST_FAILED.load(std::sync::atomic::Ordering::Relaxed) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Reset test state
-#[no_mangle]
-pub extern "C" fn forge_test_reset() {
-    TEST_FAILED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Bitwise AND
@@ -3376,22 +3326,6 @@ pub unsafe extern "C" fn forge_byte_buffer_clear(handle: i64) {
     if let Some(buffer) = forge_byte_buffer_mut(handle) {
         buffer.data.clear();
     }
-}
-
-/// Split string into a list of single-character strings (chars)
-/// Return type of a value as string (stub — returns "any")
-#[no_mangle]
-pub extern "C" fn forge_type_of(_val: i64) -> *mut i8 {
-    use std::alloc::{alloc, Layout};
-    let s = b"any\0";
-    let layout = Layout::from_size_align(s.len(), 1).unwrap();
-    let ptr = unsafe { alloc(layout) as *mut i8 };
-    if !ptr.is_null() {
-        unsafe {
-            std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, s.len());
-        }
-    }
-    ptr
 }
 
 /// Generic second(a, b) — returns second argument

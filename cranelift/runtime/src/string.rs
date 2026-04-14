@@ -516,28 +516,11 @@ pub extern "C" fn forge_int_to_string(n: i64) -> ForgeString {
     forge_from_internal(s)
 }
 
-/// Convert uint to string  
-#[no_mangle]
-pub extern "C" fn forge_uint_to_string(n: u64) -> ForgeString {
-    let s = Arc::from(n.to_string());
-    forge_from_internal(s)
-}
-
 /// Convert float to string
 #[no_mangle]
 pub extern "C" fn forge_float_to_string(n: f64) -> ForgeString {
     let s = Arc::from(format!("{:.6}", n));
     forge_from_internal(s)
-}
-
-/// Convert bool to string
-#[no_mangle]
-pub extern "C" fn forge_bool_to_string(b: bool) -> ForgeString {
-    if b {
-        unsafe { forge_string_new(b"true".as_ptr(), 4) }
-    } else {
-        unsafe { forge_string_new(b"false".as_ptr(), 5) }
-    }
 }
 
 // ============================================================================
