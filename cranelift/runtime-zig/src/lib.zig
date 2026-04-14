@@ -115,6 +115,8 @@ comptime {
 
 const StringMap = std.StringArrayHashMapUnmanaged(i64);
 const IntMap = std.AutoArrayHashMapUnmanaged(i64, i64);
+const StringSet = std.StringArrayHashMapUnmanaged(void);
+const IntSet = std.AutoArrayHashMapUnmanaged(i64, void);
 
 const MapImpl = struct {
     kind: i32,
@@ -125,8 +127,8 @@ const MapImpl = struct {
 };
 
 const SetImpl = struct {
-    items: std.ArrayListUnmanaged(i64) = .{},
-    string_items: std.ArrayListUnmanaged([]u8) = .{},
+    items: IntSet = .empty,
+    string_items: StringSet = .empty,
     string_mode: bool = false,
 };
 
@@ -1800,61 +1802,50 @@ pub export fn forge_set_new_handle(_: i32) i64 {
 
 pub export fn forge_set_len_handle(set_handle: i64) i64 {
     const set = setFromHandle(set_handle) orelse return 0;
-    return if (set.string_mode) @intCast(set.string_items.items.len) else @intCast(set.items.items.len);
+    return if (set.string_mode) @intCast(set.string_items.count()) else @intCast(set.items.count());
 }
 
 pub export fn forge_set_add_int_handle(set_handle: i64, elem: i64) i64 {
     const set = setFromHandle(set_handle) orelse return 0;
-    for (set.items.items) |item| {
-        if (item == elem) return 0;
-    }
-    set.items.append(allocator, elem) catch unsupported("out of memory");
+    if (set.items.contains(elem)) return 0;
+    set.items.put(allocator, elem, {}) catch unsupported("out of memory");
     return 1;
 }
 
 pub export fn forge_set_contains_int_handle(set_handle: i64, elem: i64) i64 {
     const set = setFromHandle(set_handle) orelse return 0;
-    for (set.items.items) |item| {
-        if (item == elem) return 1;
-    }
-    return 0;
+    return if (set.items.contains(elem)) 1 else 0;
 }
 
 pub export fn forge_set_add_cstr(set_handle: i64, elem: [*c]const u8) i64 {
     const set = setFromHandle(set_handle) orelse return 0;
     const elem_bytes = span(elem);
     set.string_mode = true;
-    for (set.string_items.items) |item| {
-        if (std.mem.eql(u8, item, elem_bytes)) return 0;
-    }
+    if (set.string_items.contains(elem_bytes)) return 0;
     const duped = allocator.dupe(u8, elem_bytes) catch unsupported("out of memory");
-    set.string_items.append(allocator, duped) catch unsupported("out of memory");
+    set.string_items.put(allocator, duped, {}) catch unsupported("out of memory");
     return 1;
 }
 
 pub export fn forge_set_contains_cstr(set_handle: i64, elem: [*c]const u8) i64 {
     const set = setFromHandle(set_handle) orelse return 0;
     const elem_bytes = span(elem);
-    for (set.string_items.items) |item| {
-        if (std.mem.eql(u8, item, elem_bytes)) return 1;
-    }
-    return 0;
+    return if (set.string_items.contains(elem_bytes)) 1 else 0;
 }
 
 pub export fn forge_set_remove_cstr(set_handle: i64, elem: [*c]const u8) void {
     const set = setFromHandle(set_handle) orelse return;
     const elem_bytes = span(elem);
-    var idx: usize = 0;
-    while (idx < set.string_items.items.len) : (idx += 1) {
-        if (std.mem.eql(u8, set.string_items.items[idx], elem_bytes)) {
-            _ = set.string_items.swapRemove(idx);
-            return;
-        }
-    }
+    const stored_key = set.string_items.getKey(elem_bytes) orelse return;
+    _ = set.string_items.swapRemove(elem_bytes);
+    allocator.free(@constCast(stored_key));
 }
 
 pub export fn forge_set_clear_handle(set_handle: i64) void {
     const set = setFromHandle(set_handle) orelse return;
+    for (set.string_items.keys()) |key_bytes| {
+        allocator.free(@constCast(key_bytes));
+    }
     set.items.clearRetainingCapacity();
     set.string_items.clearRetainingCapacity();
 }
@@ -1866,7 +1857,7 @@ pub export fn forge_set_is_empty_handle(set_handle: i64) i64 {
 pub export fn forge_set_to_list_cstr(set_handle: i64) i64 {
     const list = forge_list_new_default();
     const set = setFromHandle(set_handle) orelse return list;
-    for (set.string_items.items) |item| {
+    for (set.string_items.keys()) |item| {
         forge_list_push_value(list, @intCast(@intFromPtr(allocCString(item))));
     }
     return list;
@@ -1875,7 +1866,7 @@ pub export fn forge_set_to_list_cstr(set_handle: i64) i64 {
 pub export fn forge_set_to_list_int_handle(set_handle: i64) i64 {
     const list = forge_list_new_default();
     const set = setFromHandle(set_handle) orelse return list;
-    for (set.items.items) |item| {
+    for (set.items.keys()) |item| {
         forge_list_push_value(list, item);
     }
     return list;
