@@ -442,7 +442,7 @@ pub export fn forge_fmt_float(n: f64, precision: i64) [*c]u8 {
     const digits: usize = @intCast(@max(precision, 0));
     var fmt_buf: [32]u8 = undefined;
     var buf: [256]u8 = undefined;
-    const fmt = std.fmt.bufPrintZ(&fmt_buf, "%%.{d}f", .{digits}) catch unreachable;
+    const fmt = std.fmt.bufPrintZ(&fmt_buf, "%.{d}f", .{digits}) catch unreachable;
     const written = c.snprintf(@ptrCast(&buf), buf.len, fmt.ptr, n);
     if (written <= 0) return allocCString("");
     const len: usize = @min(@as(usize, @intCast(written)), buf.len - 1);
@@ -453,13 +453,62 @@ pub export fn forge_bool_to_cstr(value: i64) [*c]u8 {
     return allocCString(if (value != 0) "true" else "false");
 }
 
+pub export fn forge_abs(n: i64) i64 {
+    return if (n < 0) -n else n;
+}
+
+pub export fn forge_min(a: i64, b: i64) i64 {
+    return if (a < b) a else b;
+}
+
+pub export fn forge_max(a: i64, b: i64) i64 {
+    return if (a > b) a else b;
+}
+
+pub export fn forge_clamp(n: i64, min_value: i64, max_value: i64) i64 {
+    return @min(@max(n, min_value), max_value);
+}
+
+pub export fn forge_abs_float(n: f64) f64 {
+    return @abs(n);
+}
+
+pub export fn forge_pow(a: f64, b: f64) f64 {
+    return std.math.pow(f64, a, b);
+}
+
+pub export fn forge_sqrt(n: f64) f64 {
+    return std.math.sqrt(n);
+}
+
+pub export fn forge_floor(n: f64) f64 {
+    return @floor(n);
+}
+
+pub export fn forge_ceil(n: f64) f64 {
+    return @ceil(n);
+}
+
+pub export fn forge_round(n: f64) f64 {
+    return @round(n);
+}
+
 pub export fn forge_int_to_float(n: i64) f64 {
     return @floatFromInt(n);
+}
+
+pub export fn forge_float_to_int(n: f64) i64 {
+    return @intFromFloat(@trunc(n));
 }
 
 pub export fn forge_parse_int(s: [*c]const u8) i64 {
     if (s == null) return 0;
     return std.fmt.parseInt(i64, span(s), 10) catch 0;
+}
+
+pub export fn forge_parse_float(s: [*c]const u8) f64 {
+    if (s == null) return 0;
+    return std.fmt.parseFloat(f64, std.mem.trim(u8, span(s), " \t\n\r")) catch 0;
 }
 
 pub export fn forge_chr_cstr(n: i64) [*c]u8 {
@@ -1371,6 +1420,63 @@ pub export fn forge_list_len(list_handle: i64) i64 {
 
 pub export fn forge_list_is_empty(list_handle: i64) i64 {
     return if (forge_list_len(list_handle) == 0) 1 else 0;
+}
+
+pub export fn forge_list_map(list_handle: i64, closure_handle: i64) i64 {
+    const result = forge_list_new_default();
+    const list = listFromHandle(list_handle) orelse return result;
+    const func_ptr = forge_closure_get_fn(closure_handle);
+    if (func_ptr == 0 or list.values8_ptr == null) return result;
+    const func: *const fn (i64, i64) callconv(.c) i64 = @ptrFromInt(@as(usize, @intCast(func_ptr)));
+
+    var i: usize = 0;
+    while (i < list.values8_len) : (i += 1) {
+        forge_list_push_value(result, func(closure_handle, list.values8_ptr.?[i]));
+    }
+    return result;
+}
+
+pub export fn forge_list_filter(list_handle: i64, closure_handle: i64) i64 {
+    const result = forge_list_new_default();
+    const list = listFromHandle(list_handle) orelse return result;
+    const func_ptr = forge_closure_get_fn(closure_handle);
+    if (func_ptr == 0 or list.values8_ptr == null) return result;
+    const func: *const fn (i64, i64) callconv(.c) i64 = @ptrFromInt(@as(usize, @intCast(func_ptr)));
+
+    var i: usize = 0;
+    while (i < list.values8_len) : (i += 1) {
+        const value = list.values8_ptr.?[i];
+        if (func(closure_handle, value) != 0) {
+            forge_list_push_value(result, value);
+        }
+    }
+    return result;
+}
+
+pub export fn forge_list_reduce(list_handle: i64, init: i64, closure_handle: i64) i64 {
+    const list = listFromHandle(list_handle) orelse return init;
+    const func_ptr = forge_closure_get_fn(closure_handle);
+    if (func_ptr == 0 or list.values8_ptr == null) return init;
+    const func: *const fn (i64, i64, i64) callconv(.c) i64 = @ptrFromInt(@as(usize, @intCast(func_ptr)));
+
+    var acc = init;
+    var i: usize = 0;
+    while (i < list.values8_len) : (i += 1) {
+        acc = func(closure_handle, acc, list.values8_ptr.?[i]);
+    }
+    return acc;
+}
+
+pub export fn forge_list_each(list_handle: i64, closure_handle: i64) void {
+    const list = listFromHandle(list_handle) orelse return;
+    const func_ptr = forge_closure_get_fn(closure_handle);
+    if (func_ptr == 0 or list.values8_ptr == null) return;
+    const func: *const fn (i64, i64) callconv(.c) i64 = @ptrFromInt(@as(usize, @intCast(func_ptr)));
+
+    var i: usize = 0;
+    while (i < list.values8_len) : (i += 1) {
+        _ = func(closure_handle, list.values8_ptr.?[i]);
+    }
 }
 
 pub export fn forge_list_contains_int(list_handle: i64, value: i64) i64 {
