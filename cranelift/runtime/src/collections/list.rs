@@ -166,18 +166,6 @@ impl ListImpl {
         }
     }
 
-    fn insert(&mut self, index: usize, elem: &[u8]) {
-        if self.uses_value_storage() {
-            if index <= self.values8.len() {
-                self.values8
-                    .insert(index, unsafe { std::ptr::read_unaligned(elem.as_ptr() as *const i64) });
-                self.sync_value_view();
-            }
-        } else if index <= self.elements.len() {
-            self.elements.insert(index, elem.to_vec());
-        }
-    }
-
     fn remove(&mut self, index: usize) -> Option<Vec<u8>> {
         if self.uses_value_storage() {
             if index < self.values8.len() {
