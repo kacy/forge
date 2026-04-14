@@ -138,6 +138,7 @@ const SetImpl = struct {
 };
 
 var select_counter = std.atomic.Value(i64).init(0);
+var random_seed_state = std.atomic.Value(u64).init(123456789);
 
 fn unsupported(message: []const u8) noreturn {
     _ = c.fprintf(c.stderr, "forge zig runtime: %s\n", message.ptr);
@@ -390,6 +391,30 @@ pub export fn forge_cstring_gte(a: [*c]const u8, b: [*c]const u8) i64 {
     return if (cmpCStrings(a, b) >= 0) 1 else 0;
 }
 
+pub export fn forge_bit_and(a: i64, b: i64) i64 {
+    return a & b;
+}
+
+pub export fn forge_bit_or(a: i64, b: i64) i64 {
+    return a | b;
+}
+
+pub export fn forge_bit_xor(a: i64, b: i64) i64 {
+    return a ^ b;
+}
+
+pub export fn forge_bit_not(a: i64) i64 {
+    return ~a;
+}
+
+pub export fn forge_bit_shl(a: i64, b: i64) i64 {
+    return a << @intCast(@max(b, 0));
+}
+
+pub export fn forge_bit_shr(a: i64, b: i64) i64 {
+    return @as(i64, @bitCast(@as(u64, @bitCast(a)) >> @intCast(@max(b, 0))));
+}
+
 pub export fn forge_cstring_len(s: [*c]const u8) i64 {
     return @intCast(strlen(s));
 }
@@ -518,8 +543,32 @@ pub export fn forge_os_unset_env(name: [*c]const u8) i64 {
 pub export fn forge_random_int(min: i64, max: i64) i64 {
     if (min >= max) return min;
     const range: u64 = @intCast(max - min + 1);
-    const stamp: u64 = @intCast(@abs(std.time.nanoTimestamp()));
-    return min + @as(i64, @intCast(stamp % range));
+    const r = @as(i64, @intFromFloat(forge_random_float() * @as(f64, @floatFromInt(range))));
+    return min + r;
+}
+
+pub export fn forge_random_float() f64 {
+    const seed = random_seed_state.load(.monotonic);
+    const next = seed *% 6364136223846793005 +% 1;
+    random_seed_state.store(next, .monotonic);
+    return @as(f64, @floatFromInt(next >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
+}
+
+pub export fn forge_random_seed(seed: i64) void {
+    random_seed_state.store(@bitCast(seed), .monotonic);
+}
+
+pub export fn forge_random_string(len: i64) [*c]u8 {
+    const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const n: usize = @intCast(@max(len, 0));
+    const out = allocator.alloc(u8, n + 1) catch unsupported("out of memory");
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const idx = @as(usize, @intFromFloat(forge_random_float() * @as(f64, @floatFromInt(charset.len)))) % charset.len;
+        out[i] = charset[idx];
+    }
+    out[n] = 0;
+    return out.ptr;
 }
 
 pub export fn forge_args() i64 {
