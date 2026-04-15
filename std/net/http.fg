@@ -474,8 +474,8 @@ fn build_http_request(head: Bytes, body: Bytes) -> HttpRequestBytes!:
     path_text := decode_utf8(request_target_path_bytes(head))!
     query_text := decode_utf8(request_target_query_bytes(head))!
     version_text := decode_utf8(request_line_field_bytes(head, 2))!
-    headers_text := decode_utf8(headers_bytes(head))!
-    body_text := decode_utf8(body)!
+    headers_text := ""
+    body_text := ""
     headers_map := request_headers_map(head)!
     mut query_map: Map[String, String] := {}
     path_parts := path_segments(path_text)
@@ -517,13 +517,17 @@ impl HttpRequestBytes:
     fn version() -> String!:
         return self.version_text
     fn headers() -> String!:
-        return self.headers_text
+        if self.headers_text != "":
+            return self.headers_text
+        return decode_utf8(self.headers_bytes())!
     fn header(name: String) -> String!:
         return header_lookup(self.header_map, name)
     fn body_bytes() -> Bytes:
         return self.body
     fn body_text() -> String!:
-        return self.body_text_cache
+        if self.body_text_cache != "" or self.body.len() == 0:
+            return self.body_text_cache
+        return decode_utf8(self.body)!
     fn body_text_or(fallback: String) -> String:
         return self.body_text() catch fallback
     fn body_json() -> Int!:
