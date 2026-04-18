@@ -66,16 +66,22 @@ fn generate_runtime_table() -> Result<(), String> {
     let contents = fs::read_to_string(&abi_path)
         .map_err(|e| format!("{}: {}", abi_path.display(), e))?;
 
-    let mut out = String::new();
-    out.push_str("const RUNTIME_FUNCTIONS: &[RuntimeDecl] = &[\n");
+    let mut abi = String::new();
+    let mut compat = String::new();
+    abi.push_str("const ABI_RUNTIME_FUNCTIONS: &[RuntimeDecl] = &[\n");
+    compat.push_str("const COMPAT_RUNTIME_FUNCTIONS: &[RuntimeDecl] = &[\n");
     for (line_no, raw_line) in contents.lines().enumerate() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() != 4 {
-            return Err(format!("{}:{}: expected 4 pipe-separated columns", abi_path.display(), line_no + 1));
+        if parts.len() != 4 && parts.len() != 5 {
+            return Err(format!(
+                "{}:{}: expected 4 or 5 pipe-separated columns",
+                abi_path.display(),
+                line_no + 1
+            ));
         }
         let key = parts[0].trim();
         let symbol = parts[1].trim();
@@ -83,20 +89,45 @@ fn generate_runtime_table() -> Result<(), String> {
             .map_err(|err| format!("{}:{}: {}", abi_path.display(), line_no + 1, err))?;
         let returns = parse_type_list(parts[3].trim())
             .map_err(|err| format!("{}:{}: {}", abi_path.display(), line_no + 1, err))?;
-        out.push_str("    RuntimeDecl { key: \"");
-        out.push_str(key);
-        out.push_str("\", symbol: \"");
-        out.push_str(symbol);
-        out.push_str("\", params: ");
-        out.push_str(&format_type_slice(&params));
-        out.push_str(", returns: ");
-        out.push_str(&format_type_slice(&returns));
-        out.push_str(" },\n");
+        let class = if parts.len() == 5 {
+            parse_decl_class(parts[4].trim())
+                .map_err(|err| format!("{}:{}: {}", abi_path.display(), line_no + 1, err))?
+        } else {
+            RuntimeDeclClass::Abi
+        };
+        let target = match class {
+            RuntimeDeclClass::Abi => &mut abi,
+            RuntimeDeclClass::Compat => &mut compat,
+        };
+        target.push_str("    RuntimeDecl { key: \"");
+        target.push_str(key);
+        target.push_str("\", symbol: \"");
+        target.push_str(symbol);
+        target.push_str("\", params: ");
+        target.push_str(&format_type_slice(&params));
+        target.push_str(", returns: ");
+        target.push_str(&format_type_slice(&returns));
+        target.push_str(" },\n");
     }
-    out.push_str("];\n");
+    abi.push_str("];\n");
+    compat.push_str("];\n");
+    let out = abi + &compat;
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
     fs::write(out_dir.join("runtime_table.rs"), out).map_err(|e| e.to_string())
+}
+
+enum RuntimeDeclClass {
+    Abi,
+    Compat,
+}
+
+fn parse_decl_class(text: &str) -> Result<RuntimeDeclClass, String> {
+    match text {
+        "abi" => Ok(RuntimeDeclClass::Abi),
+        "compat" => Ok(RuntimeDeclClass::Compat),
+        _ => Err(format!("unknown runtime decl class '{text}'")),
+    }
 }
 
 fn parse_type_list(text: &str) -> Result<Vec<&str>, String> {

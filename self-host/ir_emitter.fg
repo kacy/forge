@@ -605,7 +605,9 @@ fn ir_runtime_call_name(name: String) -> String:
     if name == "is_empty" or name == "string_is_empty":
         return "forge_cstring_is_empty"
     if name == "join":
-        return "forge_list_join"
+        return "list_join"
+    if name == "slice":
+        return "list_slice_copy"
     if name == "push":
         return "forge_list_push_value"
     if name == "pop":

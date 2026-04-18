@@ -752,12 +752,7 @@ fn compile_ir_function(
                     && a_reg.is_some_and(|r| string_regs.contains(&r))
                     && b_reg.is_some_and(|r| string_regs.contains(&r))
                 {
-                    let concat_name = if runtime_funcs.contains_key("forge_concat_cstr") {
-                        "forge_concat_cstr"
-                    } else {
-                        "forge_string_concat"
-                    };
-                    if let Some(&concat_id) = runtime_funcs.get(concat_name) {
+                    if let Some(&concat_id) = runtime_funcs.get("forge_concat_cstr") {
                         let concat_ref = *func_ref_cache.entry(concat_id).or_insert_with(|| {
                             codegen.module.declare_func_in_func(concat_id, builder.func)
                         });
@@ -902,12 +897,7 @@ fn compile_ir_function(
                 let b = get_reg(&regs, parts[3]);
                 reg_source_vars.remove(&reg);
                 struct_regs.remove(&reg);
-                let concat_name = if runtime_funcs.contains_key("forge_concat_cstr") {
-                    "forge_concat_cstr"
-                } else {
-                    "forge_string_concat"
-                };
-                if let Some(&concat_id) = runtime_funcs.get(concat_name) {
+                if let Some(&concat_id) = runtime_funcs.get("forge_concat_cstr") {
                     let concat_ref = *func_ref_cache.entry(concat_id).or_insert_with(|| {
                         codegen.module.declare_func_in_func(concat_id, builder.func)
                     });
