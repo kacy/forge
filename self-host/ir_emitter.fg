@@ -355,11 +355,9 @@ fn ir_decode_result_value(value_reg: Int, result_kind: String) -> Int:
     return value_reg
 
 fn ir_list_contains(items: List[String], value: String) -> Bool:
-    mut i := 0
-    while i < items.len():
-        if items[i] == value:
+    for item in items:
+        if item == value:
             return true
-        i = i + 1
     return false
 
 fn ir_is_string_literal_kind(kind: String) -> Bool:
@@ -379,21 +377,17 @@ fn ir_should_capture_name(name: String, bound: List[String], free: List[String])
 
 fn ir_copy_names(names: List[String]) -> List[String]:
     mut copy: List[String] := []
-    mut i := 0
-    while i < names.len():
-        copy.push(names[i])
-        i = i + 1
+    for name in names:
+        copy.push(name)
     return copy
 
 fn ir_csv_contains(csv: String, name: String) -> Bool:
     if name.len() == 0:
         return false
     items := csv.split(",")
-    mut i := 0
-    while i < items.len():
-        if items[i] == name:
+    for item in items:
+        if item == name:
             return true
-        i = i + 1
     return false
 
 fn ir_is_float_returning_func(fname: String) -> Bool:
@@ -851,30 +845,20 @@ fn ir_method_call_arg_regs(obj_r: Int, arg_regs: List[Int]) -> List[Int]:
 
 fn ir_copy_lines(lines: List[String]) -> List[String]:
     mut copy: List[String] := []
-    mut i := 0
-    while i < lines.len():
-        copy.push(lines[i])
-        i = i + 1
+    for line in lines:
+        copy.push(line)
     return copy
 
 fn ir_copy_var_regs(src: Map[String, Int]) -> Map[String, Int]:
     mut copy: Map[String, Int] := {}
-    keys := src.keys()
-    mut i := 0
-    while i < keys.len():
-        key := keys[i]
+    for key in src.keys():
         copy.insert(key, src[key])
-        i = i + 1
     return copy
 
 fn ir_copy_var_types(src: Map[String, String]) -> Map[String, String]:
     mut copy: Map[String, String] := {}
-    keys := src.keys()
-    mut i := 0
-    while i < keys.len():
-        key := keys[i]
+    for key in src.keys():
         copy.insert(key, src[key])
-        i = i + 1
     return copy
 
 fn ir_unpack_field_index(meta: String) -> Int:
@@ -888,11 +872,9 @@ fn ir_unpack_field_index(meta: String) -> Int:
 fn ir_register_struct_layout(name: String, field_names: List[String], field_types: List[String]):
     if ir_struct_names.contains_key(name):
         return
-    mut i := 0
-    while i < field_names.len():
-        ir_struct_field_lookup.insert(name + "." + field_names[i], field_types[i])
-        ir_struct_field_index_lookup.insert(name + "." + field_names[i], i.to_string())
-        i = i + 1
+    for field_name, i in field_names:
+        ir_struct_field_lookup.insert(name + "." + field_name, field_types[i])
+        ir_struct_field_index_lookup.insert(name + "." + field_name, i.to_string())
     ir_struct_names.insert(name, field_names.len())
     ir_emit("struct " + name + " " + field_names.join(" "))
 
