@@ -488,8 +488,7 @@ fn close_process(process: Process):
     process_close(process.handle)
 
 fn empty_string_parts() -> List[String]:
-    mut parts: List[String] := []
-    return parts
+    return []
 
 fn string_buffer_chunks(buf: StringBuffer) -> List[String]:
     if string_buffer_parts.contains_key(buf.handle):
@@ -533,9 +532,7 @@ fn string_buffer_compact(buf: StringBuffer):
     if parts.len() <= 1:
         return
     joined := parts.join("")
-    mut compacted: List[String] := []
-    compacted.push(joined)
-    string_buffer_parts.insert(buf.handle, compacted)
+    string_buffer_parts.insert(buf.handle, [joined])
     string_buffer_lengths.insert(buf.handle, joined.len())
 
 fn string_buffer_maybe_compact(buf: StringBuffer):

@@ -14,11 +14,9 @@ from errors import Diagnostic
 # "foo/bar/baz.fg" -> "foo/bar", "baz.fg" -> "."
 pub fn get_directory(path: String) -> String:
     mut last_slash := 0 - 1
-    mut i := 0
-    while i < path.len():
-        if path[i] == "/":
+    for ch, i in path:
+        if ch == "/":
             last_slash = i
-        i = i + 1
     if last_slash < 0:
         return "."
     return path.substring(0, last_slash)
@@ -27,11 +25,9 @@ pub fn get_directory(path: String) -> String:
 pub fn get_stem(path: String) -> String:
     # find last slash
     mut last_slash := 0 - 1
-    mut i := 0
-    while i < path.len():
-        if path[i] == "/":
+    for ch, i in path:
+        if ch == "/":
             last_slash = i
-        i = i + 1
     mut name := path
     if last_slash >= 0:
         name = path.substring(last_slash + 1, path.len())
@@ -57,24 +53,22 @@ pub fn find_imports(root_idx: Int) -> List[String]:
             value = inner.value
         if kind == "from_import":
             mut space_pos := 0 - 1
-            mut si := 0
-            while si < value.len():
-                if value[si] == " ":
+            for ch, si in value:
+                if ch == " ":
                     space_pos = si
                     break
-                si = si + 1
             mut mod_path := value
             if space_pos >= 0:
                 mod_path = value.substring(0, space_pos)
             imports.push(mod_path)
         elif kind == "import":
             mut path := value
-            mut si := 0
-            while si < value.len() - 3:
-                if value[si] == " " and value[si + 1] == "a" and value[si + 2] == "s" and value[si + 3] == " ":
+            for ch, si in value:
+                if si >= value.len() - 3:
+                    break
+                if ch == " " and value[si + 1] == "a" and value[si + 2] == "s" and value[si + 3] == " ":
                     path = value.substring(0, si)
                     break
-                si = si + 1
             imports.push(path)
     return imports
 
@@ -95,13 +89,11 @@ mut resolved_module_paths: Map[Int, String] := {}
 # "std.math" -> "std/math", "foo" -> "foo"
 fn dots_to_slashes(mod_path: String) -> String:
     mut result := ""
-    mut i := 0
-    while i < mod_path.len():
-        if mod_path[i] == ".":
+    for ch in mod_path:
+        if ch == ".":
             result = result + "/"
         else:
-            result = result + mod_path[i]
-        i = i + 1
+            result = result + ch
     return result
 
 # find the stdlib root by walking up from source file directory.

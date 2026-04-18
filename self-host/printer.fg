@@ -253,12 +253,10 @@ fn print_from_import(idx: Int, indent: Int):
     parts := node.value
     # find first space to split path from names
     mut first_space := 0 - 1
-    mut si := 0
-    while si < parts.len():
-        if parts[si] == " ":
+    for ch, si in parts:
+        if ch == " ":
             first_space = si
             break
-        si = si + 1
     if first_space < 0:
         print_line(indent, "from " + parts + " import")
         return
@@ -269,17 +267,15 @@ fn print_from_import(idx: Int, indent: Int):
     # split names by space and join with ", "
     mut names: List[String] := []
     mut start := 0
-    mut ni := 0
-    while ni < names_str.len():
-        if names_str[ni] == " ":
+    for ch, ni in names_str:
+        if ch == " ":
             if ni > start:
                 names.push(names_str.substring(start, ni))
             start = ni + 1
-        ni = ni + 1
     if start < names_str.len():
         names.push(names_str.substring(start, names_str.len()))
 
-    mut label := "from " + path + " import " + names.join(", ")
+    label := "from " + path + " import " + names.join(", ")
     print_line(indent, label)
 
 # ---------------------------------------------------------------
