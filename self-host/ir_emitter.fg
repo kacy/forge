@@ -3837,24 +3837,20 @@ fn ir_collect_from_import_renames(value: String):
     if parts.len() <= 1:
         return
     mod_path := parts[0]
-    mut i := 1
-    while i < parts.len():
-        iname := parts[i]
+    for iname, i in parts:
+        if i == 0:
+            continue
         if iname.len() > 0:
             mut renamed := iname
             if ir_import_declares_function(mod_path, iname) or ir_import_declares_global(mod_path, iname):
                 renamed = ir_import_target_name(mod_path, iname)
             ir_import_renames.insert(iname, renamed)
-        i = i + 1
 
 fn ir_type_alias_target(node: Node) -> String:
-    mut i := 0
-    while i < node.children.len():
-        tc := node.children[i]
+    for tc in node.children:
         tn := get_node(tc)
         if tn.kind == "type":
             return tn.value
-        i = i + 1
     return ""
 
 fn ir_collect_import_item(node: Node):
