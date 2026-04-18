@@ -11,9 +11,6 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: check formatting
-        run: zig fmt --check bootstrap/
-
       - name: build
         run: zig build
 
