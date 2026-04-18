@@ -240,9 +240,8 @@ pub fn capitalize(s: String) -> String:
 pub fn title(s: String) -> String:
     if s.len() == 0:
         return s
-    mut words := s.split(" ")
     mut result: List[String] := []
-    for word in words:
+    for word in s.split(" "):
         if word.len() > 0:
             result.push(capitalize(word))
         else:
@@ -347,10 +346,10 @@ pub fn lines(s: String) -> List[String]:
     if not ends_with_line_break(s) or parts.len() == 0:
         return parts
     mut result: List[String] := []
-    mut i := 0
-    while i + 1 < parts.len():
-        result.push(parts[i])
-        i = i + 1
+    for part, i in parts:
+        if i + 1 >= parts.len():
+            break
+        result.push(part)
     return result
 
 # keeps the exact split output, including empty segments.

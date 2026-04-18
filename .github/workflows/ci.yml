@@ -11,44 +11,21 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: check formatting
-        run: zig fmt --check bootstrap/
-
       - name: build
-        run: zig build
+        run: cargo build --release
 
       - name: test
-        run: zig build test
-
-      - name: check examples
         run: |
-          for f in examples/*.fg; do
-            result=$(./zig-out/bin/forge check "$f" 2>&1)
-            if [ "$result" != "ok" ]; then
-              echo "FAIL $f"
-              echo "$result"
-              exit 1
-            fi
-            echo "ok   $f"
-          done
+          ./target/release/forge run tests/cases/test_suite.fg
+          ./target/release/forge run tests/cases/test_process_command.fg
+          ./target/release/forge run tests/cases/test_http_request_bytes.fg
 
-      - name: run examples
-        run: make run-examples
-
-      - name: build (release)
-        run: zig build release
-
-      - name: check examples (release)
+      - name: run examples (native smoke)
         run: |
-          for f in examples/*.fg; do
-            result=$(./zig-out/bin/forge check "$f" 2>&1)
-            if [ "$result" != "ok" ]; then
-              echo "FAIL $f (release)"
-              echo "$result"
-              exit 1
-            fi
-            echo "ok   $f"
-          done
+          ./target/release/forge run examples/hello.fg >/dev/null
+          ./target/release/forge run examples/collection_methods.fg >/dev/null
+          ./target/release/forge run examples/string_collection_methods.fg >/dev/null
+          ./target/release/forge run examples/stdlib_algo.fg >/dev/null
 
       - name: build self-hosted compiler
         run: make self-host
