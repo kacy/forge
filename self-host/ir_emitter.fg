@@ -475,18 +475,14 @@ fn ir_collect_string_nodes(idx: Int) -> List[Int]:
         if ir_is_string_literal_kind(node.kind):
             string_nodes.push(current)
         kids := node.children
-        mut i := 0
-        while i < node.children.len():
-            stack.push(kids[i])
-            i = i + 1
+        for kid in kids:
+            stack.push(kid)
     return string_nodes
 
 fn ir_cached_string_nodes(root_idx: Int) -> List[Int]:
-    mut i := 0
-    while i < ir_string_node_cache_roots.len():
-        if ir_string_node_cache_roots[i] == root_idx:
+    for cached_root, i in ir_string_node_cache_roots:
+        if cached_root == root_idx:
             return ir_decode_int_list(ir_string_node_cache_values[i])
-        i = i + 1
     nodes := ir_collect_string_nodes(root_idx)
     ir_string_node_cache_roots.push(root_idx)
     ir_string_node_cache_values.push(ir_encode_int_list(nodes))
@@ -495,10 +491,8 @@ fn ir_cached_string_nodes(root_idx: Int) -> List[Int]:
 # --- collect strings (iterative to avoid deep recursion crashes) ---
 fn ir_collect_strings(idx: Int):
     nodes := ir_cached_string_nodes(idx)
-    mut i := 0
-    while i < nodes.len():
-        ir_str(get_node(nodes[i]).value)
-        i = i + 1
+    for node_idx in nodes:
+        ir_str(get_node(node_idx).value)
 
 fn ir_retkind(type_name: String) -> String:
     if type_name.len() == 0:
@@ -2576,12 +2570,10 @@ fn ir_reset_lambda_emit_state():
     ir_lines = []
 
 fn ir_emit_lambda_params(params: List[String]):
-    mut i := 0
-    while i < params.len():
+    for param in params:
         lr := ir_reg()
-        ir_var_regs.insert(params[i], lr)
-        ir_emit("param " + params[i])
-        i = i + 1
+        ir_var_regs.insert(param, lr)
+        ir_emit("param " + param)
 
 fn ir_emit_lambda_body_value(body_idx: Int):
     if body_idx < 0:
@@ -3657,26 +3649,23 @@ fn ir_infer_generic_concrete_types(name: String, node: Node) -> List[String]:
     decl_node := get_node(decl_idx)
     generic_params := ir_collect_generic_param_names(decl_node)
     mut param_type_nodes: List[Int] := []
-    mut i := 0
-    while i < decl_node.children.len():
-        cn := get_node(decl_node.children[i])
+    for child in decl_node.children:
+        cn := get_node(child)
         if cn.kind == "param":
             if cn.children.len() > 0:
                 param_type_nodes.push(cn.children[0])
             else:
                 param_type_nodes.push(-1)
-        i = i + 1
     mut arg_tids: List[Int] := []
-    i = 1
-    while i < node.children.len():
-        child := node.children[i]
+    for child, i in node.children:
+        if i == 0:
+            continue
         mut expr_idx := child
         if node_kind(child) == "arg":
             cn := get_node(child)
             if cn.children.len() > 0:
                 expr_idx = cn.children[0]
         arg_tids.push(c_get_expr_type(expr_idx))
-        i = i + 1
     ir_generic_runtime_subst = {}
     mut arg_idx := 0
     while arg_idx < param_type_nodes.len():
@@ -3693,23 +3682,21 @@ fn ir_infer_generic_concrete_types(name: String, node: Node) -> List[String]:
 
 fn ir_emit_fn_params_with_types(fn_idx: Int, param_types: List[String]):
     node := get_node(fn_idx)
-    mut i := 0
     mut param_idx := 0
-    while i < node.children.len():
-        cn := get_node(node.children[i])
+    for child in node.children:
+        cn := get_node(child)
         if cn.kind == "param":
             mut param_type := ""
             if param_idx < param_types.len():
                 param_type = param_types[param_idx]
             ir_emit_named_param(cn.value, param_type)
             param_idx = param_idx + 1
-        i = i + 1
 
 fn ir_generic_arg_types(node: Node) -> List[String]:
     mut arg_types: List[String] := []
-    mut i := 1
-    while i < node.children.len():
-        child := node.children[i]
+    for child, i in node.children:
+        if i == 0:
+            continue
         child_kind := node_kind(child)
         mut expr_idx := child
         if child_kind == "arg":
@@ -3721,7 +3708,6 @@ fn ir_generic_arg_types(node: Node) -> List[String]:
             arg_types.push(checked)
         else:
             arg_types.push(ir_infer_type(expr_idx))
-        i = i + 1
     return arg_types
 
 fn ir_queue_generic_specialization(name: String, arg_types: List[String], ret_type: String) -> String:
