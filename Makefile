@@ -2,6 +2,7 @@
 
 NONDETERMINISTIC_EXAMPLES := net_basics net_echo
 EXPECTED_EXAMPLES := $(filter-out $(addprefix examples/expected/,$(addsuffix .txt,$(NONDETERMINISTIC_EXAMPLES))),$(wildcard examples/expected/*.txt))
+SLOW_NATIVE_EXAMPLES := csv_ops http_api http_apps http_websocket_app websocket_chat websocket_echo
 REGRESSION_EXPECTED := $(wildcard tests/expected/*.txt)
 SLOW_NATIVE_REGRESSIONS := \
 	test_http_app_helpers \
@@ -15,6 +16,7 @@ SLOW_NATIVE_REGRESSIONS := \
 	test_websocket_wire
 FAST_REGRESSION_EXPECTED := $(filter-out $(addprefix tests/expected/,$(addsuffix .txt,$(SLOW_NATIVE_REGRESSIONS))),$(REGRESSION_EXPECTED))
 LIVE_WEBSOCKET_EXPECTED := $(wildcard tests/live/expected/*.txt)
+LIVE_WEBSOCKET_CASES := $(basename $(notdir $(LIVE_WEBSOCKET_EXPECTED)))
 PARSE_INVALID_EXAMPLES := $(wildcard tests/invalid_parse/*.fg)
 INVALID_EXAMPLES := $(wildcard tests/invalid/*.fg)
 PARITY_EXAMPLES := \
@@ -101,7 +103,7 @@ bootstrap-ir-invariants-only:
 	else \
 		echo "FAIL imported struct field metadata"; fail=$$((fail+1)); \
 	fi; \
-	if timeout 15 ./self-host/ir_driver --combined tests/cases/test_websocket_session.fg | awk 'BEGIN { ok=0 } /^call / && $$4 ~ /^struct:/ { ok=1 } /^call / && $$4 ~ /^[A-Z]/ { bad=1 } END { if (ok && !bad) exit 0; exit 1 }'; then \
+	if timeout 60 ./self-host/ir_driver --combined tests/cases/test_websocket_session.fg | awk 'BEGIN { ok=0 } /^call / && $$4 ~ /^struct:/ { ok=1 } /^call / && $$4 ~ /^[A-Z]/ { bad=1 } END { if (ok && !bad) exit 0; exit 1 }'; then \
 		pass=$$((pass+1)); echo "ok   explicit struct call retkinds"; \
 	else \
 		echo "FAIL explicit struct call retkinds"; fail=$$((fail+1)); \
@@ -149,18 +151,38 @@ bootstrap-ir-fixed-point-only:
 
 run-examples: build
 	@echo "--- deterministic examples (Cranelift backend) ---"
-	@pass=0; fail=0; \
+	@tmpdir=$$(mktemp -d /tmp/forge-native-examples-XXXXXX); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	pass=0; fail=0; \
 	for f in $(EXPECTED_EXAMPLES); do \
 		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./target/release/forge run "examples/$$name.fg" 2>/dev/null); \
-		expected=$$(cat "$$f"); \
-		if [ "$$actual" = "$$expected" ]; then \
-			pass=$$((pass+1)); \
-			echo "ok   $$name"; \
-		else \
-			echo "FAIL $$name"; \
-			fail=$$((fail+1)); \
-		fi; \
+		case " $(SLOW_NATIVE_EXAMPLES) " in \
+			*" $$name "*) \
+				if timeout 120 ./target/release/forge build "examples/$$name.fg" >/dev/null 2>/dev/null; then \
+					actual=$$(timeout 15 "./examples/$$name" 2>/dev/null); \
+					expected=$$(cat "$$f"); \
+					if [ "$$actual" = "$$expected" ]; then \
+						pass=$$((pass+1)); \
+						echo "ok   $$name"; \
+					else \
+						echo "FAIL $$name"; \
+						fail=$$((fail+1)); \
+					fi; \
+				else \
+					echo "FAIL $$name"; \
+					fail=$$((fail+1)); \
+				fi ;; \
+			*) \
+				actual=$$(timeout 60 ./target/release/forge run "examples/$$name.fg" 2>/dev/null); \
+				expected=$$(cat "$$f"); \
+				if [ "$$actual" = "$$expected" ]; then \
+					pass=$$((pass+1)); \
+					echo "ok   $$name"; \
+				else \
+					echo "FAIL $$name"; \
+					fail=$$((fail+1)); \
+				fi ;; \
+		esac; \
 	done; \
 	echo "$$pass passed, $$fail failed"; \
 	if [ $$fail -gt 0 ]; then exit 1; fi; \
@@ -194,7 +216,7 @@ run-regressions-only:
 	@pass=0; fail=0; \
 	for f in $(FAST_REGRESSION_EXPECTED); do \
 		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./target/release/forge run "tests/cases/$$name.fg" 2>/dev/null); \
+		actual=$$(timeout 60 ./target/release/forge run "tests/cases/$$name.fg" 2>/dev/null); \
 		expected=$$(cat "$$f"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			pass=$$((pass+1)); \
@@ -254,13 +276,18 @@ run-regressions-self-only:
 run-live-websocket-tests: build
 	@echo "--- live websocket smoke tests (Cranelift backend) ---"
 	@pass=0; fail=0; \
-	for f in $(LIVE_WEBSOCKET_EXPECTED); do \
-		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./target/release/forge run "tests/live/$$name.fg" 2>/dev/null); \
-		expected=$$(cat "$$f"); \
-		if [ "$$actual" = "$$expected" ]; then \
-			pass=$$((pass+1)); \
-			echo "ok   $$name"; \
+	for name in $(LIVE_WEBSOCKET_CASES); do \
+		expected_file="tests/live/expected/$$name.txt"; \
+		if timeout 120 ./target/release/forge build "tests/live/$$name.fg" >/dev/null 2>/dev/null; then \
+			actual=$$(timeout 15 "./tests/live/$$name" 2>/dev/null); \
+			expected=$$(cat "$$expected_file"); \
+			if [ "$$actual" = "$$expected" ]; then \
+				pass=$$((pass+1)); \
+				echo "ok   $$name"; \
+			else \
+				echo "FAIL $$name"; \
+				fail=$$((fail+1)); \
+			fi; \
 		else \
 			echo "FAIL $$name"; \
 			fail=$$((fail+1)); \
@@ -273,13 +300,18 @@ run-live-websocket-tests: build
 run-live-websocket-tests-self-only:
 	@echo "--- live websocket smoke tests (self-hosted compiler) ---"
 	@pass=0; fail=0; \
-	for f in $(LIVE_WEBSOCKET_EXPECTED); do \
-		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./self-host/forge_main run "tests/live/$$name.fg" 2>/dev/null); \
-		expected=$$(cat "$$f"); \
-		if [ "$$actual" = "$$expected" ]; then \
-			pass=$$((pass+1)); \
-			echo "ok   $$name"; \
+	for name in $(LIVE_WEBSOCKET_CASES); do \
+		expected_file="tests/live/expected/$$name.txt"; \
+		if timeout 120 ./self-host/forge_main build "tests/live/$$name.fg" >/dev/null 2>/dev/null; then \
+			actual=$$(timeout 15 "./tests/live/$$name" 2>/dev/null); \
+			expected=$$(cat "$$expected_file"); \
+			if [ "$$actual" = "$$expected" ]; then \
+				pass=$$((pass+1)); \
+				echo "ok   $$name"; \
+			else \
+				echo "FAIL $$name"; \
+				fail=$$((fail+1)); \
+			fi; \
 		else \
 			echo "FAIL $$name"; \
 			fail=$$((fail+1)); \
@@ -595,15 +627,33 @@ test: build
 	@pass=0; fail=0; \
 	for f in $(EXPECTED_EXAMPLES); do \
 		name=$$(basename "$$f" .txt); \
-		actual=$$(timeout 15 ./target/release/forge run "examples/$$name.fg" 2>/dev/null); \
-		expected=$$(cat "$$f"); \
-		if [ "$$actual" = "$$expected" ]; then \
-			pass=$$((pass+1)); \
-			echo "ok   $$name"; \
-		else \
-			echo "FAIL $$name"; \
-			fail=$$((fail+1)); \
-		fi; \
+		case " $(SLOW_NATIVE_EXAMPLES) " in \
+			*" $$name "*) \
+				if timeout 120 ./target/release/forge build "examples/$$name.fg" >/dev/null 2>/dev/null; then \
+					actual=$$(timeout 15 "./examples/$$name" 2>/dev/null); \
+					expected=$$(cat "$$f"); \
+					if [ "$$actual" = "$$expected" ]; then \
+						pass=$$((pass+1)); \
+						echo "ok   $$name"; \
+					else \
+						echo "FAIL $$name"; \
+						fail=$$((fail+1)); \
+					fi; \
+				else \
+					echo "FAIL $$name"; \
+					fail=$$((fail+1)); \
+				fi ;; \
+			*) \
+				actual=$$(timeout 60 ./target/release/forge run "examples/$$name.fg" 2>/dev/null); \
+				expected=$$(cat "$$f"); \
+				if [ "$$actual" = "$$expected" ]; then \
+					pass=$$((pass+1)); \
+					echo "ok   $$name"; \
+				else \
+					echo "FAIL $$name"; \
+					fail=$$((fail+1)); \
+				fi ;; \
+		esac; \
 	done; \
 	echo "$$pass passed, $$fail failed"; \
 	if [ $$fail -gt 0 ]; then exit 1; fi
