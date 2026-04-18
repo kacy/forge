@@ -2974,15 +2974,12 @@ fn ir_emit_bind_stmt(node: Node):
         name = name.split(" ")[0]
     mut val_idx := 0 - 1
     mut type_idx := 0 - 1
-    mut i := 0
-    while i < node.children.len():
-        child := node.children[i]
+    for child in node.children:
         cn := get_node(child)
         if cn.kind == "type" or cn.kind == "generic_type":
             type_idx = child
         else:
             val_idx = child
-        i = i + 1
     mut target_type := ""
     if type_idx >= 0:
         target_type = ir_resolve_type_node(type_idx)
@@ -3036,15 +3033,12 @@ fn ir_emit_compound_assignment(node: Node):
 fn ir_collect_if_branch(node: Node) -> IfBranch:
     mut cond_idx := 0 - 1
     mut body_idx := 0 - 1
-    mut i := 0
-    while i < node.children.len():
-        child := node.children[i]
+    for child in node.children:
         cn := get_node(child)
         if cond_idx < 0 and cn.kind != "then" and cn.kind != "else" and cn.kind != "elif" and cn.kind != "block":
             cond_idx = child
         elif cn.kind == "then" or cn.kind == "block":
             body_idx = child
-        i = i + 1
     return IfBranch(cond_idx, body_idx)
 
 fn ir_emit_if_branch(branch: IfBranch, then_label: String, next_label: String, end_label: String):
@@ -3135,25 +3129,20 @@ fn ir_stmt(idx: Int):
 fn ir_emit_if_stmt(node: Node):
     mut elif_indices: List[Int] := []
     mut else_idx := 0 - 1
-    mut i := 0
-    while i < node.children.len():
-        child := node.children[i]
+    for child in node.children:
         cn := get_node(child)
         if cn.kind == "elif":
             elif_indices.push(child)
         elif cn.kind == "else":
             else_idx = child
-        i = i + 1
     main_branch := ir_collect_if_branch(node)
     end_label := ir_label()
     then_label := ir_label()
     next_label := ir_label()
     ir_emit_if_branch(main_branch, then_label, next_label, end_label)
-    mut ei := 0
-    while ei < elif_indices.len():
-        branch := ir_collect_if_branch(get_node(elif_indices[ei]))
+    for elif_idx in elif_indices:
+        branch := ir_collect_if_branch(get_node(elif_idx))
         ir_emit_if_branch(branch, ir_label(), ir_label(), end_label)
-        ei = ei + 1
     if else_idx >= 0:
         ir_block(else_idx)
     ir_emit("label " + end_label)
@@ -3600,20 +3589,17 @@ fn ir_infer_generic_runtime_types_from_node(type_idx: Int, actual_tid: Int, gene
 
     if node.kind == "tuple_type":
         if actual_info.kind == "tuple":
-            mut i := 0
-            while i < node.children.len():
+            for child, i in node.children:
                 if i < actual_info.elements.len():
-                    if ir_infer_generic_runtime_types_from_node(node.children[i], actual_info.elements[i], generic_params) == false:
+                    if ir_infer_generic_runtime_types_from_node(child, actual_info.elements[i], generic_params) == false:
                         return false
-                i = i + 1
         return true
 
     if node.kind == "fn_type":
         if actual_info.kind == "function":
             mut param_idx := 0
-            mut i := 0
-            while i < node.children.len():
-                cn := get_node(node.children[i])
+            for child in node.children:
+                cn := get_node(child)
                 if cn.kind == "param":
                     if param_idx < actual_info.param_types.len():
                         if ir_infer_generic_runtime_types_from_node(cn.children[0], actual_info.param_types[param_idx], generic_params) == false:
@@ -3621,7 +3607,6 @@ fn ir_infer_generic_runtime_types_from_node(type_idx: Int, actual_tid: Int, gene
                     param_idx = param_idx + 1
                 elif cn.kind == "returns" and cn.children.len() > 0:
                     return ir_infer_generic_runtime_types_from_node(cn.children[0], actual_info.return_type, generic_params)
-                i = i + 1
         return true
 
     return true
