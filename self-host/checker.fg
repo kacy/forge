@@ -3916,12 +3916,10 @@ fn types_structurally_equal(a: Int, b: Int) -> Bool:
         if bi.kind == "function":
             if ai.param_types.len() != bi.param_types.len():
                 return false
-            mut i := 0
-            for ap in ai.param_types:
+            for ap, i in ai.param_types:
                 if i < bi.param_types.len():
                     if types_structurally_equal(ap, bi.param_types[i]) == false:
                         return false
-                i = i + 1
             if types_structurally_equal(ai.return_type, bi.return_type) == false:
                 return false
             return true
@@ -3930,12 +3928,10 @@ fn types_structurally_equal(a: Int, b: Int) -> Bool:
         if bi.kind == "tuple":
             if ai.elements.len() != bi.elements.len():
                 return false
-            mut i := 0
-            for ae in ai.elements:
+            for ae, i in ai.elements:
                 if i < bi.elements.len():
                     if types_structurally_equal(ae, bi.elements[i]) == false:
                         return false
-                i = i + 1
             return true
     # result structural equality
     if ai.kind == "result":

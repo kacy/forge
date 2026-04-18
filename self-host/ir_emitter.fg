@@ -821,10 +821,8 @@ fn ir_emit_resolved_call(result_reg: Int, fname: String, idx: Int, arg_regs: Lis
 
 fn ir_method_call_arg_regs(obj_r: Int, arg_regs: List[Int]) -> List[Int]:
     mut call_args := [obj_r]
-    mut i := 0
-    while i < arg_regs.len():
-        call_args.push(arg_regs[i])
-        i = i + 1
+    for arg_reg in arg_regs:
+        call_args.push(arg_reg)
     return call_args
 
 fn ir_copy_lines(lines: List[String]) -> List[String]:
@@ -880,12 +878,10 @@ fn ir_binding_name(node: Node) -> String:
     return name
 
 fn ir_binding_has_collection_init(node: Node) -> Bool:
-    mut i := 0
-    while i < node.children.len():
-        kind := get_node(node.children[i]).kind
+    for child in node.children:
+        kind := get_node(child).kind
         if kind == "list" or kind == "map" or kind == "set":
             return true
-        i = i + 1
     return false
 
 fn ir_record_global_type(name: String, global_type: String):
@@ -916,32 +912,24 @@ fn ir_unwrap_pub_child(idx: Int) -> Int:
 
 fn ir_impl_target_type(node: Node) -> String:
     mut impl_type := ""
-    mut i := 0
-    while i < node.children.len():
-        child := node.children[i]
+    for child in node.children:
         child_node := get_node(child)
         if child_node.kind == "type":
             impl_type = child_node.value
         elif child_node.kind == "for_type":
-            mut j := 0
-            while j < child_node.children.len():
-                type_child := get_node(child_node.children[j])
+            for type_idx in child_node.children:
+                type_child := get_node(type_idx)
                 if type_child.kind == "type":
                     impl_type = type_child.value
-                j = j + 1
         elif child_node.kind == "generic_type" and impl_type == "":
             impl_type = child_node.value
-        i = i + 1
     return impl_type
 
 fn ir_emit_impl_methods(node: Node, impl_type: String):
-    mut i := 0
-    while i < node.children.len():
-        child := node.children[i]
+    for child in node.children:
         child_node := get_node(child)
         if child_node.kind == "fn_decl":
             ir_impl_func(child, impl_type)
-        i = i + 1
 
 fn ir_declared_struct_name(node: Node) -> String:
     if node.value.contains("["):
@@ -965,12 +953,10 @@ fn ir_record_struct_field(struct_name: String, field_names: List[String], field_
 fn ir_collect_struct_decl(node: Node, emit_decl: Bool):
     sname := ir_declared_struct_name(node)
     mut field_names: List[String] := []
-    mut i := 0
-    while i < node.children.len():
-        field_node := ir_unwrap_pub_node(node.children[i])
+    for child in node.children:
+        field_node := ir_unwrap_pub_node(child)
         if field_node.kind == "field":
             field_names = ir_record_struct_field(sname, field_names, field_node)
-        i = i + 1
     ir_struct_names.insert(sname, field_names.len())
     if emit_decl:
         ir_emit("struct " + sname + " " + field_names.join(" "))
@@ -978,15 +964,13 @@ fn ir_collect_struct_decl(node: Node, emit_decl: Bool):
 fn ir_collect_enum_decl(node: Node, emit_decl: Bool):
     sname := node.value
     mut variant_names: List[String] := []
-    mut i := 0
-    while i < node.children.len():
-        variant_node := ir_unwrap_pub_node(node.children[i])
+    for child in node.children:
+        variant_node := ir_unwrap_pub_node(child)
         if variant_node.kind == "variant":
             variant_index := variant_names.len()
             variant_names.push(variant_node.value)
             ir_struct_field_lookup.insert(sname + "." + variant_node.value, sname)
             ir_struct_field_index_lookup.insert(sname + "." + variant_node.value, variant_index.to_string())
-        i = i + 1
     ir_struct_names.insert(sname, variant_names.len())
     if emit_decl:
         ir_emit("struct " + sname + " " + variant_names.join(" "))
@@ -1669,9 +1653,7 @@ fn ir_emit_optional_unwrap(node: Node) -> Int:
 
 fn ir_collect_method_call_regs(node: Node) -> List[Int]:
     mut regs: List[Int] := []
-    mut i := 0
-    while i < node.children.len():
-        child := node.children[i]
+    for child, i in node.children:
         if i == 0:
             regs.push(ir_expr(child))
         else:
@@ -1682,7 +1664,6 @@ fn ir_collect_method_call_regs(node: Node) -> List[Int]:
                     regs.push(ir_expr(cn.children[0]))
             else:
                 regs.push(ir_expr(child))
-        i = i + 1
     return regs
 
 fn ir_string_interp_expr_part(expr_idx: Int) -> Int:
@@ -1710,14 +1691,12 @@ fn ir_string_interp_expr_part(expr_idx: Int) -> Int:
     return part_r
 
 fn ir_emit_lambda_capture_setup(closure_r: Int, captures: List[String]):
-    mut i := 0
-    while i < captures.len():
+    for capture_name, i in captures:
         cap_val := ir_reg()
-        ir_emit("load " + cap_val.to_string() + " " + captures[i])
+        ir_emit("load " + cap_val.to_string() + " " + capture_name)
         slot := ir_reg()
         ir_emit("iconst " + slot.to_string() + " " + i.to_string())
         ir_emit_call3(ir_reg(), "__closure_set_env", "void", closure_r, slot, cap_val)
-        i = i + 1
 
 fn ir_emit_lambda_hidden_param():
     closure_r := ir_reg()
@@ -1726,23 +1705,19 @@ fn ir_emit_lambda_hidden_param():
 
 fn ir_emit_lambda_capture_loads(captures: List[String]):
     closure_r := ir_var_regs["__closure"]
-    mut i := 0
-    while i < captures.len():
+    for capture_name, i in captures:
         cap_r := ir_reg()
         slot_r := ir_reg()
         ir_emit("iconst " + slot_r.to_string() + " " + i.to_string())
         ir_emit_call2(cap_r, "__closure_get_env", "unknown", closure_r, slot_r)
-        ir_var_regs.insert(captures[i], cap_r)
-        ir_emit("store " + captures[i] + " " + cap_r.to_string())
-        i = i + 1
+        ir_var_regs.insert(capture_name, cap_r)
+        ir_emit("store " + capture_name + " " + cap_r.to_string())
 
 fn ir_append_deferred_lambda_body():
     lines: List[String] := ir_lines
     mut bodies: List[String] := ir_lambda_bodies
-    mut i := 0
-    while i < lines.len():
-        bodies.push(lines[i])
-        i = i + 1
+    for line in lines:
+        bodies.push(line)
     ir_lambda_bodies = bodies
 
 fn ir_emit_unary_expr(node: Node) -> Int:
