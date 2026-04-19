@@ -216,7 +216,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "forge-cli"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "forge-codegen",
  "forge-runtime",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "forge-codegen"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "forge-runtime"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "hashbrown 0.14.5",
  "libc",

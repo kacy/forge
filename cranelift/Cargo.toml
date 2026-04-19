@@ -3,7 +3,7 @@ resolver = "2"
 members = ["runtime", "codegen", "cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Forge Team"]
 license = "MIT"
