@@ -16,7 +16,7 @@
 
 # format forge source code, returning a new string with canonical formatting.
 pub fn fmt_source(source: String) -> String:
-    lines := source.split(chr(10))
+    lines := split_lines_preserve_empty(source)
     mut output := ""
     mut consecutive_blank := 0
 
@@ -61,6 +61,18 @@ pub fn fmt_source(source: String) -> String:
             output = output + chr(10)
 
     return output
+
+fn split_lines_preserve_empty(source: String) -> List[String]:
+    mut lines: List[String] := []
+    mut start := 0
+    mut i := 0
+    while i < source.len():
+        if source[i] == chr(10):
+            lines.push(source.substring(start, i))
+            start = i + 1
+        i = i + 1
+    lines.push(source.substring(start, source.len()))
+    return lines
 
 # normalize a comment line: ensure single space after #
 fn format_comment(comment: String) -> String:

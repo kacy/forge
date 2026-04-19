@@ -41,7 +41,6 @@ fn _cur_tok_value() -> String:
         i = i + 1
     return tok_value(tc - 1)
 
-
 fn _peek_ahead_kind(offset: Int) -> String:
     tc := tok_count()
     if tc == 0:
@@ -56,7 +55,6 @@ fn _peek_ahead_kind(offset: Int) -> String:
             skipped = skipped + 1
         i = i + 1
     return tok_kind(tc - 1)
-
 
 # -------------------------------------------------------------
 # position-aware AST helpers (must come after state declarations)
@@ -91,7 +89,6 @@ fn add_leaf_with_position(kind: String, value: String) -> Int:
 # ---------------------------------------------------------------
 # token navigation
 # ---------------------------------------------------------------
-
 
 fn advance_token() -> Token:
     tc := tok_count()

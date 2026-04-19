@@ -185,7 +185,7 @@ pub fn process_import_aliases(root_idx: Int):
                         parts.push(value.substring(part_start, i))
                     part_start = i + 1
                 i = i + 1
-            
+
             if parts.len() > 0:
                 mod_path := parts[0]
                 # Check for wildcard import (second part is "*")
@@ -196,7 +196,7 @@ pub fn process_import_aliases(root_idx: Int):
 # Collect all pub exports from a module.
 pub fn collect_module_exports(module_path: String, root_idx: Int):
     root := get_node(root_idx)
-    
+
     for child in root.children:
         node := get_node(child)
         if node.kind == "pub":
@@ -3081,7 +3081,7 @@ fn check_field_access_expression(node: Node, scope_id: Int) -> Int:
     if node.children.len() < 1:
         return TID_ERR
     field_name := node.value
-    
+
     # check if this is module alias access (e.g., math.abs)
     obj_node_idx := node.children[0]
     obj_node := get_node(obj_node_idx)
@@ -3098,7 +3098,7 @@ fn check_field_access_expression(node: Node, scope_id: Int) -> Int:
                 return func_tid
             report_error("E209", "module '" + obj_name + "' has no function '" + field_name + "'")
             return TID_ERR
-    
+
     obj_type := c_check_expr(obj_node_idx, scope_id)
     if is_error_type(obj_type):
         return TID_ERR

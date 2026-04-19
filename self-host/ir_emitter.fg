@@ -57,8 +57,8 @@ mut ir_string_indices: Map[String, Int] := {}
 
 # --- current function locals ---
 mut ir_var_regs: Map[String, Int] := {}
-mut ir_var_types: Map[String, String] := {}  # variable name -> type hint or struct name
-mut ir_map_value_types: Map[String, String] := {}  # map variable name -> value type
+mut ir_var_types: Map[String, String] := {} # variable name -> type hint or struct name
+mut ir_map_value_types: Map[String, String] := {} # map variable name -> value type
 
 # --- module globals collected during the prepass ---
 mut ir_global_int_names: List[String] := []
@@ -73,18 +73,18 @@ mut ir_global_set_int_names: List[String] := []
 mut ir_global_bool_names: List[String] := []
 
 # --- type and symbol metadata copied from the checker ---
-mut ir_struct_names: Map[String, Int] := {}  # struct name -> field count
-mut ir_struct_field_lookup: Map[String, String] := {}  # "Struct.field" -> field type
-mut ir_struct_field_index_lookup: Map[String, String] := {}  # "Struct.field" -> field index string
-mut ir_type_aliases: Map[String, String] := {}  # alias name -> target type
-mut ir_last_was_ret := false  # tracks if the last emitted instruction was a return
-mut ir_func_returns: Map[String, String] := {}  # function name -> return type hint
+mut ir_struct_names: Map[String, Int] := {} # struct name -> field count
+mut ir_struct_field_lookup: Map[String, String] := {} # "Struct.field" -> field type
+mut ir_struct_field_index_lookup: Map[String, String] := {} # "Struct.field" -> field index string
+mut ir_type_aliases: Map[String, String] := {} # alias name -> target type
+mut ir_last_was_ret := false # tracks if the last emitted instruction was a return
+mut ir_func_returns: Map[String, String] := {} # function name -> return type hint
 mut ir_lambda_count := 0
 mut ir_for_count := 0
 mut ir_break_stack: List[String] := []
 mut ir_continue_stack: List[String] := []
-mut ir_lambda_bodies: List[String] := []  # deferred lambda function IR
-mut ir_module_count := 0  # increments per emit_ir call for unique naming
+mut ir_lambda_bodies: List[String] := [] # deferred lambda function IR
+mut ir_module_count := 0 # increments per emit_ir call for unique naming
 mut ir_impl_methods: Map[String, String] := {}
 mut ir_import_renames: Map[String, String] := {}
 mut ir_module_aliases: Map[String, String] := {}

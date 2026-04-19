@@ -9,4 +9,4 @@ pub fn has_name(name: String) -> Bool:
 pub fn get_name(name: String) -> Int:
     if names.contains_key(name):
         return names[name]
-    return -1
+    return - 1
