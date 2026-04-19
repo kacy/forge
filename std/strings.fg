@@ -476,6 +476,26 @@ pub fn rpartition(s: String, sep: String) -> List[String]:
 pub fn join_lines(lines: List[String]) -> String:
     return lines.join(chr(10))
 
+# alias for join_lines with a more text-oriented name.
+pub fn unlines(lines: List[String]) -> String:
+    return join_lines(lines)
+
+# split with the built-in separator logic and drop empty parts.
+pub fn split_nonempty(s: String, sep: String) -> List[String]:
+    mut result: List[String] := []
+    for part in s.split(sep):
+        if part.len() > 0:
+            result.push(part)
+    return result
+
+# join string parts while skipping empty entries.
+pub fn join_nonempty(parts: List[String], sep: String) -> String:
+    mut kept: List[String] := []
+    for part in parts:
+        if part.len() > 0:
+            kept.push(part)
+    return kept.join(sep)
+
 # ---------------------------------------------------------------
 # Removal Operations
 # ---------------------------------------------------------------
@@ -500,6 +520,22 @@ pub fn remove_suffix(s: String, suffix: String) -> String:
     if s.ends_with(suffix):
         return s.substring(0, s.len() - suffix.len())
     return s
+
+# alias for remove_prefix.
+pub fn strip_prefix(s: String, prefix: String) -> String:
+    return remove_prefix(s, prefix)
+
+# alias for remove_suffix.
+pub fn strip_suffix(s: String, suffix: String) -> String:
+    return remove_suffix(s, suffix)
+
+# alias for remove_prefix.
+pub fn trim_prefix(s: String, prefix: String) -> String:
+    return remove_prefix(s, prefix)
+
+# alias for remove_suffix.
+pub fn trim_suffix(s: String, suffix: String) -> String:
+    return remove_suffix(s, suffix)
 
 # ---------------------------------------------------------------
 # Padding and Centering
