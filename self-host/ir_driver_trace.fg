@@ -2,6 +2,7 @@ from lexer import lex_all
 from parser import parse
 from ast import reset_arena
 from ir_emitter import emit_ir
+
 fn emit_file() -> String!:
     print("[trace] start")
     source := read_file(args()[1])!
@@ -15,5 +16,6 @@ fn emit_file() -> String!:
     print("[trace] emitted")
     print(ir)
     return ""
+
 fn main():
     emit_file()

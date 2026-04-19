@@ -2,6 +2,7 @@ from lexer import lex_all
 from parser import parse
 from ast import reset_arena
 from ir_emitter_debug import emit_ir
+
 fn emit_file() -> String!:
     source := read_file(args()[1])!
     tokens := lex_all(source)
@@ -10,5 +11,6 @@ fn emit_file() -> String!:
     ir := emit_ir(root)
     print(ir)
     return ""
+
 fn main():
     emit_file()

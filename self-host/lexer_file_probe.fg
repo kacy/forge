@@ -1,4 +1,5 @@
 from lexer import lex_all
+
 fn main():
     src := read_file("/tmp/global_list_len_probe.fg")
     tokens := lex_all(src)

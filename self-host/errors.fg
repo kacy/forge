@@ -2,6 +2,7 @@
 #
 # renders diagnostics with source context, underlines, and fix
 # suggestions. mirrors the output format of src/errors.zig.
+
 pub struct Diagnostic:
     pub severity: String
     pub code: String
@@ -10,15 +11,18 @@ pub struct Diagnostic:
     pub line: Int
     pub col: Int
     pub fix: String
+
 # render all diagnostics as human-readable text with source context.
 pub fn render_diagnostics(diags: List[Diagnostic], source: String) -> String:
     mut output := ""
     for d in diags:
         output = output + render_single_diagnostic(d, source)
     return output
+
 # render a single diagnostic with source context and underline.
 fn render_single_diagnostic(d: Diagnostic, source: String) -> String:
     mut output := ""
+
     # header: file + severity + message (with error code)
     mut location := ""
     if d.file != "":
@@ -28,10 +32,12 @@ fn render_single_diagnostic(d: Diagnostic, source: String) -> String:
             if d.col > 0:
                 location = location + ":" + d.col.to_string()
         location = location + ": "
+
     if d.code != "":
         output = output + location + d.severity + "[" + d.code + "]: " + d.message + chr(10)
     else:
         output = output + location + d.severity + ": " + d.message + chr(10)
+
     # source line + underline (only if we have line info)
     if d.line > 0:
         lines := source.split(chr(10))
@@ -40,6 +46,7 @@ fn render_single_diagnostic(d: Diagnostic, source: String) -> String:
             source_line := lines[line_idx]
             line_num := d.line.to_string()
             output = output + "  " + line_num + " | " + source_line + chr(10)
+
             # underline: spaces for margin + carets
             margin_width := line_num.len() + 4
             mut j := 0
@@ -47,11 +54,14 @@ fn render_single_diagnostic(d: Diagnostic, source: String) -> String:
                 output = output + " "
                 j = j + 1
             output = output + "^" + chr(10)
+
     # fix suggestion
     if d.fix != "":
         output = output + "  fix: " + d.fix + chr(10)
+
     output = output + chr(10)
     return output
+
 # render diagnostics as JSON (same format as check_main.fg).
 pub fn render_diagnostics_json(diags: List[Diagnostic]) -> String:
     mut output := "["
@@ -61,6 +71,7 @@ pub fn render_diagnostics_json(diags: List[Diagnostic]) -> String:
         output = output + render_diagnostic_json(d)
     output = output + "]" + chr(10)
     return output
+
 # render a single diagnostic as a JSON object.
 fn render_diagnostic_json(d: Diagnostic) -> String:
     quote := chr(34)
@@ -86,6 +97,7 @@ fn render_diagnostic_json(d: Diagnostic) -> String:
         output = output + "null"
     output = output + chr(125)
     return output
+
 # escape a string for JSON output.
 fn escape_json_string(s: String) -> String:
     quote := chr(34)
@@ -103,6 +115,7 @@ fn escape_json_string(s: String) -> String:
         else:
             output = output + ch
     return output
+
 # count errors in a diagnostic list.
 pub fn count_errors(diags: List[Diagnostic]) -> Int:
     mut count := 0
@@ -110,6 +123,7 @@ pub fn count_errors(diags: List[Diagnostic]) -> Int:
         if d.severity == "error":
             count = count + 1
     return count
+
 # check if a diagnostic list has any errors (not just warnings).
 pub fn has_errors(diags: List[Diagnostic]) -> Bool:
     return count_errors(diags) > 0
