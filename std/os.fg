@@ -5,27 +5,35 @@
 import std.env as env
 import std.os.path as path
 
+# return the current working directory.
 pub fn cwd() -> String:
     return os_getcwd()
 
+# change the current working directory.
 pub fn chdir(next_dir: String) -> Bool:
     return os_chdir(next_dir)
 
+# return the system temp directory.
 pub fn temp_dir() -> String:
     return os_temp_dir()
 
+# return the current user's home directory when available.
 pub fn home_dir() -> String:
     return os_home_dir()
 
+# read an environment variable.
 pub fn get_env(name: String) -> String:
     return env.get(name)
 
+# set an environment variable.
 pub fn set_env(name: String, value: String) -> Bool:
     return os_set_env(name, value)
 
+# remove an environment variable.
 pub fn unset_env(name: String) -> Bool:
     return os_unset_env(name)
 
+# search PATH for an executable.
 pub fn which(program: String) -> String:
     if program == "":
         return ""

@@ -24,9 +24,11 @@ pub fn parse(text: String) -> List[List[String]]:
             rows.push(parse_row(line))
     return rows
 
+# parse a csv file from disk.
 pub fn parse_file(path: String) -> List[List[String]]!:
     return parse_file_chunked(path, CSV_FILE_CHUNK_SIZE)
 
+# parse a csv file using a custom read chunk size.
 pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
     stream := FileStream(file_open_read(path)!)
     reader := stream.buffered_reader_chunked(chunk_size)
@@ -45,9 +47,11 @@ pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
 pub fn parse_with_headers(text: String) -> List[Map[String, String]]:
     return rows_with_headers(parse(text))
 
+# parse a csv file and use the first row as headers.
 pub fn parse_with_headers_file(path: String) -> List[Map[String, String]]!:
     return parse_with_headers_file_chunked(path, CSV_FILE_CHUNK_SIZE)
 
+# parse a csv file with headers using a custom read chunk size.
 pub fn parse_with_headers_file_chunked(path: String, chunk_size: Int) -> List[Map[String, String]]!:
     return rows_with_headers(parse_file_chunked(path, chunk_size)!)
 
@@ -75,9 +79,11 @@ pub fn encode(rows: List[List[String]]) -> String:
         lines.push(encode_row(row))
     return lines.join(chr(10))
 
+# write rows to a csv file.
 pub fn save(path: String, rows: List[List[String]]) -> Int!:
     return save_chunked(path, rows, CSV_FILE_CHUNK_SIZE)
 
+# write rows to a csv file using a custom write chunk size.
 pub fn save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!:
     stream := FileStream(file_open_write(path)!)
     writer := stream.buffered_writer_chunked(chunk_size)

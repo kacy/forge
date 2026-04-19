@@ -5,9 +5,13 @@
 #   delay(ms: Int)               sleep for the given milliseconds
 #   format_now() -> String       format the current time
 
-# return current unix timestamp in milliseconds
-pub fn now() -> Int:
+fn time_now_ms() -> Int:
     return time()
+
+## return the current unix timestamp in milliseconds.
+## this matches the builtin time() value.
+pub fn now() -> Int:
+    return time_now_ms()
 
 # sleep for the given number of milliseconds
 pub fn delay(ms: Int):
@@ -15,4 +19,4 @@ pub fn delay(ms: Int):
 
 # format the current time as a human-readable string
 pub fn format_now() -> String:
-    return format_time(time(), "")
+    return format_time(time_now_ms(), "")

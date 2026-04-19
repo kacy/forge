@@ -42,11 +42,13 @@ mut websocket_client_flags: Map[Int, Bool] := {}
 mut websocket_closed_flags: Map[Int, Bool] := {}
 mut websocket_close_kinds: Map[Int, Int] := {}
 mut websocket_close_handles: Map[Int, Int] := {}
+# one parsed websocket frame.
 pub struct WebSocketFrame:
     pub fin: Bool
     pub opcode: Int
     pub masked: Bool
     pub payload: Bytes
+# a websocket connection backed by buffered readers and writers.
 pub struct WebSocket:
     pub handle: Int
 struct WebSocketMessage:
@@ -67,6 +69,7 @@ pub fn compute_accept_bytes(key: Bytes) -> String!:
     combined := buf.bytes()
     digest_hex := hash.sha1(combined)
     return encoding.b64_encode(encoding.from_hex(digest_hex)!)
+# computes the accept value for a websocket handshake key.
 pub fn compute_accept(key: String) -> String!:
     return compute_accept_bytes(bytes.from_string_utf8(key))
 # Builds a complete HTTP 101 Switching Protocols response for WebSocket upgrade.
@@ -79,6 +82,7 @@ pub fn handshake_response_bytes(key: Bytes) -> Bytes!:
     response = response + "Sec-WebSocket-Accept: " + accept + "\r\n"
     response = response + "\r\n"
     return bytes.from_string_utf8(response)
+# builds a full websocket handshake response.
 pub fn handshake_response(key: String) -> String!:
     return handshake_response_bytes(bytes.from_string_utf8(key))!.to_string_utf8()!
 fn header_text(data: Bytes) -> String:
@@ -125,6 +129,7 @@ fn client_request_with_key(host_header: String, path: String, headers: Map[Strin
         request = request + header_name + ": " + headers[header_name] + crlf
     request = request + crlf
     return bytes.from_string_utf8(request)
+# builds a client websocket upgrade request.
 pub fn client_request(host: String, path: String, headers: Map[String, String]) -> Bytes!:
     return client_request_with_key(host, path, headers, random_client_key()!)
 fn header_has_token(value: Bytes, token: String) -> Bool:
@@ -142,6 +147,7 @@ fn header_equals(value: Bytes, expected: String) -> Bool:
     return text.trim().to_lower() == expected.to_lower()
 fn bytes_equals_text(value: Bytes, expected: String) -> Bool:
     return header_text(value) == expected
+# returns true when an http request is a valid websocket upgrade request.
 pub fn is_upgrade_request(req: HttpRequestBytes) -> Bool:
     if not bytes_equals_text(req.method_bytes(), "GET"):
         return false
@@ -154,6 +160,7 @@ pub fn is_upgrade_request(req: HttpRequestBytes) -> Bool:
     if not header_equals(req.header_bytes("Sec-WebSocket-Version"), WS_VERSION):
         return false
     return true
+# builds the server-side upgrade response for a validated request.
 pub fn upgrade_response(req: HttpRequestBytes) -> Bytes!:
     if not is_upgrade_request(req):
         fail "invalid websocket upgrade request"
@@ -234,6 +241,7 @@ fn register_websocket_state(reader: BufferedBytesReader, writer: BufferedBytesWr
     return WebSocket(handle)
 fn register_websocket(stream: TcpStream, is_client: Bool) -> WebSocket:
     return register_websocket_state(stream.buffered_bytes_reader_chunked(1), stream.buffered_bytes_writer(), is_client, WS_CLOSE_TCP, stream.fd)
+# wraps existing buffered io as a websocket connection.
 pub fn from_buffered(reader: BufferedBytesReader, writer: BufferedBytesWriter, is_client: Bool) -> WebSocket:
     return register_websocket_state(reader, writer, is_client, WS_CLOSE_NONE, 0)
 fn websocket_reader(ws: WebSocket) -> BufferedBytesReader:
@@ -259,9 +267,11 @@ fn ensure_writer_flushed(writer: BufferedBytesWriter) -> Int!:
     if flushed.is_err:
         fail "websocket flush failed"
     return 1
+# dials a websocket endpoint with default headers.
 pub fn dial(host: String, port: Int, path: String) -> WebSocket!:
     mut headers: Map[String, String] := {}
     return dial_with_headers(host, port, path, headers)
+# dials a websocket endpoint with custom headers.
 pub fn dial_with_headers(host: String, port: Int, path: String, headers: Map[String, String]) -> WebSocket!:
     conn := io.connect(host, port)!
     key := random_client_key()!
@@ -275,6 +285,7 @@ pub fn dial_with_headers(host: String, port: Int, path: String, headers: Map[Str
         conn.close()
         fail "invalid websocket handshake response"
     return register_websocket(conn, true)
+# upgrades an accepted http connection to a websocket.
 pub fn upgrade(fd: Int, req: HttpRequestBytes) -> WebSocket!:
     response := upgrade_response(req)!
     stream := io.from_fd(fd)
@@ -282,9 +293,11 @@ pub fn upgrade(fd: Int, req: HttpRequestBytes) -> WebSocket!:
     writer.write_bytes(response)!
     ensure_writer_flushed(writer)!
     return register_websocket(stream, false)
+# reads a request from a socket and upgrades it to a websocket.
 pub fn accept(fd: Int) -> WebSocket!:
     req := http.read_request_bytes(fd)!
     return upgrade(fd, req)
+# upgrades a buffered request and io pair to a websocket.
 pub fn accept_buffered(req: HttpRequestBytes, reader: BufferedBytesReader, writer: BufferedBytesWriter) -> WebSocket!:
     response := upgrade_response(req)!
     writer.write_bytes(response)!
@@ -294,8 +307,10 @@ fn should_handle_route(req: HttpRequestBytes, path: String) -> Bool!:
     if not req.is_get(path)!:
         return false
     return is_upgrade_request(req)
+# returns true when the request matches a websocket route.
 pub fn is_route(req: HttpRequestBytes, path: String) -> Bool!:
     return should_handle_route(req, path)!
+# runs a simple echo session until the socket closes or stop_text is seen.
 pub fn echo_session(ws: WebSocket, greeting: String, prefix: String, stop_text: String) -> Int!:
     mut sent := 0
     if greeting != "":
@@ -310,17 +325,21 @@ pub fn echo_session(ws: WebSocket, greeting: String, prefix: String, stop_text: 
             return sent
         ws.send_text(prefix + msg.ok)!
         sent = sent + 1
+# upgrades one request and serves the built-in echo session.
 pub fn serve_echo(fd: Int, req: HttpRequestBytes, greeting: String, prefix: String, stop_text: String) -> Int!:
     ws := upgrade(fd, req)!
     return echo_session(ws, greeting, prefix, stop_text)
+# buffered version of serve_echo().
 pub fn serve_echo_buffered(req: HttpRequestBytes, reader: BufferedBytesReader, writer: BufferedBytesWriter, greeting: String, prefix: String, stop_text: String) -> Int!:
     ws := accept_buffered(req, reader, writer)!
     return echo_session(ws, greeting, prefix, stop_text)
+# serves echo only when the request matches the given route.
 pub fn route_echo(fd: Int, req: HttpRequestBytes, path: String, greeting: String, prefix: String, stop_text: String) -> Bool!:
     if not should_handle_route(req, path)!:
         return false
     serve_echo(fd, req, greeting, prefix, stop_text)!
     return true
+# buffered version of route_echo().
 pub fn route_echo_buffered(req: HttpRequestBytes, reader: BufferedBytesReader, writer: BufferedBytesWriter, path: String, greeting: String, prefix: String, stop_text: String) -> Bool!:
     if not should_handle_route(req, path)!:
         return false
@@ -452,6 +471,7 @@ fn validate_frame_direction(ws: WebSocket, frame: WebSocketFrame) -> Int!:
     return 0
 fn is_control_opcode(opcode: Int) -> Bool:
     return opcode == OP_CLOSE or opcode == OP_PING or opcode == OP_PONG
+# parses one raw websocket frame.
 pub fn parse_frame(data: Bytes) -> WebSocketFrame!:
     if data.len() < 2:
         fail "websocket frame too short"
@@ -474,6 +494,7 @@ pub fn parse_frame(data: Bytes) -> WebSocketFrame!:
     if masked:
         return WebSocketFrame(fin, opcode, true, decoded_payload)
     return WebSocketFrame(fin, opcode, false, decoded_payload)
+# builds one unmasked websocket frame.
 pub fn frame_bytes(opcode: Int, payload: Bytes) -> Bytes!:
     return frame_bytes_with_fin(opcode, payload, true)
 fn frame_bytes_with_fin(opcode: Int, payload: Bytes, fin: Bool) -> Bytes!:
@@ -490,8 +511,10 @@ fn frame_bytes_with_fin(opcode: Int, payload: Bytes, fin: Bool) -> Bytes!:
     append_frame_length(buf, payload.len(), false)!
     buf.write(payload)!
     return buf.bytes()
+# builds one text frame from a string.
 pub fn text_frame_bytes(text: String) -> Bytes!:
     return frame_bytes(OP_TEXT, bytes.from_string_utf8(text))
+# builds one binary frame.
 pub fn binary_frame(payload: Bytes) -> Bytes!:
     return frame_bytes(OP_BINARY, payload)
 fn masked_payload(payload: Bytes, mask_key: Bytes) -> Bytes!:
@@ -503,6 +526,7 @@ fn close_payload(code: Int, reason: String) -> Bytes!:
     payload.write(bytes.from_string_utf8(reason))!
     validate_close_payload(payload.bytes())!
     return payload.bytes()
+# builds one masked websocket frame.
 pub fn masked_frame_bytes(opcode: Int, payload: Bytes, mask_key: Bytes) -> Bytes!:
     return masked_frame_bytes_with_fin(opcode, payload, mask_key, true)
 fn masked_frame_bytes_with_fin(opcode: Int, payload: Bytes, mask_key: Bytes, fin: Bool) -> Bytes!:
@@ -520,12 +544,16 @@ fn masked_frame_bytes_with_fin(opcode: Int, payload: Bytes, mask_key: Bytes, fin
     buf.write(mask_key)!
     buf.write(masked_payload(payload, mask_key)!)!
     return buf.bytes()
+# builds one masked client text frame.
 pub fn client_text_frame_bytes(text: String, mask_key: Bytes) -> Bytes!:
     return masked_frame_bytes(OP_TEXT, bytes.from_string_utf8(text), mask_key)
+# builds one ping frame.
 pub fn ping_frame(payload: Bytes) -> Bytes!:
     return frame_bytes(OP_PING, payload)
+# builds one pong frame.
 pub fn pong_frame(payload: Bytes) -> Bytes!:
     return frame_bytes(OP_PONG, payload)
+# builds one close frame with a code and reason.
 pub fn close_frame(code: Int, reason: String) -> Bytes!:
     return frame_bytes(OP_CLOSE, close_payload(code, reason)!)
 fn read_exact_bytes(reader: BufferedBytesReader, count: Int) -> Bytes!:
@@ -539,6 +567,7 @@ fn read_exact_bytes(reader: BufferedBytesReader, count: Int) -> Bytes!:
             fail "websocket frame truncated"
         buf.write(chunk)!
     return buf.bytes()
+# reads one full websocket frame from a buffered reader.
 pub fn read_frame_buffered(reader: BufferedBytesReader) -> WebSocketFrame!:
     start := read_exact_bytes(reader, 2)!
     mut extra_header := frame_extended_length_size(start[1])!

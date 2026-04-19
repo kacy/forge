@@ -22,12 +22,14 @@ pub fn set_level(level: Int):
 fn log_set_level(level: Int):
     min_level = level
 
+# append future log lines to a file as well as stderr.
 pub fn set_file(path: String):
     log_set_file(path)
 
 fn log_set_file(path: String):
     sink_path = path
 
+# stop writing log output to a file sink.
 pub fn clear_file():
     log_clear_file()
 
@@ -63,24 +65,28 @@ fn emit_line(line: String):
         return
     _wrote := io.append_file_text(sink_path, line + chr(10))
 
+# log a debug message.
 pub fn debug(msg: String):
     log_debug(msg)
 
 fn log_debug(msg: String):
     log_line("DEBUG", msg)
 
+# log an info message.
 pub fn info(msg: String):
     log_info(msg)
 
 fn log_info(msg: String):
     log_line("INFO", msg)
 
+# log a warning message.
 pub fn warn(msg: String):
     log_warn(msg)
 
 fn log_warn(msg: String):
     log_line("WARN", msg)
 
+# log an error message.
 pub fn error(msg: String):
     log_error(msg)
 
@@ -94,18 +100,21 @@ pub fn debug_kv(msg: String, fields: String):
 fn log_debug_kv(msg: String, fields: String):
     log_kv("DEBUG", msg, fields)
 
+## log an info message with key=value fields.
 pub fn info_kv(msg: String, fields: String):
     log_info_kv(msg, fields)
 
 fn log_info_kv(msg: String, fields: String):
     log_kv("INFO", msg, fields)
 
+# log a warning message with key=value fields.
 pub fn warn_kv(msg: String, fields: String):
     log_warn_kv(msg, fields)
 
 fn log_warn_kv(msg: String, fields: String):
     log_kv("WARN", msg, fields)
 
+# log an error message with key=value fields.
 pub fn error_kv(msg: String, fields: String):
     log_error_kv(msg, fields)
 

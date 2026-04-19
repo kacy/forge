@@ -2,26 +2,32 @@
 
 import std.time as time
 
+# wait failures used by context-aware helpers.
 pub enum WaitError:
     Cancelled
     DeadlineExceeded
 
+# blocking operation failure with a simple kind code.
 pub struct BlockingError:
     pub kind: Int
     pub message: String
 
+# cancellation context shared across blocking helpers.
 pub struct Context:
     pub done_ch: Channel[Bool]
     pub state: Map[String, Int]
 
+# handle used to cancel a derived context.
 pub struct CancelToken:
     pub done_ch: Channel[Bool]
     pub state: Map[String, Int]
 
+# periodic timer that sends timestamps on a channel.
 pub struct Ticker:
     pub tick_ch: Channel[Int]
     pub stop_ch: Channel[Bool]
 
+# result wrapper for context-aware channel receives.
 pub enum RecvResult[T]:
     Value(T)
     Closed
@@ -87,6 +93,7 @@ fn ticker_worker(ch: Channel[Int], stop_ch: Channel[Bool], ms: Int):
             return
         ch.try_send(time.now())
 
+## return a root context that is never cancelled on its own.
 pub fn background() -> Context:
     mut state: Map[String, Int] := {}
     state.insert("err", 0)
@@ -94,9 +101,11 @@ pub fn background() -> Context:
     done_ch := Channel[Bool]()
     return Context(done_ch, state)
 
+# derive a child context with manual cancellation.
 pub fn with_cancel(parent: Context) -> (Context, CancelToken):
     return make_child_context(parent)
 
+# derive a child context that cancels at a deadline.
 pub fn with_deadline(parent: Context, at_ms: Int) -> (Context, CancelToken):
     pair := make_child_context(parent)
     ctx := pair.0
@@ -105,20 +114,24 @@ pub fn with_deadline(parent: Context, at_ms: Int) -> (Context, CancelToken):
     spawn watch_deadline(ctx.done_ch, ctx.state, at_ms)
     return (ctx, token)
 
+# derive a child context that cancels after a timeout.
 pub fn with_timeout(parent: Context, ms: Int) -> (Context, CancelToken):
     return with_deadline(parent, time.now() + ms)
 
+# send one timestamp after the delay.
 pub fn after(ms: Int) -> Channel[Int]:
     ch := Channel[Int](1)
     spawn after_worker(ch, ms)
     return ch
 
+# create a repeating ticker.
 pub fn ticker(ms: Int) -> Ticker:
     tick_ch := Channel[Int](1)
     stop_ch := Channel[Bool](1)
     spawn ticker_worker(tick_ch, stop_ch, ms)
     return Ticker(tick_ch, stop_ch)
 
+# wait for a task unless the context is cancelled first.
 pub fn await_ctx[T](task: Task[T], ctx: Context) -> T!WaitError:
     while not task.is_done():
         if ctx.is_cancelled():
@@ -126,6 +139,7 @@ pub fn await_ctx[T](task: Task[T], ctx: Context) -> T!WaitError:
         time.delay(1)
     return await task
 
+# send with cancellation support.
 pub fn send_ctx[T](ch: Channel[T], ctx: Context, value: T) -> Bool!WaitError:
     while true:
         if ch.try_send(value):
@@ -136,6 +150,7 @@ pub fn send_ctx[T](ch: Channel[T], ctx: Context, value: T) -> Bool!WaitError:
             fail context_wait_error(ctx)
         time.delay(1)
 
+# receive with cancellation support.
 pub fn recv_ctx[T](ch: Channel[T], ctx: Context) -> RecvResult[T]!WaitError:
     while true:
         picked := select:
@@ -148,15 +163,19 @@ pub fn recv_ctx[T](ch: Channel[T], ctx: Context) -> RecvResult[T]!WaitError:
         if ctx.is_cancelled():
             fail context_wait_error(ctx)
 
+# build a blocking error for cancellation.
 pub fn blocking_cancelled() -> BlockingError:
     return BlockingError(1, "cancelled")
 
+# build a blocking error for deadline expiry.
 pub fn blocking_deadline_exceeded() -> BlockingError:
     return BlockingError(2, "deadline exceeded")
 
+# build a generic blocking failure.
 pub fn blocking_failed(message: String) -> BlockingError:
     return BlockingError(3, message)
 
+# convert a wait error into the blocking error shape used by io helpers.
 pub fn blocking_from_wait(err: WaitError) -> BlockingError:
     if err == WaitError.DeadlineExceeded:
         return blocking_deadline_exceeded()

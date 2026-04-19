@@ -7,57 +7,62 @@
 #   print(red("FAIL") + " test_strings")
 #   print(bold("done"))
 
+fn ansi_wrap(code: String, s: String) -> String:
+    esc := chr(27)
+    return esc + "[" + code + "m" + s + esc + "[0m"
+
 # ===============================================================
 # Colors
 # ===============================================================
 
+## wrap text in the ansi code for red.
+## the reset code is appended so later output is unaffected.
 pub fn red(s: String) -> String:
-    esc := chr(27)
-    return esc + "[31m" + s + esc + "[0m"
+    return ansi_wrap("31", s)
 
+# wrap text in the ansi code for green.
 pub fn green(s: String) -> String:
-    esc := chr(27)
-    return esc + "[32m" + s + esc + "[0m"
+    return ansi_wrap("32", s)
 
+# wrap text in the ansi code for yellow.
 pub fn yellow(s: String) -> String:
-    esc := chr(27)
-    return esc + "[33m" + s + esc + "[0m"
+    return ansi_wrap("33", s)
 
+# wrap text in the ansi code for blue.
 pub fn blue(s: String) -> String:
-    esc := chr(27)
-    return esc + "[34m" + s + esc + "[0m"
+    return ansi_wrap("34", s)
 
+# wrap text in the ansi code for magenta.
 pub fn magenta(s: String) -> String:
-    esc := chr(27)
-    return esc + "[35m" + s + esc + "[0m"
+    return ansi_wrap("35", s)
 
+# wrap text in the ansi code for cyan.
 pub fn cyan(s: String) -> String:
-    esc := chr(27)
-    return esc + "[36m" + s + esc + "[0m"
+    return ansi_wrap("36", s)
 
+# wrap text in the ansi code for gray.
 pub fn gray(s: String) -> String:
-    esc := chr(27)
-    return esc + "[90m" + s + esc + "[0m"
+    return ansi_wrap("90", s)
 
 # ===============================================================
 # Styles
 # ===============================================================
 
+# wrap text in bold ansi styling.
 pub fn bold(s: String) -> String:
-    esc := chr(27)
-    return esc + "[1m" + s + esc + "[0m"
+    return ansi_wrap("1", s)
 
+# wrap text in dim ansi styling.
 pub fn dim(s: String) -> String:
-    esc := chr(27)
-    return esc + "[2m" + s + esc + "[0m"
+    return ansi_wrap("2", s)
 
+# wrap text in underline ansi styling.
 pub fn underline(s: String) -> String:
-    esc := chr(27)
-    return esc + "[4m" + s + esc + "[0m"
+    return ansi_wrap("4", s)
 
+# wrap text in italic ansi styling.
 pub fn italic(s: String) -> String:
-    esc := chr(27)
-    return esc + "[3m" + s + esc + "[0m"
+    return ansi_wrap("3", s)
 
 # ===============================================================
 # Utilities

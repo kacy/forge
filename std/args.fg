@@ -34,6 +34,7 @@ pub fn init(name: String, description: String):
     app_name = name
     app_desc = description
 
+# register a boolean flag like --verbose or -v.
 pub fn add_flag(name: String, short: String, description: String):
     entry := name + "|" + short + "|" + description + "|0"
     if flag_count > 0:
@@ -43,6 +44,7 @@ pub fn add_flag(name: String, short: String, description: String):
         flags_data = entry
     flag_count = flag_count + 1
 
+# register an option that expects a value.
 pub fn add_option(name: String, short: String, description: String, default_val: String):
     entry := name + "|" + short + "|" + description + "|" + default_val
     if opt_count > 0:
@@ -52,6 +54,7 @@ pub fn add_option(name: String, short: String, description: String, default_val:
         opts_data = entry
     opt_count = opt_count + 1
 
+# register a positional argument in parse order.
 pub fn add_positional(name: String, description: String):
     entry := name + "|" + description + "| "
     if pos_count > 0:
@@ -135,6 +138,7 @@ pub fn parse():
             argv.push(arg)
     parse_list(argv)
 
+# parse an explicit argv list instead of reading process args().
 pub fn parse_list(argv: List[String]):
     mut pi := 0
     mut pending_long := ""
@@ -226,21 +230,25 @@ pub fn get_flag(name: String) -> Bool:
         return false
     return get_field(rec, 3) == "1"
 
+# get the parsed value for an option by long name.
 pub fn get_option(name: String) -> String:
     rec := find_record(opts_data, opt_count, name)
     if rec == "":
         return ""
     return get_field(rec, 3)
 
+# get the parsed value for a positional argument by name.
 pub fn get_positional(name: String) -> String:
     rec := find_record(pos_data, pos_count, name)
     if rec == "":
         return ""
     return get_field(rec, 2).trim()
 
+# true when parsing recorded one or more argument errors.
 pub fn has_errors() -> Bool:
     return error_count > 0
 
+# return all parse errors joined with newlines.
 pub fn get_errors() -> String:
     return error_data
 

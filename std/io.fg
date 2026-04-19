@@ -289,12 +289,15 @@ impl Flusher for BufferedBytesWriter:
     fn flush() -> Int!:
         return buffered_bytes_writer_flush(self)
 
+# build an in-memory string reader from text.
 pub fn string_reader(data: String) -> StringReader:
     return StringReader(allocate_string_reader_handle(data))
 
+# build an in-memory string writer.
 pub fn string_buffer() -> StringBuffer:
     return StringBuffer(allocate_string_buffer_handle())
 
+# build an in-memory bytes reader from raw bytes.
 pub fn bytes_reader(data: Bytes) -> BytesCursor:
     return BytesCursor(allocate_bytes_reader_handle(data))
 
@@ -439,6 +442,7 @@ fn file_stream_write_bytes(stream: FileStream, data: Bytes) -> Int!:
 fn file_stream_close(stream: FileStream):
     file_close(stream.handle)
 
+# spawn a shell command and return a process handle.
 pub fn spawn_process(command: String) -> Process!:
     return Process(process_spawn(command)!)
 
@@ -560,99 +564,131 @@ fn buffered_bytes_writer_write(writer: BufferedBytesWriter, data: Bytes) -> Int!
 fn buffered_bytes_writer_flush(writer: BufferedBytesWriter) -> Int!:
     return buffered_bytes_writer_flush_internal(writer)
 
+# read the rest of a string reader with the default chunk size.
 pub fn read_all(reader: StringReader) -> String!:
     return read_all_string(reader)
 
+# read the rest of a string reader with an explicit chunk size.
 pub fn read_all_chunked(reader: StringReader, chunk_size: Int) -> String!:
     return read_all_string_chunked(reader, chunk_size)
 
+# keep writing until the full string is written.
 pub fn write_all(writer: StringBuffer, data: String) -> Int!:
     return write_all_string(writer, data)
 
+# copy all text from a reader into a writer.
 pub fn copy(reader: StringReader, writer: StringBuffer) -> Int!:
     return copy_string(reader, writer)
 
+# copy all text from a reader into a writer with an explicit chunk size.
 pub fn copy_chunked(reader: StringReader, writer: StringBuffer, chunk_size: Int) -> Int!:
     return copy_string_chunked(reader, writer, chunk_size)
 
+# read the rest of a bytes reader with the default chunk size.
 pub fn read_all_bytes(reader: BytesCursor) -> Bytes!:
     return read_all_bytes_cursor(reader)
 
+# read the rest of a bytes reader with an explicit chunk size.
 pub fn read_all_bytes_chunked(reader: BytesCursor, chunk_size: Int) -> Bytes!:
     return read_all_bytes_cursor_chunked(reader, chunk_size)
 
+# keep writing until the full byte slice is written.
 pub fn write_all_bytes(writer: ByteBuffer, data: Bytes) -> Int!:
     return write_all_byte_buffer(writer, data)
 
+# copy all bytes from a reader into a byte buffer.
 pub fn copy_bytes(reader: BytesCursor, writer: ByteBuffer) -> Int!:
     return copy_bytes_cursor(reader, writer)
 
+# copy all bytes from a reader into a byte buffer with an explicit chunk size.
 pub fn copy_bytes_chunked(reader: BytesCursor, writer: ByteBuffer, chunk_size: Int) -> Int!:
     return copy_bytes_cursor_chunked(reader, writer, chunk_size)
 
+# open a tcp client connection.
 pub fn connect(host: String, port: Int) -> TcpStream!:
     return tcp_stream_connect(host, port)
 
+# wrap an existing file descriptor as a tcp stream.
 pub fn from_fd(fd: Int) -> TcpStream:
     return tcp_stream_from_fd(fd)
 
+# set the socket timeout in milliseconds.
 pub fn set_timeout(stream: TcpStream, ms: Int):
     tcp_stream_set_timeout(stream, ms)
 
+# get the writable stdin handle for a spawned process.
 pub fn stdin(process: Process) -> ProcessStdin:
     return process_stdin(process)
 
+# get the readable stdout handle for a spawned process.
 pub fn stdout(process: Process) -> ProcessStdout:
     return process_stdout(process)
 
+# get the readable stderr handle for a spawned process.
 pub fn stderr(process: Process) -> ProcessStderr:
     return process_stderr(process)
 
+# wait for a process to exit and return its exit code.
 pub fn wait(process: Process) -> Int:
     return wait_process(process)
 
+# request that a process be terminated.
 pub fn kill(process: Process) -> Bool:
     return kill_process(process)
 
+# write a full string to process stdin.
 pub fn write_stdin(process: Process, data: String) -> Int!:
     return write_all_process_stdin(stdin(process), data)
 
+# write raw bytes to process stdin.
 pub fn write_stdin_bytes(process: Process, data: Bytes) -> Int!:
     return write_all_process_stdin_bytes(stdin(process), data)
 
+# read all text from process stdout.
 pub fn read_stdout(process: Process) -> String!:
     return read_all_process_stdout(stdout(process))
 
+# read all text from process stdout with an explicit chunk size.
 pub fn read_stdout_chunked(process: Process, chunk_size: Int) -> String!:
     return read_all_process_stdout_chunked(stdout(process), chunk_size)
 
+# read all bytes from process stdout.
 pub fn read_stdout_bytes(process: Process) -> Bytes!:
     return read_all_process_stdout_bytes(stdout(process))
 
+# read all bytes from process stdout with an explicit chunk size.
 pub fn read_stdout_bytes_chunked(process: Process, chunk_size: Int) -> Bytes!:
     return read_all_process_stdout_bytes_chunked(stdout(process), chunk_size)
 
+# read all text from process stderr.
 pub fn read_stderr(process: Process) -> String!:
     return read_all_process_stderr(stderr(process))
 
+# read all bytes from process stderr.
 pub fn read_stderr_bytes(process: Process) -> Bytes!:
     return read_all_process_stderr_bytes(stderr(process))
 
+# read all bytes from process stderr with an explicit chunk size.
 pub fn read_stderr_bytes_chunked(process: Process, chunk_size: Int) -> Bytes!:
     return read_all_process_stderr_bytes_chunked(stderr(process), chunk_size)
 
+# read all text from process stderr with an explicit chunk size.
 pub fn read_stderr_chunked(process: Process, chunk_size: Int) -> String!:
     return read_all_process_stderr_chunked(stderr(process), chunk_size)
 
+# read the rest of a file stream as text.
 pub fn read_text(stream: FileStream) -> String!:
     return read_all_file_stream(stream)
 
+# read the rest of a file stream as text with an explicit chunk size.
 pub fn read_text_chunked(stream: FileStream, chunk_size: Int) -> String!:
     return read_all_file_stream_chunked(stream, chunk_size)
 
+# write a full string to a file stream.
 pub fn write_text(stream: FileStream, data: String) -> Int!:
     return write_all_file_stream(stream, data)
 
+# close a file stream handle.
 pub fn close_file(stream: FileStream):
     file_stream_close(stream)
 
@@ -1011,18 +1047,22 @@ fn read_all_file_stream_chunked(stream: FileStream, chunk_size: Int) -> String!:
         chunk = stream.read(size)!
     return result
 
+# read a whole file as text.
 pub fn read_file_text(path: String) -> String!:
     return read_file_text_chunked(path, DEFAULT_CHUNK_SIZE)
 
+# read a whole file as text with an explicit chunk size.
 pub fn read_file_text_chunked(path: String, chunk_size: Int) -> String!:
     stream := file_stream_open_read(path)!
     content := read_all_file_stream_chunked(stream, chunk_size)!
     stream.close()
     return content
 
+# write text to a file, replacing existing contents.
 pub fn write_file_text(path: String, data: String) -> Int!:
     return write_file_text_chunked(path, data, DEFAULT_CHUNK_SIZE)
 
+# write text to a file with an explicit chunk size.
 pub fn write_file_text_chunked(path: String, data: String, chunk_size: Int) -> Int!:
     stream := file_stream_open_write(path)!
     writer := stream.buffered_writer_chunked(chunk_size)
@@ -1031,9 +1071,11 @@ pub fn write_file_text_chunked(path: String, data: String, chunk_size: Int) -> I
     stream.close()
     return total
 
+# append text to a file.
 pub fn append_file_text(path: String, data: String) -> Int!:
     return append_file_text_chunked(path, data, DEFAULT_CHUNK_SIZE)
 
+# append text to a file with an explicit chunk size.
 pub fn append_file_text_chunked(path: String, data: String, chunk_size: Int) -> Int!:
     stream := file_stream_open_append(path)!
     writer := stream.buffered_writer_chunked(chunk_size)

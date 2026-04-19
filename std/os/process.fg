@@ -15,6 +15,7 @@ from std.concurrent import Context, BlockingError, WaitError, blocking_failed, b
 from std.collections import copy_list
 import std.time as time
 
+# a process command builder with argv, cwd, and env overrides.
 pub struct Command:
     pub program: String
     pub argv: List[String]
@@ -22,14 +23,17 @@ pub struct Command:
     pub env_keys: List[String]
     pub env_values: List[String]
 
+# a running child process handle.
 pub struct Process:
     pub handle: Int
 
+# captured process output.
 pub struct Output:
     pub status: Int
     pub stdout: String
     pub stderr: String
 
+# starts a command builder for one program.
 pub fn command(program: String) -> Command:
     return Command(program, [], "", [], [])
 
@@ -106,6 +110,7 @@ fn await_output_or_fail(process: Process, task: Task[String!]) -> String!Blockin
         fail blocking_failed(result.err)
     return result.ok
 
+# waits for a process while respecting cancellation and deadlines.
 pub fn wait_ctx(process: Process, ctx: Context) -> Int!WaitError:
     task := spawn wait_worker(process)
     while not task.is_done():
@@ -114,13 +119,16 @@ pub fn wait_ctx(process: Process, ctx: Context) -> Int!WaitError:
         time.delay(1)
     return await task
 
+# starts a process without waiting for it.
 pub fn start(cmd: Command) -> Process!:
     handle := process_spawn_argv(cmd.program, cmd.argv, cmd.cwd_path, cmd.env_keys, cmd.env_values)!
     return Process(handle)
 
+# runs a command and returns its exit status.
 pub fn run(cmd: Command) -> Int!:
     return output(cmd)!.status
 
+# runs a command with cancellation and deadline support.
 pub fn run_ctx(cmd: Command, ctx: Context) -> Int!BlockingError:
     process := start_or_fail(cmd)!
     wait_result := process.wait_ctx(ctx)
@@ -131,12 +139,14 @@ pub fn run_ctx(cmd: Command, ctx: Context) -> Int!BlockingError:
     process.close()
     return status
 
+# runs a command and captures its stdout and stderr.
 pub fn output(cmd: Command) -> Output!:
     handle := process_output_argv(cmd.program, cmd.argv, cmd.cwd_path, cmd.env_keys, cmd.env_values)!
     out := Output(process_output_status(handle), process_output_stdout(handle), process_output_stderr(handle))
     process_output_close(handle)
     return out
 
+# runs a command with cancellation and captures stdout and stderr.
 pub fn output_ctx(cmd: Command, ctx: Context) -> Output!BlockingError:
     process := start_or_fail(cmd)!
     stdout_task := spawn read_stdout_worker(process)
@@ -177,11 +187,14 @@ impl Process:
     fn close():
         process_close(self.handle)
 
+# starts a shell command as a child process.
 pub fn start_shell(command_text: String) -> Process!:
     return Process(process_spawn(command_text)!)
 
+# runs a shell command and returns its exit status.
 pub fn run_shell(command_text: String) -> Int:
     return exec(command_text)
 
+# runs a shell command and returns stdout.
 pub fn output_shell(command_text: String) -> String!:
     return exec_output(command_text)

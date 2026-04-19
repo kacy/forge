@@ -6,17 +6,25 @@
 # Core (builtin wrappers)
 # ===============================================================
 
+fn random_ascii(len: Int) -> String:
+    return random_string(len)
+
+## seed the random number generator.
+## use this when you want reproducible random output.
 pub fn seed(n: Int):
     random_seed(n)
 
+# return a random integer in the inclusive range.
 pub fn int(min_val: Int, max_val: Int) -> Int:
     return random_int(min_val, max_val)
 
+# return a random float from the builtin generator.
 pub fn float() -> Float:
     return random_float()
 
+# return a random ascii string with the requested length.
 pub fn string(len: Int) -> String:
-    return random_string(len)
+    return random_ascii(len)
 
 # ===============================================================
 # List Operations

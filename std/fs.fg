@@ -33,6 +33,7 @@ fn temp_path_impl(prefix: String, suffix: String) -> String:
 pub fn exists(path: String) -> Bool:
     return file_exists(path)
 
+# true when the path exists and is a directory.
 pub fn is_dir(path: String) -> Bool:
     return dir_exists(path)
 
@@ -43,27 +44,35 @@ pub fn is_dir(path: String) -> Bool:
 pub fn read(path: String) -> String!:
     return read_file(path)
 
+# read an entire file as raw bytes.
 pub fn read_bytes(path: String) -> Bytes!:
     return read_file_bytes(path)
 
+# write text to a file, replacing existing contents.
 pub fn write(path: String, data: String) -> Bool!:
     return write_file(path, data)
 
+# write raw bytes to a file, replacing existing contents.
 pub fn write_bytes(path: String, data: Bytes) -> Bool!:
     return write_file_bytes(path, data)
 
+# append text to a file.
 pub fn append(path: String, data: String) -> Bool!:
     return append_file(path, data)
 
+# append raw bytes to a file.
 pub fn append_bytes(path: String, data: Bytes) -> Bool!:
     return append_file_bytes(path, data)
 
+# open an existing file for reading.
 pub fn open(path: String) -> FileStream!:
     return FileStream(file_open_read(path)!)
 
+# create or truncate a file for writing.
 pub fn create(path: String) -> FileStream!:
     return FileStream(file_open_write(path)!)
 
+# open a file for appending.
 pub fn open_append(path: String) -> FileStream!:
     return FileStream(file_open_append(path)!)
 
@@ -74,9 +83,11 @@ pub fn open_append(path: String) -> FileStream!:
 pub fn remove(path: String) -> Bool:
     return remove_file(path)
 
+# remove an empty directory.
 pub fn remove_empty_dir(path: String) -> Bool:
     return fs_remove_dir(path)
 
+# remove a file tree recursively.
 pub fn remove_tree(path: String) -> Bool:
     if not exists(path):
         return true
@@ -84,15 +95,19 @@ pub fn remove_tree(path: String) -> Bool:
         return fs_remove_tree(path)
     return remove(path)
 
+# rename a file or directory.
 pub fn rename(old_path: String, new_path: String) -> Bool:
     return rename_file(old_path, new_path)
 
+# alias for rename.
 pub fn move(old_path: String, new_path: String) -> Bool:
     return rename(old_path, new_path)
 
+# create one directory.
 pub fn make_dir(path: String) -> Bool:
     return mkdir(path)
 
+# create a directory and any missing parents.
 pub fn make_dirs(dir_path: String) -> Bool:
     cleaned := path.clean(dir_path)
     if cleaned == "." or cleaned == "/":
@@ -109,13 +124,16 @@ pub fn make_dirs(dir_path: String) -> Bool:
         return true
     return make_dir(cleaned)
 
+# list direct entries in a directory.
 pub fn list(path: String) -> List[String]:
     return list_dir(path)
 
+# copy one file from one path to another.
 pub fn copy(from_path: String, to_path: String) -> Bool!:
     data := read_bytes(from_path)!
     return write_bytes(to_path, data)
 
+# copy a whole file tree recursively.
 pub fn copy_tree(from_path: String, to_path: String) -> Bool!:
     if is_dir(from_path):
         if not make_dirs(to_path):
@@ -134,6 +152,7 @@ pub fn copy_tree(from_path: String, to_path: String) -> Bool!:
         return copied.ok
     fail "path does not exist: " + from_path
 
+# return basic metadata for a path.
 pub fn info(path: String) -> Info!:
     if is_dir(path):
         return Info(path, true, true, 0)
@@ -144,18 +163,22 @@ pub fn info(path: String) -> Info!:
         return Info(path, true, false, size)
     fail "path does not exist: " + path
 
+# return the size field from info().
 pub fn size(path: String) -> Int!:
     return info(path)!.size
 
+# build a temp path candidate without creating it.
 pub fn temp_path(prefix: String, suffix: String) -> String:
     return temp_path_impl(prefix, suffix)
 
+# create a temporary directory and return its path.
 pub fn make_temp_dir(prefix: String) -> String!:
     dir_path := temp_path_impl(prefix, "")
     if not make_dirs(dir_path):
         fail "could not create temp dir: " + dir_path
     return dir_path
 
+# create an empty temporary file and return its path.
 pub fn make_temp_file(prefix: String, suffix: String) -> String!:
     file_path := temp_path_impl(prefix, suffix)
     write(file_path, "")!

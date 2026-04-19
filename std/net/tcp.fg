@@ -13,10 +13,13 @@
 # Client Operations
 # ===============================================================
 
+fn tcp_connect_checked(host: String, port: Int) -> Int!:
+    return tcp_connect(host, port)
+
 # Connects to a TCP server at the specified host and port.
 # Returns a file descriptor or fails if connection fails.
 pub fn connect(host: String, port: Int) -> Int!:
-    return tcp_connect(host, port)
+    return tcp_connect_checked(host, port)
 
 # ===============================================================
 # Server Operations

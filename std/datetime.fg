@@ -16,9 +16,13 @@
 # A date is packed into a single Int: year * 10000 + month * 100 + day
 # This makes dates naturally comparable with < > == etc.
 
-# Creates a date value from year, month, day
-pub fn date(year: Int, month: Int, day: Int) -> Int:
+fn pack_date(year: Int, month: Int, day: Int) -> Int:
     return year * 10000 + month * 100 + day
+
+## create a packed date value from year, month, and day.
+## the result compares naturally as an integer.
+pub fn date(year: Int, month: Int, day: Int) -> Int:
+    return pack_date(year, month, day)
 
 # Extracts the year from a date
 pub fn year(d: Int) -> Int:

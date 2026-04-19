@@ -9,7 +9,10 @@
 # DNS Resolution
 # ===============================================================
 
-# Resolves a hostname to an IPv4 address string.
-# Returns the IP address or fails if resolution fails.
-pub fn resolve(hostname: String) -> String!:
+fn dns_lookup(hostname: String) -> String!:
     return dns_resolve(hostname)
+
+## resolve a hostname to an ip address string.
+## this fails when the system resolver cannot find an address.
+pub fn resolve(hostname: String) -> String!:
+    return dns_lookup(hostname)

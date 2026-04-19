@@ -389,12 +389,14 @@ fn toml_parse(input: String) -> Int:
         return 0 - 1
     return root
 
+# parse a toml file from disk.
 pub fn parse_file(path: String) -> Int:
     return toml_parse_file(path)
 
 fn toml_parse_file(path: String) -> Int:
     return toml_parse_file_chunked(path, TOML_FILE_CHUNK_SIZE)
 
+# parse a toml file using a custom read chunk size.
 pub fn parse_file_chunked(path: String, chunk_size: Int) -> Int:
     return toml_parse_file_chunked(path, chunk_size)
 

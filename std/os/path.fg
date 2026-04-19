@@ -34,6 +34,7 @@ fn normalize_segments(parts: List[String], absolute: Bool) -> List[String]:
         stack.push(part)
     return stack
 
+# true when the path starts at the filesystem root.
 pub fn is_abs(path: String) -> Bool:
     return path.starts_with("/")
 
@@ -58,6 +59,7 @@ pub fn join(first_segment: String, second_segment: String) -> String:
 
     return first_segment.substring(0, first_len) + "/" + second_segment.substring(second_start, second_segment.len())
 
+# join any number of path parts left to right.
 pub fn join_all(parts: List[String]) -> String:
     if parts.len() == 0:
         return ""
@@ -67,6 +69,7 @@ pub fn join_all(parts: List[String]) -> String:
             joined = join(joined, part)
     return joined
 
+# normalize repeated separators, dots, and dot-dot segments.
 pub fn clean(path: String) -> String:
     if path.len() == 0:
         return "."

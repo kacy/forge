@@ -37,11 +37,15 @@
 #   is_space(" ")     -> true
 #   is_space("\t")    -> true
 
-# Tests if a single-character string is a decimal digit (0-9)
+fn single_char_code(c: String) -> Int:
+    return ord(c)
+
+## tests if a single-character string is a decimal digit.
+## returns false for strings longer than one character.
 pub fn is_digit(c: String) -> Bool:
     if c.len() != 1:
         return false
-    mut code := ord(c)
+    mut code := single_char_code(c)
     return code >= 48 and code <= 57
 
 # Tests if a single-character string is an alphabetic letter (a-z, A-Z)
@@ -374,34 +378,40 @@ pub fn words(s: String) -> List[String]:
         result.push(current)
     return result
 
+## split once and return the left and right pieces plus a found flag.
 pub fn split_once(s: String, sep: String) -> SplitPair:
     if sep.len() == 0:
         return split_pair_missing(s)
     return split_pair_at(s, sep, s.index_of(sep))
 
+# split from the right once and return the left and right pieces plus a found flag.
 pub fn rsplit_once(s: String, sep: String) -> SplitPair:
     if sep.len() == 0:
         return split_pair_missing(s)
     return split_pair_at(s, sep, s.last_index_of(sep))
 
+# return the text before the first separator.
 pub fn before(s: String, sep: String) -> String:
     parts := split_once(s, sep)
     if not parts.found:
         return s
     return parts.left
 
+# return the text after the first separator.
 pub fn after(s: String, sep: String) -> String:
     parts := split_once(s, sep)
     if not parts.found:
         return ""
     return parts.right
 
+# return the text before the last separator.
 pub fn before_last(s: String, sep: String) -> String:
     parts := rsplit_once(s, sep)
     if not parts.found:
         return s
     return parts.left
 
+# return the text after the last separator.
 pub fn after_last(s: String, sep: String) -> String:
     parts := rsplit_once(s, sep)
     if not parts.found:
@@ -462,6 +472,7 @@ pub fn rpartition(s: String, sep: String) -> List[String]:
     mut tail := s.substring(pos + sep.len(), s.len())
     return [head, sep, tail]
 
+## join lines with newline separators.
 pub fn join_lines(lines: List[String]) -> String:
     return lines.join(chr(10))
 

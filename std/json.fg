@@ -15,6 +15,7 @@ from std.bytes import ByteBuffer
 
 JSON_FILE_CHUNK_SIZE := 4096
 
+# saves enough parser state to roll back a speculative parse.
 pub struct JsonCheckpoint:
     pub next_node_id: Int
     pub object_entry_len: Int
@@ -383,12 +384,14 @@ fn json_parse(input: String) -> Int:
             return 0 - 1
     return result
 
+ # parses json from a file with the default chunk size.
 pub fn parse_file(path: String) -> Int:
     return json_parse_file(path)
 
 fn json_parse_file(path: String) -> Int:
     return json_parse_file_chunked(path, JSON_FILE_CHUNK_SIZE)
 
+ # parses json from a file with an explicit chunk size.
 pub fn parse_file_chunked(path: String, chunk_size: Int) -> Int:
     return json_parse_file_chunked(path, chunk_size)
 
@@ -398,18 +401,22 @@ fn json_parse_file_chunked(path: String, chunk_size: Int) -> Int:
         return 0 - 1
     return json_parse(data_result.ok)
 
+ # scans a small object string for one string field.
 pub fn scan_object_string(input: String, key: String) -> String:
     return json_scan_object_string(input, key)
 
+ # scans a small object string for one int field with a fallback.
 pub fn scan_object_int_or(input: String, key: String, default_value: Int) -> Int:
     return json_scan_object_int_or(input, key, default_value)
 
+ # captures the current parser state.
 pub fn checkpoint() -> JsonCheckpoint:
     return json_checkpoint()
 
 fn json_checkpoint() -> JsonCheckpoint:
     return JsonCheckpoint(next_node_id, object_keys_flat.len(), array_items_flat.len())
 
+ # restores parser state captured by checkpoint().
 pub fn restore(mark: JsonCheckpoint):
     json_restore(mark)
 
@@ -794,24 +801,31 @@ pub fn encode(handle: Int) -> String:
 fn json_encode(handle: Int) -> String:
     return json_encode_result(handle) catch "null"
 
+# writes a json value into a string buffer.
 pub fn write_to(out: StringBuffer, handle: Int) -> Int!:
     return json_write(out, handle)
 
+# encodes a json value straight into bytes.
 pub fn encode_bytes(handle: Int) -> Bytes!:
     return json_encode_bytes_result(handle)
 
+# writes a json value into a byte buffer.
 pub fn write_bytes_to(out: ByteBuffer, handle: Int) -> Int!:
     return json_write_bytes(out, handle)
 
+# writes `{` to a string buffer.
 pub fn write_object_start(out: StringBuffer) -> Int!:
     return out.write_all(chr(123))
 
+# writes `}` to a string buffer.
 pub fn write_object_end(out: StringBuffer) -> Int!:
     return out.write_all(chr(125))
 
+# writes `[` to a string buffer.
 pub fn write_array_start(out: StringBuffer) -> Int!:
     return out.write_all("[")
 
+# writes `]` to a string buffer.
 pub fn write_array_end(out: StringBuffer) -> Int!:
     return out.write_all("]")
 
@@ -823,16 +837,19 @@ fn write_object_field_prefix(out: StringBuffer, is_first: Bool, key: String) -> 
     total = total + out.write_all(":")!
     return total
 
+# writes one string field and returns the next is_first flag.
 pub fn write_object_string_field(out: StringBuffer, is_first: Bool, key: String, value: String) -> Bool!:
     write_object_field_prefix(out, is_first, key)!
     write_escaped_string(out, value)!
     return false
 
+# writes one int field and returns the next is_first flag.
 pub fn write_object_int_field(out: StringBuffer, is_first: Bool, key: String, value: Int) -> Bool!:
     write_object_field_prefix(out, is_first, key)!
     out.write_all(value.to_string())!
     return false
 
+# writes one bool field and returns the next is_first flag.
 pub fn write_object_bool_field(out: StringBuffer, is_first: Bool, key: String, value: Bool) -> Bool!:
     write_object_field_prefix(out, is_first, key)!
     if value:
@@ -841,6 +858,7 @@ pub fn write_object_bool_field(out: StringBuffer, is_first: Bool, key: String, v
         out.write_all("false")!
     return false
 
+# writes an int array into a string buffer.
 pub fn write_int_array(out: StringBuffer, values: List[Int]) -> Int!:
     mut total := write_array_start(out)!
     mut i := 0
@@ -852,20 +870,25 @@ pub fn write_int_array(out: StringBuffer, values: List[Int]) -> Int!:
     total = total + write_array_end(out)!
     return total
 
+# writes one int-array field and returns the next is_first flag.
 pub fn write_object_int_array_field(out: StringBuffer, is_first: Bool, key: String, values: List[Int]) -> Bool!:
     write_object_field_prefix(out, is_first, key)!
     write_int_array(out, values)!
     return false
 
+# writes `{` to a byte buffer.
 pub fn write_object_start_bytes(out: ByteBuffer) -> Int!:
     return out.write_byte(123)
 
+# writes `}` to a byte buffer.
 pub fn write_object_end_bytes(out: ByteBuffer) -> Int!:
     return out.write_byte(125)
 
+# writes `[` to a byte buffer.
 pub fn write_array_start_bytes(out: ByteBuffer) -> Int!:
     return out.write_byte(91)
 
+# writes `]` to a byte buffer.
 pub fn write_array_end_bytes(out: ByteBuffer) -> Int!:
     return out.write_byte(93)
 
@@ -877,16 +900,19 @@ fn write_object_field_prefix_bytes(out: ByteBuffer, is_first: Bool, key: String)
     total = total + out.write_byte(58)!
     return total
 
+# writes one string field into a byte buffer object.
 pub fn write_object_string_field_bytes(out: ByteBuffer, is_first: Bool, key: String, value: String) -> Bool!:
     write_object_field_prefix_bytes(out, is_first, key)!
     write_escaped_bytes(out, value)!
     return false
 
+# writes one int field into a byte buffer object.
 pub fn write_object_int_field_bytes(out: ByteBuffer, is_first: Bool, key: String, value: Int) -> Bool!:
     write_object_field_prefix_bytes(out, is_first, key)!
     out.write_string_utf8(value.to_string())!
     return false
 
+# writes one bool field into a byte buffer object.
 pub fn write_object_bool_field_bytes(out: ByteBuffer, is_first: Bool, key: String, value: Bool) -> Bool!:
     write_object_field_prefix_bytes(out, is_first, key)!
     if value:
@@ -895,6 +921,7 @@ pub fn write_object_bool_field_bytes(out: ByteBuffer, is_first: Bool, key: Strin
         out.write_string_utf8("false")!
     return false
 
+# writes an int array into a byte buffer.
 pub fn write_int_array_bytes(out: ByteBuffer, values: List[Int]) -> Int!:
     mut total := write_array_start_bytes(out)!
     mut i := 0
@@ -906,17 +933,20 @@ pub fn write_int_array_bytes(out: ByteBuffer, values: List[Int]) -> Int!:
     total = total + write_array_end_bytes(out)!
     return total
 
+# writes one int-array field into a byte buffer object.
 pub fn write_object_int_array_field_bytes(out: ByteBuffer, is_first: Bool, key: String, values: List[Int]) -> Bool!:
     write_object_field_prefix_bytes(out, is_first, key)!
     write_int_array_bytes(out, values)!
     return false
 
+# encodes a json value and saves it to a file.
 pub fn save(path: String, handle: Int) -> Int:
     return json_save(path, handle)
 
 fn json_save(path: String, handle: Int) -> Int:
     return json_save_chunked(path, handle, JSON_FILE_CHUNK_SIZE)
 
+# encodes a json value and saves it with an explicit chunk size.
 pub fn save_chunked(path: String, handle: Int, chunk_size: Int) -> Int:
     return json_save_chunked(path, handle, chunk_size)
 

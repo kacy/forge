@@ -103,11 +103,14 @@ fn format_values(pattern: String, values: List[String]) -> String:
 pub fn format(pattern: String, values: List[String]) -> String:
     return format_values(pattern, values)
 
+# fill the first placeholder in a pattern.
 pub fn format1(pattern: String, a: String) -> String:
     return format_values(pattern, [a])
 
+# fill the first two placeholders in a pattern.
 pub fn format2(pattern: String, a: String, b: String) -> String:
     return format_values(pattern, [a, b])
 
+# fill the first three placeholders in a pattern.
 pub fn format3(pattern: String, a: String, b: String, c: String) -> String:
     return format_values(pattern, [a, b, c])

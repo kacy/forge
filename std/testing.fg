@@ -20,12 +20,14 @@ fn record_fail(name: String, detail: String):
     fail_count = fail_count + 1
     print("  FAIL " + name + " -- " + detail)
 
+# assert that two values are equal.
 pub fn assert_eq[T](got: T, want: T):
     if got == want:
         record_pass("assert_eq")
     else:
         record_fail("assert_eq", "got {got}, want {want}")
 
+# assert that two values are different.
 pub fn assert_ne[T](left: T, right: T):
     if left != right:
         record_pass("assert_ne")

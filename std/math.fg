@@ -38,9 +38,11 @@ pub fn PI() -> Float:
     b := atan_series(1.0 / 239.0)
     return 4.0 * (4.0 * a - b)
 
+## return e, the base of natural logarithms.
 pub fn E() -> Float:
     return exp(1.0)
 
+# return tau, which is 2*pi.
 pub fn TAU() -> Float:
     return PI() * 2.0
 
@@ -99,9 +101,11 @@ pub fn log(x: Float) -> Float:
         i = i + 1
     return y
 
+# log base 10.
 pub fn log10(x: Float) -> Float:
     return log(x) / log(10.0)
 
+# log base 2.
 pub fn log2(x: Float) -> Float:
     return log(x) / log(2.0)
 
@@ -116,6 +120,7 @@ pub fn pow_float(base: Float, exponent: Float) -> Float:
         return 0.0
     return exp(exponent * log(base))
 
+# square root via newton iteration.
 pub fn sqrt(x: Float) -> Float:
     if x <= 0.0:
         return 0.0
@@ -128,6 +133,7 @@ pub fn sqrt(x: Float) -> Float:
         i = i + 1
     return guess
 
+# absolute value for floats.
 pub fn abs_float(x: Float) -> Float:
     if x < 0.0:
         return 0.0 - x
@@ -180,12 +186,14 @@ pub fn cos(x: Float) -> Float:
         i = i + 1.0
     return sum
 
+# tangent, computed as sin/cos.
 pub fn tan(x: Float) -> Float:
     c := cos(x)
     if abs_float(c) < 0.0000000001:
         return 1.0 / 0.0
     return sin(x) / c
 
+# inverse tangent.
 pub fn atan(x: Float) -> Float:
     if x < 0.0:
         return 0.0 - atan(0.0 - x)
@@ -195,6 +203,7 @@ pub fn atan(x: Float) -> Float:
         return PI() / 2.0 - atan(1.0 / x)
     return atan_series(x)
 
+# inverse tangent with quadrant handling.
 pub fn atan2(y: Float, x: Float) -> Float:
     pi := PI()
     if x > 0.0:
@@ -209,13 +218,15 @@ pub fn atan2(y: Float, x: Float) -> Float:
         return 0.0 - pi / 2.0
     return 0.0
 
+# inverse sine.
 pub fn asin(x: Float) -> Float:
     if abs_float(x) >= 1.0:
         if x > 0.0:
             return PI() / 2.0
-        return 0.0 - PI() / 2.0
+            return 0.0 - PI() / 2.0
     return atan(x / sqrt(1.0 - x * x))
 
+# inverse cosine.
 pub fn acos(x: Float) -> Float:
     return PI() / 2.0 - asin(x)
 
@@ -226,12 +237,15 @@ pub fn acos(x: Float) -> Float:
 pub fn degrees(rad: Float) -> Float:
     return rad * 180.0 / PI()
 
+# convert degrees to radians.
 pub fn radians(deg: Float) -> Float:
     return deg * PI() / 180.0
 
+# compute the hypotenuse length for a right triangle.
 pub fn hypot(a: Float, b: Float) -> Float:
     return sqrt(a * a + b * b)
 
+# return -1, 0, or 1 based on the sign of the input.
 pub fn sign(x: Float) -> Float:
     if x > 0.0:
         return 1.0

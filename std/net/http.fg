@@ -22,6 +22,7 @@ import std.io as io
 pub MIME_TEXT := "text/plain"
 pub MIME_HTML := "text/html"
 pub MIME_JSON := "application/json"
+# raw request parts plus lazy decoded helpers for bytes-first request handling.
 pub struct HttpRequestBytes:
     pub head: Bytes
     pub body: Bytes
@@ -35,12 +36,14 @@ pub struct HttpRequestBytes:
     pub query_map: Map[String, String]
     pub path_parts_cache: List[String]
 
+# structured response data used by the bytes-first server helpers.
 pub struct HttpResponse:
     pub status: Int
     pub content_type: String
     pub headers: Map[String, String]
     pub body: Bytes
 
+# a small builder for outbound http client requests.
 pub struct ClientRequest:
     pub method: String
     pub host: String
@@ -570,18 +573,25 @@ fn req_field(req: String, n: Int) -> String:
     if field == n:
         return req.substring(start, req_len)
     return ""
+# returns the request method from a packed request string.
 pub fn method(req: String) -> String:
     return req_field(req, 0)
+# returns the request path from a packed request string.
 pub fn path(req: String) -> String:
     return req_field(req, 1)
+# returns the raw query string from a packed request string.
 pub fn query(req: String) -> String:
     return req_field(req, 2)
+# returns the http version from a packed request string.
 pub fn version(req: String) -> String:
     return req_field(req, 3)
+# returns the raw header block from a packed request string.
 pub fn headers(req: String) -> String:
     return req_field(req, 4)
+# returns the request body from a packed request string.
 pub fn body(req: String) -> String:
     return req_field(req, 5)
+# looks up one header in a packed request string.
 pub fn get_header(req: String, name: String) -> String:
     target := name.to_lower()
     h := req_field(req, 4)
@@ -618,6 +628,7 @@ pub fn get_header(req: String, name: String) -> String:
             start = pos + 1
         pos = pos + 1
     return ""
+# looks up one query parameter in a packed request string.
 pub fn get_query_param(req: String, name: String) -> String:
     return query_param_from_string(req_field(req, 2), name)
 # ===============================================================
@@ -656,34 +667,43 @@ fn ct_header(ct: String) -> String:
     h = h + crlf
     return h
 
+# starts building an http response.
 pub fn response(status: Int) -> HttpResponse:
     mut headers: Map[String, String] := {}
     return HttpResponse(status, "", headers, bytes.empty())
 
+# builds a plain text response.
 pub fn text(status: Int, body_text: String) -> HttpResponse:
     return response(status).with_body_text(body_text).header("Content-Type", MIME_TEXT)
 
+# builds an html response.
 pub fn html(status: Int, body_text: String) -> HttpResponse:
     return response(status).with_body_text(body_text).header("Content-Type", MIME_HTML)
 
+# builds a json response from raw json text.
 pub fn json(status: Int, body_text: String) -> HttpResponse:
     return response(status).with_body_text(body_text).header("Content-Type", MIME_JSON)
 
+# builds a json response from a parsed json handle.
 pub fn json_value(status: Int, handle: Int) -> HttpResponse:
     body_bytes := json_mod.encode_bytes(handle)
     if body_bytes.is_err:
         return json(status, json_mod.encode(handle))
     return response(status).with_body_bytes(body_bytes.ok).header("Content-Type", MIME_JSON)
 
+# returns a standard 404 response.
 pub fn not_found_response() -> HttpResponse:
     return html(404, "<h1>404 Not Found</h1>")
 
+# returns a standard 405 response.
 pub fn method_not_allowed_response() -> HttpResponse:
     return text(405, "Method Not Allowed")
 
+# returns a standard 500 response.
 pub fn server_error_response() -> HttpResponse:
     return html(500, "<h1>500 Internal Server Error</h1>")
 
+# returns a redirect response with a location header.
 pub fn redirect_response(url: String) -> HttpResponse:
     return response(301).header("Location", url)
 
@@ -752,30 +772,39 @@ fn response_to_string_or_empty(resp: HttpResponse) -> String:
         return ""
     return text.ok
 
+# builds a response string from status, content type, and text body.
 pub fn respond(status: Int, content_type: String, body_text: String) -> String:
     return response_to_string_or_empty(response(status).header("Content-Type", content_type).with_body_text(body_text))
 
+# builds a response payload from status, content type, and bytes body.
 pub fn respond_bytes(status: Int, content_type: String, body_bytes: Bytes) -> Bytes!:
     return response(status).header("Content-Type", content_type).with_body_bytes(body_bytes).to_bytes()
 
+# builds a plain text response string.
 pub fn text_response(status: Int, body_text: String) -> String:
     return response_to_string_or_empty(text(status, body_text))
 
+# builds an html response string.
 pub fn html_response(status: Int, body_text: String) -> String:
     return response_to_string_or_empty(html(status, body_text))
 
+# builds a json response string.
 pub fn json_response(status: Int, body_text: String) -> String:
     return response_to_string_or_empty(json(status, body_text))
 
+# returns a standard 404 response string.
 pub fn not_found() -> String:
     return response_to_string_or_empty(not_found_response())
 
+# returns a standard 405 response string.
 pub fn method_not_allowed() -> String:
     return response_to_string_or_empty(method_not_allowed_response())
 
+# returns a standard 500 response string.
 pub fn server_error() -> String:
     return response_to_string_or_empty(server_error_response())
 
+# returns a standard redirect response string.
 pub fn redirect(url: String) -> String:
     return response_to_string_or_empty(redirect_response(url))
 # ===============================================================
@@ -850,26 +879,33 @@ fn read_request_from_buffered_string(reader: BufferedStringReader) -> HttpReques
     if body_start < 0:
         return build_http_request(raw.bytes(), bytes.empty())
     return build_http_request(raw.bytes().slice(0, body_start), raw.bytes().slice(body_start, raw.bytes().len()))
+# reads one request from a buffered string reader and packs it into the legacy string form.
 pub fn read_request_buffered(reader: BufferedStringReader) -> String!:
     return pack_request(read_request_from_buffered_string(reader)!)
+# reads one request from a file descriptor and packs it into the legacy string form.
 pub fn read_request(fd: Int) -> String!:
     return pack_request(read_request_bytes(fd)!)
+# reads one request from a buffered bytes reader.
 pub fn read_request_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestBytes!:
     return read_request_from_buffered_bytes(reader)
+# reads one request from a file descriptor using the bytes-first path.
 pub fn read_request_bytes(fd: Int) -> HttpRequestBytes!:
     stream := io.from_fd(fd)
     reader := stream.buffered_bytes_reader_chunked(512)
     return read_request_from_buffered_bytes(reader)
 
+# sends one structured response through a buffered writer.
 pub fn send_buffered(writer: BufferedBytesWriter, response: HttpResponse) -> Int!:
     payload := response.to_bytes()!
     written := writer.write_all_bytes(payload)!
     writer.flush()!
     return written
 
+# sends one structured response to a file descriptor.
 pub fn send(fd: Int, response: HttpResponse) -> Int!:
     return send_response_bytes(fd, response.to_bytes()!)
 
+# sends a raw response payload to a file descriptor.
 pub fn send_response_bytes(fd: Int, response: Bytes) -> Int!:
     stream := io.from_fd(fd)
     writer := stream.buffered_bytes_writer()
@@ -877,6 +913,7 @@ pub fn send_response_bytes(fd: Int, response: Bytes) -> Int!:
     writer.flush()!
     tcp_close(fd)
     return written
+# sends a raw response string to a file descriptor.
 pub fn send_response(fd: Int, response: String) -> Int!:
     return send_response_bytes(fd, bytes.from_string_utf8(response))
 fn find_response_body_offset(raw: Bytes) -> Int:
@@ -913,6 +950,7 @@ fn response_headers_map(raw_head: Bytes) -> Map[String, String]:
         pos = pos + 1
     return result
 
+# parses a raw http response payload into a structured response.
 pub fn parse_response_bytes(raw: Bytes) -> HttpResponse!:
     if raw.len() == 0:
         fail "empty http response"
@@ -927,6 +965,7 @@ pub fn parse_response_bytes(raw: Bytes) -> HttpResponse!:
     body := raw.slice(body_start, raw.len())
     return HttpResponse(status, content_type, header_without(headers, "Content-Type"), body)
 
+# parses a raw http response string into a structured response.
 pub fn parse_response(raw: String) -> HttpResponse!:
     return parse_response_bytes(bytes.from_string_utf8(raw))
 # ===============================================================
@@ -980,17 +1019,21 @@ impl ClientRequest:
     fn send_bytes() -> Bytes!:
         return self.send()!.body_bytes()
 
+# extracts one route parameter from a matched path pattern.
 pub fn route_param(req: HttpRequestBytes, pattern: String, name: String) -> String!:
     return req.path_param(pattern, name)
 
+# checks whether a request matches a method and route pattern.
 pub fn match_route(req: HttpRequestBytes, method_name: String, pattern: String) -> Bool!:
     return req.method()! == method_name and req.matches_path(pattern)!
 
+# serves one request using a bytes reader, writer, and handler.
 pub fn serve_one(reader: BufferedBytesReader, writer: BufferedBytesWriter, handler: fn(HttpRequestBytes) -> HttpResponse) -> Int!:
     req := read_request_buffered_bytes(reader)!
     resp := handler(req)
     return send_buffered(writer, resp)
 
+# serves one request like serve_one(), but respects cancellation and deadlines.
 pub fn serve_one_ctx(reader: BufferedBytesReader, writer: BufferedBytesWriter, handler: fn(HttpRequestBytes) -> HttpResponse, ctx: Context) -> Int!BlockingError:
     if ctx.is_cancelled():
         fail ctx_blocking_error(ctx)
@@ -1007,8 +1050,10 @@ pub fn serve_one_ctx(reader: BufferedBytesReader, writer: BufferedBytesWriter, h
         fail blocking_failed(sent.err)
     return sent.ok
 
+# issues a simple get request and returns the response body bytes.
 pub fn get_bytes(host: String, port: Int, url_path: String) -> Bytes!:
     return request("GET", host, port, url_path).send_bytes()
 
+# issues a simple get request and returns the response body text.
 pub fn get(host: String, port: Int, url_path: String) -> String!:
     return request("GET", host, port, url_path).send()!.body_text()

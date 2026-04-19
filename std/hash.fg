@@ -99,6 +99,7 @@ fn word32_to_hex(val: Int) -> String:
         i = i + 1
     return result
 
+# compute a sha-256 digest and return it as lowercase hex.
 pub fn sha256(input: Bytes) -> String:
     sha_init()
 
@@ -188,12 +189,14 @@ pub fn sha256(input: Bytes) -> String:
 fn hash_sha256(input: Bytes) -> String:
     return sha256(input)
 
+# hash a utf-8 string with sha-256.
 pub fn sha256_string(input: String) -> String:
     return sha256(bytes.from_string_utf8(input))
 
 fn hash_sha256_string(input: String) -> String:
     return sha256_string(input)
 
+## hash bytes with fnv-1a.
 pub fn fnv1a(input: Bytes) -> Int:
     mut h := 2166136261
     mut i := 0
@@ -206,6 +209,7 @@ pub fn fnv1a(input: Bytes) -> Int:
 fn hash_fnv1a(input: Bytes) -> Int:
     return fnv1a(input)
 
+# hash a utf-8 string with fnv-1a.
 pub fn fnv1a_string(input: String) -> Int:
     return fnv1a(bytes.from_string_utf8(input))
 
@@ -223,6 +227,7 @@ fn rotl32(x: Int, n: Int) -> Int:
 fn add32(a: Int, b: Int) -> Int:
     return bit_and(a + b, 4294967295)
 
+## hash bytes with sha-1.
 pub fn sha1(input: Bytes) -> String:
     mut h0 := 1732584193
     mut h1 := 4023233417
@@ -308,6 +313,7 @@ pub fn sha1(input: Bytes) -> String:
 fn hash_sha1(input: Bytes) -> String:
     return sha1(input)
 
+## hash a utf-8 string with sha-1.
 pub fn sha1_string(input: String) -> String:
     return sha1(bytes.from_string_utf8(input))
 
