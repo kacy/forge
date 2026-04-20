@@ -1,0 +1,22 @@
+toml-host:localhost
+toml-port:8080
+toml-debug:false
+toml-ratio:0.75
+toml-empty:true:
+toml-array-skipped:false
+toml-keys:database.url,debug,name,server.empty,server.host,server.port,server.ratio
+json-name:forge-json
+json-host:0.0.0.0
+json-port:9090
+json-tls:false
+json-array-skipped:false
+merge-port:7070
+merge-feature:true
+fallback:fallback
+require:sqlite://local
+missing:true:missing config key: missing
+file-toml:localhost
+file-json:0.0.0.0
+bad-json:true
+missing-file:true
+cleanup:true

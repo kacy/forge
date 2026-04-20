@@ -424,6 +424,10 @@ fn toml_type_of(handle: Int) -> String:
 # Public API — Table Value Accessors
 # ===============================================================
 
+# Gets a child value handle by key from a table. Returns -1 if not found.
+pub fn get_value(handle: Int, key: String) -> Int:
+    return table_lookup(handle, key)
+
 # Gets a string value by key from a table. Returns empty string if not found or wrong type.
 pub fn get_string(handle: Int, key: String) -> String:
     return toml_get_string(handle, key)

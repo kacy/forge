@@ -1,0 +1,78 @@
+import std.config as config
+import std.fs as fs
+import std.os.path as path
+
+fn main() -> Int!:
+    nl := chr(10)
+    q := chr(34)
+    lb := chr(123)
+    rb := chr(125)
+
+    mut toml_doc := "name = " + q + "forge" + q + nl
+    toml_doc = toml_doc + "debug = false" + nl
+    toml_doc = toml_doc + "[server]" + nl
+    toml_doc = toml_doc + "host = " + q + "localhost" + q + nl
+    toml_doc = toml_doc + "port = 8080" + nl
+    toml_doc = toml_doc + "ratio = 0.75" + nl
+    toml_doc = toml_doc + "empty = " + q + q + nl
+    toml_doc = toml_doc + "tags = [" + q + "api" + q + "]" + nl
+    toml_doc = toml_doc + "[database]" + nl
+    toml_doc = toml_doc + "url = " + q + "sqlite://local" + q + nl
+
+    toml_result := config.from_toml(toml_doc)
+    toml_cfg := toml_result.ok
+    print("toml-host:" + config.get_string(toml_cfg, "server.host"))
+    print("toml-port:" + config.get_int_or(toml_cfg, "server.port", 0).to_string())
+    print("toml-debug:" + config.get_bool_or(toml_cfg, "debug", true).to_string())
+    print("toml-ratio:" + config.get_float_or(toml_cfg, "server.ratio", 0.0).to_string())
+    print("toml-empty:" + config.has(toml_cfg, "server.empty").to_string() + ":" + config.get_string(toml_cfg, "server.empty"))
+    print("toml-array-skipped:" + config.has(toml_cfg, "server.tags").to_string())
+    print("toml-keys:" + config.keys(toml_cfg).join(","))
+
+    mut json_doc := lb + q + "name" + q + ":" + q + "forge-json" + q
+    json_doc = json_doc + "," + q + "server" + q + ":" + lb
+    json_doc = json_doc + q + "host" + q + ":" + q + "0.0.0.0" + q
+    json_doc = json_doc + "," + q + "port" + q + ":9090"
+    json_doc = json_doc + "," + q + "tls" + q + ":false" + rb
+    json_doc = json_doc + "," + q + "items" + q + ":[1,2]" + rb
+
+    json_result := config.from_json(json_doc)
+    json_cfg := json_result.ok
+    print("json-name:" + config.get_string(json_cfg, "name"))
+    print("json-host:" + config.get_string(json_cfg, "server.host"))
+    print("json-port:" + config.get_int_or(json_cfg, "server.port", 0).to_string())
+    print("json-tls:" + config.get_bool_or(json_cfg, "server.tls", true).to_string())
+    print("json-array-skipped:" + config.has(json_cfg, "items").to_string())
+
+    mut override_values: Map[String, String] := {}
+    override_values.insert("server.port", "7070")
+    override_values.insert("feature.enabled", "yes")
+    overrides := config.from_map(override_values)
+    override_values.insert("feature.enabled", "no")
+    merged := config.merge(toml_cfg, overrides)
+    print("merge-port:" + config.get_int_or(merged, "server.port", 0).to_string())
+    print("merge-feature:" + config.get_bool_or(merged, "feature.enabled", false).to_string())
+    print("fallback:" + config.get_or(merged, "missing", "fallback"))
+    required_result := config.require(merged, "database.url")
+    required := required_result.ok
+    print("require:" + required)
+    missing := config.require(merged, "missing")
+    print("missing:" + missing.is_err.to_string() + ":" + missing.err.message)
+
+    root := fs.make_temp_dir("forge_config_")!
+    toml_path := path.join(root, "app.toml")
+    json_path := path.join(root, "app.json")
+    fs.write(toml_path, toml_doc)!
+    fs.write(json_path, json_doc)!
+    file_toml_result := config.from_toml_file(toml_path)
+    file_json_result := config.from_json_file(json_path)
+    file_toml := file_toml_result.ok
+    file_json := file_json_result.ok
+    print("file-toml:" + config.get_string(file_toml, "server.host"))
+    print("file-json:" + config.get_string(file_json, "server.host"))
+    bad_json := config.from_json("not json")
+    print("bad-json:" + bad_json.is_err.to_string())
+    missing_file := config.from_toml_file(path.join(root, "missing.toml"))
+    print("missing-file:" + missing_file.is_err.to_string())
+    print("cleanup:" + fs.remove_tree(root).to_string())
+    return 0
