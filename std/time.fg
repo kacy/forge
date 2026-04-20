@@ -20,3 +20,14 @@ pub fn delay(ms: Int):
 # format the current time as a human-readable string
 pub fn format_now() -> String:
     return format_time(time_now_ms(), "")
+
+test "time now is monotonic over a zero delay":
+    before := now()
+    delay(0)
+    after := now()
+
+    assert(before > 0)
+    assert(after >= before)
+
+test "time formats the current timestamp":
+    assert(format_now().len() > 0)
