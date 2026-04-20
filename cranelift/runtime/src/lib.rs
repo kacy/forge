@@ -14,7 +14,6 @@
 pub mod arc;
 pub mod bytes;
 pub mod collections;
-pub mod compress;
 pub mod concurrency;
 pub mod encoding;
 pub mod ffi_util;
@@ -29,7 +28,6 @@ pub mod string;
 pub mod string_list;
 pub mod utility;
 
-pub use compress::*;
 pub use encoding::*;
 pub use host_fs::*;
 pub use network::*;

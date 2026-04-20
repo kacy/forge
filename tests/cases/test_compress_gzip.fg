@@ -16,6 +16,18 @@ fn main() -> Int!:
     text_archive := gzip.compress_string("forge gzip")
     print("string:" + gzip.decompress_string(text_archive)!)
 
+    large := bytes.buffer_with_capacity(66000)
+    mut i := 0
+    while i < 66000:
+        large.write_byte(65)!
+        i = i + 1
+    large_data := large.bytes()
+    large_archive := gzip.compress(large_data)
+    large_roundtrip := gzip.decompress(large_archive)!
+    print("large-valid:" + gzip.is_valid(large_archive).to_string())
+    print("large-size:" + large_roundtrip.len().to_string())
+    print("large-same:" + bytes.eq(large_data, large_roundtrip).to_string())
+
     invalid := gzip.decompress(bytes.from_string_utf8("not gzip"))
     print("invalid:" + invalid.is_err.to_string())
 
