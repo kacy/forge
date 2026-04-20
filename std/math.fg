@@ -38,7 +38,7 @@ pub fn PI() -> Float:
     b := atan_series(1.0 / 239.0)
     return 4.0 * (4.0 * a - b)
 
-## return e, the base of natural logarithms.
+# # return e, the base of natural logarithms.
 pub fn E() -> Float:
     return exp(1.0)
 
@@ -252,3 +252,32 @@ pub fn sign(x: Float) -> Float:
     if x < 0.0:
         return 0.0 - 1.0
     return 0.0
+
+test "math constants and conversions are close":
+    pi := PI()
+
+    assert(abs_float(pi - 3.14159) < 0.001)
+    assert(abs_float(TAU() - 6.28318) < 0.001)
+    assert(abs_float(degrees(pi) - 180.0) < 0.001)
+    assert(abs_float(radians(180.0) - pi) < 0.001)
+
+test "math exponent logs powers and roots are close":
+    assert(abs_float(exp(1.0) - E()) < 0.001)
+    assert(abs_float(sqrt(9.0) - 3.0) < 0.001)
+    assert(abs_float(pow_float(2.0, 3.0) - 8.0) < 0.001)
+
+test "math trig helpers are close":
+    pi := PI()
+
+    assert(abs_float(sin(pi / 2.0) - 1.0) < 0.001)
+    assert(abs_float(cos(pi) + 1.0) < 0.001)
+    assert(abs_float(tan(pi / 4.0) - 1.0) < 0.001)
+    assert(abs_float(atan(1.0) - pi / 4.0) < 0.001)
+    assert(abs_float(atan2(1.0, 0.0) - pi / 2.0) < 0.001)
+
+test "math scalar helpers handle signs and triangles":
+    assert_eq(sign(2.0), 1.0)
+    assert_eq(sign(0.0 - 2.0), 0.0 - 1.0)
+    assert_eq(sign(0.0), 0.0)
+    assert_eq(abs_float(0.0 - 4.0), 4.0)
+    assert(abs_float(hypot(3.0, 4.0) - 5.0) < 0.001)

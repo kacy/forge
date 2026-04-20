@@ -258,3 +258,32 @@ pub fn decode(input: String) -> String:
                 result = result + input[position]
             position = position + 1
     return result
+
+test "url parse splits full urls":
+    u := parse("https://example.com:8443/api/v1?q=forge#docs")
+
+    assert_eq(scheme(u), "https")
+    assert_eq(host(u), "example.com")
+    assert_eq(port(u), 8443)
+    assert_eq(path(u), "/api/v1")
+    assert_eq(query(u), "q=forge")
+    assert_eq(fragment(u), "docs")
+    assert_eq(to_string(u), "https://example.com:8443/api/v1?q=forge#docs")
+
+test "url parse handles missing pieces":
+    u := parse("example.com/path")
+
+    assert_eq(scheme(u), "")
+    assert_eq(host(u), "example.com")
+    assert_eq(port(u), 0 - 1)
+    assert_eq(path(u), "/path")
+    assert_eq(query(u), "")
+    assert_eq(fragment(u), "")
+
+test "url percent encoding round trips reserved chars":
+    encoded := encode("hello world/a+b")
+
+    assert_eq(encoded, "hello%20world%2fa%2bb")
+    assert_eq(decode(encoded), "hello world/a+b")
+    assert_eq(decode("hello+world"), "hello world")
+    assert_eq(decode("%zz"), "%zz")
