@@ -9,8 +9,8 @@
 fn random_ascii(len: Int) -> String:
     return random_string(len)
 
-## seed the random number generator.
-## use this when you want reproducible random output.
+# # seed the random number generator.
+# # use this when you want reproducible random output.
 pub fn seed(n: Int):
     random_seed(n)
 
@@ -98,3 +98,30 @@ pub fn roll(sides: Int) -> Int:
 # True with given probability (0-100 as percentage)
 pub fn chance(percent: Int) -> Bool:
     return random_int(1, 100) <= percent
+
+test "rand helpers stay in requested ranges":
+    seed(123)
+    n := int(2, 4)
+    r := roll(6)
+    text := string(8)
+
+    assert(n >= 2 and n <= 4)
+    assert(r >= 1 and r <= 6)
+    assert_eq(text.len(), 8)
+    assert(chance(100))
+    assert(not chance(0))
+
+test "rand list helpers handle empty and bounded lists":
+    seed(123)
+    chosen := choice([10, 20, 30])
+    chosen_string := choice_string(["red", "blue"])
+    shuffled := shuffle([1, 2, 3])
+    sampled := sample([1, 2, 3], 2)
+
+    assert_eq(choice([]), 0)
+    assert_eq(choice_string([]), "")
+    assert(chosen == 10 or chosen == 20 or chosen == 30)
+    assert(chosen_string == "red" or chosen_string == "blue")
+    assert_eq(shuffled.len(), 3)
+    assert_eq(sampled.len(), 2)
+    assert_eq(sample([1, 2], 5).len(), 2)
