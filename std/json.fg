@@ -120,7 +120,7 @@ fn parse_integer_manual(s: String) -> Int:
             digit := ord(c) - 48
             # Overflow detection
             if val > 922337203685477580 / 10:
-                return 0  # Overflow sentinel
+                return 0 # Overflow sentinel
             val = val * 10 + digit
         i = i + 1
     if neg:
@@ -188,17 +188,17 @@ fn scan_object_value_start(input: String, key: String) -> Int:
             break
         scan_pos = scan_pos + 1
     if key_pos < 0:
-        return -1
+        return - 1
     mut pos := key_pos + key.len() + 2
     while pos < input.len() and scan_whitespace(input[pos]):
         pos = pos + 1
     if pos >= input.len() or input[pos] != ":":
-        return -1
+        return - 1
     pos = pos + 1
     while pos < input.len() and scan_whitespace(input[pos]):
         pos = pos + 1
     if pos >= input.len():
-        return -1
+        return - 1
     return pos
 
 fn json_scan_object_string(input: String, key: String) -> String:
@@ -444,7 +444,7 @@ fn json_restore(mark: JsonCheckpoint):
 # Public API — Type and Value Accessors
 # ===============================================================
 
-# Returns the type of a node as a string: "null", "bool", "int", "float", 
+# Returns the type of a node as a string: "null", "bool", "int", "float",
 # "string", "array", or "object". Returns "invalid" for invalid handles.
 pub fn type_of(handle: Int) -> String:
     return json_type_of(handle)
@@ -624,7 +624,6 @@ fn json_object_keys(handle: Int) -> List[String]:
             result.push(object_keys_flat[off + i])
         i = i + 1
     return result
-
 
 # ===============================================================
 # Public API — Constructors
@@ -1007,6 +1006,57 @@ fn json_save(path: String, handle: Int) -> Int:
 # encodes a json value and saves it with an explicit chunk size.
 pub fn save_chunked(path: String, handle: Int, chunk_size: Int) -> Int:
     return json_save_chunked(path, handle, chunk_size)
+
+test "json parses object fields":
+    dq := chr(34)
+    lb := chr(123)
+    rb := chr(125)
+    doc := lb + dq + "name" + dq + ":" + dq + "forge" + dq + "," + dq + "count" + dq + ":3," + dq + "active" + dq + ":true" + rb
+    root := parse(doc)
+
+    assert_eq(type_of(root), "object")
+    assert_eq(object_get_string(root, "name"), "forge")
+    assert_eq(object_get_int(root, "count"), 3)
+    assert(object_get_bool(root, "active"))
+    assert(object_has(root, "name"))
+    assert_eq(object_get_string_or(root, "missing", "fallback"), "fallback")
+
+test "json parses arrays and primitive values":
+    arr := parse("[42,3.5,false,null," + chr(34) + "ok" + chr(34) + "]")
+
+    assert_eq(type_of(arr), "array")
+    assert_eq(array_len(arr), 5)
+    assert_eq(get_int(array_get(arr, 0)), 42)
+    assert(get_float(array_get(arr, 1)) > 3.4)
+    assert(not get_bool(array_get(arr, 2)))
+    assert_eq(type_of(array_get(arr, 3)), "null")
+    assert_eq(get_string(array_get(arr, 4)), "ok")
+
+test "json constructors encode objects":
+    obj := make_object()
+    tags := make_array()
+    array_push(tags, make_string("fast"))
+    array_push(tags, make_string("small"))
+    object_set(obj, "name", make_string("forge"))
+    object_set(obj, "count", make_int(2))
+    object_set(obj, "tags", tags)
+
+    mut expected := chr(123) + chr(34) + "name" + chr(34) + ":"
+    expected = expected + chr(34) + "forge" + chr(34) + ","
+    expected = expected + chr(34) + "count" + chr(34) + ":2,"
+    expected = expected + chr(34) + "tags" + chr(34) + ":["
+    expected = expected + chr(34) + "fast" + chr(34) + "," + chr(34) + "small" + chr(34) + "]" + chr(125)
+
+    assert_eq(encode(obj), expected)
+
+test "json small object scanners find shallow values":
+    dq := chr(34)
+    doc := chr(123) + dq + "team" + dq + ":" + dq + "blue" + dq + "," + dq + "limit" + dq + ":25" + chr(125)
+
+    assert_eq(scan_object_string(doc, "team"), "blue")
+    assert_eq(scan_object_string(doc, "missing"), "")
+    assert_eq(scan_object_int_or(doc, "limit", 0), 25)
+    assert_eq(scan_object_int_or(doc, "missing", 7), 7)
 
 fn json_save_chunked(path: String, handle: Int, chunk_size: Int) -> Int:
     write_result := io.write_file_text_chunked(path, json_encode(handle), chunk_size)
