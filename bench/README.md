@@ -209,16 +209,16 @@ latest measured results on this machine, using the median of 5 trials:
 
 | records | go total | rust total | forge total | forge/go | forge/rust |
 |---|---:|---:|---:|---:|---:|
-| `50000` | `390 ms` | `212 ms` | `2023 ms` | `5.19x` | `9.54x` |
+| `50000` | `398 ms` | `218 ms` | `1392 ms` | `3.50x` | `6.39x` |
 
 phase breakdown from the same run:
 
 | phase | go | rust | forge |
 |---|---:|---:|---:|
 | config | `0 ms` | `0 ms` | `0 ms` |
-| csv write | `204 ms` | `96 ms` | `493 ms` |
-| csv read | `116 ms` | `72 ms` | `445 ms` |
-| transform | `58 ms` | `43 ms` | `1097 ms` |
+| csv write | `209 ms` | `98 ms` | `516 ms` |
+| csv read | `120 ms` | `73 ms` | `378 ms` |
+| transform | `59 ms` | `43 ms` | `494 ms` |
 | json | `0 ms` | `0 ms` | `0 ms` |
 | gzip + hash | `0 ms` | `0 ms` | `0 ms` |
 | fs | `0 ms` | `0 ms` | `0 ms` |
@@ -239,8 +239,10 @@ binary size from the same build:
 
 the first cut of this benchmark had forge at `12682 ms`. moving csv onto the
 bytes path and avoiding per-row maps brought that down to `2023 ms`. the
-remaining gap is now mostly in the transform phase: repeated string parsing,
-url parsing, path cleanup, and string hashing.
+url/path/hash fast paths brought it down again to about `1400 ms`. the
+remaining gap is split between csv read/write overhead and transform work that
+still creates a lot of short-lived strings while parsing numeric fields and
+walking rows.
 
 three caveats matter when reading this benchmark:
 
