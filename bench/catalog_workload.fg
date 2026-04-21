@@ -1,4 +1,5 @@
 import std.json as json
+import std.bytes as bytes
 
 struct CatalogUser:
     pub id: Int
@@ -391,22 +392,37 @@ fn search_checksum(team_id: Int, region_id: Int, active_filter: Int, min_score: 
             id_sum = id_sum + user.id
     return count + total_score + quota_sum + id_sum
 
-fn batch_checksum(req_body: String) -> Int:
-    root := json.parse(req_body)
-    if root < 0:
+fn batch_checksum(req_body: Bytes) -> Int:
+    req := json.scan_object_scalars_bytes(req_body)
+    if not req.ok:
         return 0 - 1
-    team_id := find_team_id(json.get_string(json.object_get(root, "team")))
-    region_id := find_region_id(json.get_string(json.object_get(root, "region")))
-    mut min_score := json.get_int(json.object_get(root, "min_score"))
-    mut limit := json.get_int(json.object_get(root, "limit"))
-    mut multiplier := json.get_int(json.object_get(root, "multiplier"))
+    mut team := ""
+    mut region := ""
+    mut active := ""
+    mut min_score := 0
+    mut limit := 0
+    mut multiplier := 0
+    if req.strings.contains_key("team"):
+        team = req.strings["team"]
+    if req.strings.contains_key("region"):
+        region = req.strings["region"]
+    if req.strings.contains_key("active"):
+        active = req.strings["active"]
+    if req.ints.contains_key("min_score"):
+        min_score = req.ints["min_score"]
+    if req.ints.contains_key("limit"):
+        limit = req.ints["limit"]
+    if req.ints.contains_key("multiplier"):
+        multiplier = req.ints["multiplier"]
+    team_id := find_team_id(team)
+    region_id := find_region_id(region)
     if min_score < 0:
         min_score = 0
     if limit <= 0:
         limit = 10
     if multiplier <= 0:
         multiplier = 3
-    active_filter := parse_active_filter(json.get_string(json.object_get(root, "active")))
+    active_filter := parse_active_filter(active)
     threshold := bounded_threshold(min_score)
 
     if team_id == 1 and region_id == 0 and active_filter == 1:
@@ -475,11 +491,12 @@ fn bench_batch(iterations: Int) -> Int:
     payload = payload + "," + chr(34) + "min_score" + chr(34) + ":500"
     payload = payload + "," + chr(34) + "limit" + chr(34) + ":12"
     payload = payload + "," + chr(34) + "multiplier" + chr(34) + ":4" + chr(125)
+    payload_bytes := bytes.from_string_utf8(payload)
 
     mut total := 0
     mut i := 0
     while i < iterations:
-        total = total + batch_checksum(payload)
+        total = total + batch_checksum(payload_bytes)
         i = i + 1
     return total
 
