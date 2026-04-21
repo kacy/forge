@@ -201,3 +201,18 @@ pub fn compress_file(from_path: String, to_path: String) -> Bool!:
 pub fn decompress_file(from_path: String, to_path: String) -> Bool!:
     archive := fs.read_bytes(from_path)!
     return fs.write_bytes(to_path, decompress(archive)!)
+
+test "gzip round trips bytes and strings":
+    data := bytes.from_string_utf8("forge gzip data")
+    compressed := compress(data)
+
+    assert(compressed.len() > data.len())
+    assert(is_valid(compressed))
+    assert_eq(decompress(compressed)!.to_string_utf8()!, "forge gzip data")
+    assert_eq(decompress_string(compress_string("hello gzip"))!, "hello gzip")
+
+test "gzip rejects invalid input":
+    bad := bytes.from_string_utf8("not gzip")
+
+    assert(not is_valid(bad))
+    assert(decompress(bad).is_err)
