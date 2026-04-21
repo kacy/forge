@@ -188,3 +188,63 @@ behavior.
 note: the live HTTP catalog benchmark is still exploratory on the Forge side.
 the Forge service currently exits after its first successful request, so the
 stable comparison point today is the workload benchmark above.
+
+## std pipeline benchmark
+
+`bench/std_pipeline.*` is a batteries-included data pipeline benchmark. it
+generates deterministic records, writes and reads csv, transforms rows with url
+and path helpers, writes a json report, gzip round-trips the report, hashes the
+result, and touches the temp workspace through fs traversal.
+
+running it:
+
+```
+./self-host/forge_main build bench/std_pipeline.fg
+env GOCACHE=/tmp/forge-go-cache go build -o bench/std_pipeline_go bench/std_pipeline.go
+cargo build --release --manifest-path bench/std_pipeline_rust/Cargo.toml
+env GOCACHE=/tmp/forge-go-cache go run bench/std_pipeline_bench.go 50000 5
+```
+
+latest measured results on this machine, using the median of 5 trials:
+
+| records | go total | rust total | forge total | forge/go | forge/rust |
+|---|---:|---:|---:|---:|---:|
+| `50000` | `464 ms` | `300 ms` | `12682 ms` | `27.33x` | `42.27x` |
+
+phase breakdown from the same run:
+
+| phase | go | rust | forge |
+|---|---:|---:|---:|
+| config | `0 ms` | `0 ms` | `0 ms` |
+| csv write | `202 ms` | `94 ms` | `1755 ms` |
+| csv read | `158 ms` | `143 ms` | `8687 ms` |
+| transform | `69 ms` | `59 ms` | `1245 ms` |
+| json | `0 ms` | `0 ms` | `0 ms` |
+| gzip + hash | `0 ms` | `0 ms` | `1 ms` |
+| fs | `0 ms` | `0 ms` | `0 ms` |
+
+all three implementations report the same checksum:
+
+```
+107395835982034
+```
+
+binary size from the same build:
+
+| binary | file size | text segment |
+|---|---:|---:|
+| forge pipeline | `5.3M` | `1.4M` |
+| go pipeline | `3.5M` | `2.3M` |
+| rust pipeline | `1.4M` | `1.1M` |
+
+three caveats matter when reading this benchmark:
+
+- rust uses pinned crates for the libraries it does not ship in `std`, which is
+  the normal rust way to write this kind of tool.
+- the local go toolchain in this environment could not resolve `encoding/csv`
+  or `hash/fnv`, so the go workload carries tiny csv and fnv helpers while
+  still using go's json, gzip, sha256, url, path, and fs packages.
+- the forge version keeps the config setup local for now. importing `std.config`
+  with this full module mix currently exposes a checker symbol-collision bug,
+  so the benchmark still times the larger csv/url/path/gzip/hash/fs pipeline
+  while avoiding that unrelated compile failure.
