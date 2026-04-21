@@ -79,7 +79,7 @@ fn make_rows(records: Int) -> List[List[String]]:
         i = i + 1
     return rows
 
-fn transform(rows: List[Map[String, String]], cfg: BenchConfig) -> PipelineStats:
+fn transform(rows: List[List[String]], cfg: BenchConfig) -> PipelineStats:
     mut active_count := 0
     mut selected_count := 0
     mut score_sum := 0
@@ -87,15 +87,17 @@ fn transform(rows: List[Map[String, String]], cfg: BenchConfig) -> PipelineStats
     mut url_path_sum := 0
     mut path_part_sum := 0
     mut note_hash_sum := 0
-    for row in rows:
-        score := parse_int(row["score"]).ok
-        quota := parse_int(row["quota"]).ok
-        active := row["active"] == "true"
-        parsed_url := url.parse(row["url"])
-        clean_path := path.clean(row["path"])
+    for row, i in rows:
+        if i == 0:
+            continue
+        score := parse_int(row[4]).ok
+        quota := parse_int(row[5]).ok
+        active := row[3] == "true"
+        parsed_url := url.parse(row[6])
+        clean_path := path.clean(row[9])
         url_path_sum = url_path_sum + url.path(parsed_url).len()
         path_part_sum = path_part_sum + path.parts(clean_path).len()
-        note_hash_sum = note_hash_sum + hash.fnv1a_string(row["note"])
+        note_hash_sum = note_hash_sum + hash.fnv1a_string(row[8])
         if active:
             active_count = active_count + 1
         if (active or cfg.include_inactive) and score >= cfg.min_score:
@@ -153,7 +155,7 @@ fn main() -> Int!:
     csv_write_ms := time() - start
 
     start = time()
-    parsed_rows := csv.parse_with_headers_file_chunked(csv_path, 8192)!
+    parsed_rows := csv.parse_file_chunked(csv_path, 8192)!
     csv_read_ms := time() - start
 
     start = time()

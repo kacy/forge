@@ -10,18 +10,122 @@
 # #   save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!
 # #   encode_row(row: List[String]) -> String
 
-from std.io import FileStream
+import std.bytes as bytes
+from std.bytes import ByteBuffer
 
 CSV_FILE_CHUNK_SIZE := 4096
+CSV_QUOTE := 34
+CSV_COMMA := 44
+CSV_CR := 13
+CSV_LF := 10
+CSV_SPACE := 32
+CSV_TAB := 9
+
+fn csv_is_trim_byte(value: Int) -> Bool:
+    return value == CSV_SPACE or value == CSV_TAB or value == CSV_CR or value == CSV_LF
+
+fn csv_trim_start(data: Bytes, start: Int, end: Int) -> Int:
+    mut pos := start
+    while pos < end and csv_is_trim_byte(data[pos]):
+        pos = pos + 1
+    return pos
+
+fn csv_trim_end(data: Bytes, start: Int, end: Int) -> Int:
+    mut pos := end
+    while pos > start and csv_is_trim_byte(data[pos - 1]):
+        pos = pos - 1
+    return pos
+
+fn csv_field_from_bytes(data: Bytes, start: Int, end: Int) -> String:
+    trimmed_start := csv_trim_start(data, start, end)
+    trimmed_end := csv_trim_end(data, trimmed_start, end)
+    return data.slice(trimmed_start, trimmed_end).to_string_utf8() catch ""
+
+fn csv_line_has_content(data: Bytes, start: Int, end: Int) -> Bool:
+    return csv_trim_start(data, start, end) < csv_trim_end(data, start, end)
+
+fn csv_write_string(out: ByteBuffer, text: String) -> Int!:
+    return out.write_string_utf8(text)
+
+fn csv_write_escaped_field(out: ByteBuffer, field: String) -> Int!:
+    mut total := out.write_byte(CSV_QUOTE)!
+    escaped := field.replace(chr(CSV_QUOTE), chr(CSV_QUOTE) + chr(CSV_QUOTE))
+    total = total + csv_write_string(out, escaped)!
+    return total + out.write_byte(CSV_QUOTE)!
+
+fn encode_row_bytes_to(out: ByteBuffer, row: List[String]) -> Int!:
+    mut total := 0
+    for field, i in row:
+        if i > 0:
+            total = total + out.write_byte(CSV_COMMA)!
+        if field.contains(",") or field.contains(chr(CSV_QUOTE)) or field.contains(chr(CSV_LF)):
+            total = total + csv_write_escaped_field(out, field)!
+        else:
+            total = total + csv_write_string(out, field)!
+    return total
+
+fn parse_row_bytes(data: Bytes, start: Int, end: Int) -> List[String]:
+    mut fields: List[String] := []
+    field_buf := bytes.buffer()
+    mut field_start := start
+    mut quoted := false
+    mut in_quotes := false
+    mut i := start
+    while i < end:
+        c := data[i]
+        if in_quotes:
+            if c == CSV_QUOTE:
+                if i + 1 < end and data[i + 1] == CSV_QUOTE:
+                    field_buf.write_byte(CSV_QUOTE)
+                    i = i + 1
+                else:
+                    in_quotes = false
+            else:
+                field_buf.write_byte(c)
+        else:
+            if c == CSV_QUOTE:
+                in_quotes = true
+                quoted = true
+                if field_start < i:
+                    field_buf.write(data.slice(field_start, i))
+            elif c == CSV_COMMA:
+                if quoted:
+                    fields.push((field_buf.bytes().to_string_utf8() catch "").trim())
+                    field_buf.clear()
+                else:
+                    fields.push(csv_field_from_bytes(data, field_start, i))
+                quoted = false
+                field_start = i + 1
+            else:
+                if quoted:
+                    field_buf.write_byte(c)
+        i = i + 1
+    if quoted:
+        fields.push((field_buf.bytes().to_string_utf8() catch "").trim())
+    else:
+        fields.push(csv_field_from_bytes(data, field_start, end))
+    return fields
 
 # # Parse CSV text into a list of rows, each row a list of fields
 pub fn parse(text: String) -> List[List[String]]:
+    return parse_bytes(bytes.from_string_utf8(text))
+
+# parse csv bytes into a list of rows, each row a list of fields.
+pub fn parse_bytes(data: Bytes) -> List[List[String]]:
     mut rows: List[List[String]] := []
-    lines := text.split(chr(10))
-    for raw_line in lines:
-        line := raw_line.trim()
-        if line.len() > 0:
-            rows.push(parse_row(line))
+    mut line_start := 0
+    mut i := 0
+    while i < data.len():
+        if data[i] == CSV_LF:
+            mut line_end := i
+            if line_end > line_start and data[line_end - 1] == CSV_CR:
+                line_end = line_end - 1
+            if csv_line_has_content(data, line_start, line_end):
+                rows.push(parse_row_bytes(data, line_start, line_end))
+            line_start = i + 1
+        i = i + 1
+    if line_start < data.len() and csv_line_has_content(data, line_start, data.len()):
+        rows.push(parse_row_bytes(data, line_start, data.len()))
     return rows
 
 # parse a csv file from disk.
@@ -30,17 +134,12 @@ pub fn parse_file(path: String) -> List[List[String]]!:
 
 # parse a csv file using a custom read chunk size.
 pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
-    stream := FileStream(file_open_read(path)!)
-    reader := stream.buffered_reader_chunked(chunk_size)
-    mut rows: List[List[String]] := []
-    mut line := reader.read_line()!
-    while line.len() > 0:
-        trimmed := line.trim()
-        if trimmed.len() > 0:
-            rows.push(parse_row(trimmed))
-        line = reader.read_line()!
-    stream.close()
-    return rows
+    data := read_file_bytes(path)!
+    return parse_bytes(data)
+
+# parse a csv file as raw bytes.
+pub fn parse_file_bytes(path: String) -> List[List[String]]!:
+    return parse_file_chunked(path, CSV_FILE_CHUNK_SIZE)
 
 # # Parse CSV text with the first row as headers.
 # # Returns a list of maps, one per data row.
@@ -74,10 +173,16 @@ fn rows_with_headers(all_rows: List[List[String]]) -> List[Map[String, String]]:
 
 # # Encode a list of rows into CSV text
 pub fn encode(rows: List[List[String]]) -> String:
-    mut lines: List[String] := []
-    for row in rows:
-        lines.push(encode_row(row))
-    return lines.join(chr(10))
+    return encode_bytes(rows).to_string_utf8() catch ""
+
+# encode rows into utf-8 csv bytes.
+pub fn encode_bytes(rows: List[List[String]]) -> Bytes:
+    out := bytes.buffer()
+    for row, i in rows:
+        encode_row_bytes_to(out, row)
+        if i + 1 < rows.len():
+            out.write_byte(CSV_LF)
+    return out.bytes()
 
 # write rows to a csv file.
 pub fn save(path: String, rows: List[List[String]]) -> Int!:
@@ -85,17 +190,17 @@ pub fn save(path: String, rows: List[List[String]]) -> Int!:
 
 # write rows to a csv file using a custom write chunk size.
 pub fn save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!:
-    stream := FileStream(file_open_write(path)!)
-    writer := stream.buffered_writer_chunked(chunk_size)
-    mut total := 0
-    for row, i in rows:
-        line := encode_row(row)
-        total = total + writer.write(line)!
-        if i + 1 < rows.len():
-            total = total + writer.write(chr(10))!
-    total = total + writer.flush()!
-    stream.close()
-    return total
+    return save_bytes_chunked(path, rows, chunk_size)
+
+# write rows to a csv file as utf-8 bytes.
+pub fn save_bytes(path: String, rows: List[List[String]]) -> Int!:
+    return save_bytes_chunked(path, rows, CSV_FILE_CHUNK_SIZE)
+
+# write rows to a csv file as utf-8 bytes using a custom chunk size.
+pub fn save_bytes_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!:
+    data := encode_bytes(rows)
+    write_file_bytes(path, data)!
+    return data.len()
 
 # # Encode a single row into a CSV line
 pub fn encode_row(row: List[String]) -> String:

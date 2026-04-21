@@ -119,23 +119,12 @@ fn write_csv(path: &Path, rows: &[Vec<String>]) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-fn read_csv(
-    path: &Path,
-) -> Result<Vec<std::collections::HashMap<String, String>>, Box<dyn std::error::Error>> {
+fn read_csv(path: &Path) -> Result<Vec<Vec<String>>, Box<dyn std::error::Error>> {
     let mut reader = csv::Reader::from_path(path)?;
-    let headers: Vec<String> = reader
-        .headers()?
-        .iter()
-        .map(|field| field.to_string())
-        .collect();
     let mut rows = Vec::new();
     for result in reader.records() {
         let record = result?;
-        let mut row = std::collections::HashMap::with_capacity(headers.len());
-        for (idx, header) in headers.iter().enumerate() {
-            row.insert(header.clone(), record.get(idx).unwrap_or("").to_string());
-        }
-        rows.push(row);
+        rows.push(record.iter().map(|field| field.to_string()).collect());
     }
     Ok(rows)
 }
@@ -164,19 +153,16 @@ fn clean_path_parts(text: &str) -> i64 {
     stack.len() as i64
 }
 
-fn transform(
-    rows: &[std::collections::HashMap<String, String>],
-    cfg: PipelineConfig,
-) -> PipelineStats {
+fn transform(rows: &[Vec<String>], cfg: PipelineConfig) -> PipelineStats {
     let mut stats = PipelineStats::default();
     for row in rows {
-        let score = row["score"].parse::<i64>().unwrap_or(0);
-        let quota = row["quota"].parse::<i64>().unwrap_or(0);
-        let active = row["active"] == "true";
-        let parsed_url = Url::parse(&row["url"]).expect("parse url");
+        let score = row[4].parse::<i64>().unwrap_or(0);
+        let quota = row[5].parse::<i64>().unwrap_or(0);
+        let active = row[3] == "true";
+        let parsed_url = Url::parse(&row[6]).expect("parse url");
         stats.url_path_sum += parsed_url.path().len() as i64;
-        stats.path_part_sum += clean_path_parts(&row["path"]);
-        stats.note_hash_sum += fnv1a_string(&row["note"]);
+        stats.path_part_sum += clean_path_parts(&row[9]);
+        stats.note_hash_sum += fnv1a_string(&row[8]);
         if active {
             stats.active_count += 1;
         }

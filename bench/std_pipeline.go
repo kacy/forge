@@ -182,31 +182,18 @@ func parseCSVRow(line string) []string {
 	return fields
 }
 
-func readCSV(path string) ([]map[string]string, error) {
+func readCSV(path string) ([][]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) < 2 {
-		return nil, nil
-	}
-	headers := parseCSVRow(strings.TrimRight(lines[0], "\r"))
-	records := make([]map[string]string, 0, len(lines)-1)
+	records := make([][]string, 0, len(lines))
 	for _, line := range lines[1:] {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		row := parseCSVRow(strings.TrimRight(line, "\r"))
-		record := make(map[string]string, len(headers))
-		for i, header := range headers {
-			if i < len(row) {
-				record[header] = row[i]
-			} else {
-				record[header] = ""
-			}
-		}
-		records = append(records, record)
+		records = append(records, parseCSVRow(strings.TrimRight(line, "\r")))
 	}
 	return records, nil
 }
@@ -220,19 +207,19 @@ func fnv1aString(text string) int {
 	return int(h)
 }
 
-func transform(rows []map[string]string, cfg pipelineConfig) pipelineStats {
+func transform(rows [][]string, cfg pipelineConfig) pipelineStats {
 	var stats pipelineStats
 	for _, row := range rows {
-		score, _ := strconv.Atoi(row["score"])
-		quota, _ := strconv.Atoi(row["quota"])
-		active := row["active"] == "true"
-		parsedURL, _ := url.Parse(row["url"])
-		cleanPath := filepath.ToSlash(filepath.Clean(row["path"]))
+		score, _ := strconv.Atoi(row[4])
+		quota, _ := strconv.Atoi(row[5])
+		active := row[3] == "true"
+		parsedURL, _ := url.Parse(row[6])
+		cleanPath := filepath.ToSlash(filepath.Clean(row[9]))
 		stats.urlPathSum += len(parsedURL.Path)
 		if cleanPath != "." {
 			stats.pathPartSum += len(strings.Split(cleanPath, "/"))
 		}
-		stats.noteHashSum += fnv1aString(row["note"])
+		stats.noteHashSum += fnv1aString(row[8])
 		if active {
 			stats.activeCount++
 		}

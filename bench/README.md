@@ -209,18 +209,18 @@ latest measured results on this machine, using the median of 5 trials:
 
 | records | go total | rust total | forge total | forge/go | forge/rust |
 |---|---:|---:|---:|---:|---:|
-| `50000` | `464 ms` | `300 ms` | `12682 ms` | `27.33x` | `42.27x` |
+| `50000` | `390 ms` | `212 ms` | `2023 ms` | `5.19x` | `9.54x` |
 
 phase breakdown from the same run:
 
 | phase | go | rust | forge |
 |---|---:|---:|---:|
 | config | `0 ms` | `0 ms` | `0 ms` |
-| csv write | `202 ms` | `94 ms` | `1755 ms` |
-| csv read | `158 ms` | `143 ms` | `8687 ms` |
-| transform | `69 ms` | `59 ms` | `1245 ms` |
+| csv write | `204 ms` | `96 ms` | `493 ms` |
+| csv read | `116 ms` | `72 ms` | `445 ms` |
+| transform | `58 ms` | `43 ms` | `1097 ms` |
 | json | `0 ms` | `0 ms` | `0 ms` |
-| gzip + hash | `0 ms` | `0 ms` | `1 ms` |
+| gzip + hash | `0 ms` | `0 ms` | `0 ms` |
 | fs | `0 ms` | `0 ms` | `0 ms` |
 
 all three implementations report the same checksum:
@@ -236,6 +236,11 @@ binary size from the same build:
 | forge pipeline | `5.3M` | `1.4M` |
 | go pipeline | `3.5M` | `2.3M` |
 | rust pipeline | `1.4M` | `1.1M` |
+
+the first cut of this benchmark had forge at `12682 ms`. moving csv onto the
+bytes path and avoiding per-row maps brought that down to `2023 ms`. the
+remaining gap is now mostly in the transform phase: repeated string parsing,
+url parsing, path cleanup, and string hashing.
 
 three caveats matter when reading this benchmark:
 
