@@ -19,8 +19,8 @@
 fn pack_date(year: Int, month: Int, day: Int) -> Int:
     return year * 10000 + month * 100 + day
 
-## create a packed date value from year, month, and day.
-## the result compares naturally as an integer.
+# # create a packed date value from year, month, and day.
+# # the result compares naturally as an integer.
 pub fn date(year: Int, month: Int, day: Int) -> Int:
     return pack_date(year, month, day)
 
@@ -356,3 +356,39 @@ pub fn to_timestamp(d: Int) -> Int:
     # break multiply to avoid large constant: 86400000 = 86400 * 1000
     secs := days * 86400
     return secs * 1000
+
+test "datetime packs parses and formats dates":
+    d := date(2026, 3, 9)
+
+    assert_eq(year(d), 2026)
+    assert_eq(month(d), 3)
+    assert_eq(day(d), 9)
+    assert_eq(format_date(d), "2026-03-09")
+    assert_eq(format_long(d), "March 9, 2026")
+    assert_eq(parse_date("2026-03-09"), d)
+    assert_eq(parse_date("2026-13-09"), 0)
+
+test "datetime calendar helpers handle leap years":
+    assert(is_leap_year(2024))
+    assert(not is_leap_year(1900))
+    assert(is_leap_year(2000))
+    assert_eq(days_in_month(2024, 2), 29)
+    assert_eq(days_in_month(2025, 2), 28)
+    assert_eq(day_of_year(date(2024, 3, 1)), 61)
+
+test "datetime date arithmetic crosses boundaries":
+    assert_eq(add_days(date(2026, 3, 31), 1), date(2026, 4, 1))
+    assert_eq(add_days(date(2026, 3, 1), 0 - 1), date(2026, 2, 28))
+    assert_eq(add_months(date(2024, 1, 31), 1), date(2024, 2, 29))
+    assert_eq(add_years(date(2024, 2, 29), 1), date(2025, 2, 28))
+    assert_eq(diff_days(date(2026, 3, 1), date(2026, 3, 10)), 9)
+
+test "datetime comparison and epoch conversion are stable":
+    a := date(2026, 3, 1)
+    b := date(2026, 3, 10)
+
+    assert_eq(min_date(a, b), a)
+    assert_eq(max_date(a, b), b)
+    assert(in_range(date(2026, 3, 5), a, b))
+    assert_eq(from_timestamp(0), date(1970, 1, 1))
+    assert_eq(to_timestamp(date(1970, 1, 2)), 86400000)

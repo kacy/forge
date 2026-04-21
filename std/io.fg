@@ -3304,3 +3304,75 @@ pub fn prompt() -> String:
 pub fn prompt_with(msg: String) -> String:
     print(msg)
     return input()
+
+test "io string readers and buffers keep offsets":
+    reader := string_reader("abcdef")
+    out := string_buffer()
+
+    assert_eq(reader.read(2)!, "ab")
+    assert_eq(reader.read_all_chunked(2)!, "cdef")
+    assert(out.is_empty())
+    assert_eq(out.write("hi")!, 2)
+    assert_eq(out.write_line("there")!, 6)
+    assert_eq(out.string(), "hithere" + chr(10))
+    assert_eq(out.len(), 8)
+    out.clear()
+    assert(out.is_empty())
+
+test "io copies and limits string streams":
+    reader := string_reader("abcdef")
+    out := string_buffer()
+    limited := string_buffer()
+    short_reader := string_reader("hi")
+    short_out := string_buffer()
+    failed := copy_n(short_reader, short_out, 3)
+
+    assert_eq(copy_chunked(reader, out, 2)!, 6)
+    assert_eq(out.string(), "abcdef")
+    assert_eq(write_n(limited, "forge", 3)!, 3)
+    assert_eq(limited.string(), "for")
+    assert(failed.is_err)
+
+test "io byte readers support exact reads":
+    reader := bytes_reader(bytes.from_string_utf8("abcdef"))
+
+    assert_eq(reader.read_bytes(2)!.to_string_utf8()!, "ab")
+    assert_eq(read_exact_bytes(reader, 3)!.to_string_utf8()!, "cde")
+    assert(reader.read_exact_bytes(2).is_err)
+
+test "io buffered string readers split lines and separators":
+    reader := string_reader("alpha" + chr(10) + "beta" + chr(13) + chr(10) + "gamma")
+    buffered := reader.buffered_chunked(3)
+
+    assert_eq(buffered.read_line()!, "alpha")
+    assert_eq(buffered.read_line()!, "beta")
+    assert_eq(buffered.read_until("ma")!, "gam")
+
+test "io buffered string writers flush by chunk size":
+    out := string_buffer()
+    writer := out.buffered_chunked(5)
+
+    assert_eq(writer.write("hi")!, 2)
+    assert_eq(out.string(), "")
+    assert_eq(writer.write("there")!, 5)
+    assert_eq(out.string(), "hithere")
+    assert_eq(writer.write("!")!, 1)
+    assert_eq(out.string(), "hithere")
+    assert_eq(writer.flush()!, 1)
+    assert_eq(out.string(), "hithere!")
+
+test "io buffered byte streams handle separators and flushes":
+    reader := bytes_reader(bytes.from_string_utf8("a,b,c")).buffered_chunked(2)
+    out := bytes.buffer()
+    writer := out.buffered_chunked(4)
+
+    assert_eq(reader.read_until_bytes(bytes.from_string_utf8(","))!.to_string_utf8()!, "a")
+    assert_eq(reader.read_until_bytes_including(bytes.from_string_utf8(","))!.to_string_utf8()!, "b,")
+    assert_eq(reader.read_all_bytes()!.to_string_utf8()!, "c")
+    assert_eq(writer.write_bytes(bytes.from_string_utf8("ab"))!, 2)
+    assert_eq(out.bytes().len(), 0)
+    assert_eq(writer.write_all_bytes(bytes.from_string_utf8("cd"))!, 2)
+    assert_eq(out.bytes().to_string_utf8()!, "abcd")
+    assert_eq(writer.write_bytes(bytes.from_string_utf8("e"))!, 1)
+    assert_eq(writer.flush()!, 1)
+    assert_eq(out.bytes().to_string_utf8()!, "abcde")

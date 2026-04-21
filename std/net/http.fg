@@ -1222,3 +1222,52 @@ pub fn post_json(host: String, port: Int, url_path: String, handle: Int) -> Http
 # issues a simple post request with a text body.
 pub fn post_text(host: String, port: Int, url_path: String, text: String) -> HttpResponse!:
     return post_request(host, port, url_path).text_body(text).send()
+
+test "http parses packed requests":
+    crlf := chr(13) + chr(10)
+    raw := "POST /items/42?draft=1 HTTP/1.1" + crlf + "Host: example.test" + crlf + "Content-Length: 5" + crlf + crlf + "hello"
+    req := parse_request(raw)
+
+    assert_eq(method(req), "POST")
+    assert_eq(path(req), "/items/42")
+    assert_eq(query(req), "draft=1")
+    assert_eq(version(req), "HTTP/1.1")
+    assert_eq(get_header(req, "host"), "example.test")
+    assert_eq(get_query_param(req, "draft"), "1")
+    assert_eq(body(req), "hello")
+
+test "http parses bytes requests and route helpers":
+    crlf := chr(13) + chr(10)
+    raw := "GET /users/7?tab=profile HTTP/1.1" + crlf + "Host: example.test" + crlf + crlf
+    reader := bytes.from_string_utf8(raw)
+    req := read_request_buffered_bytes(io.bytes_reader(reader).buffered_chunked(4))!
+
+    assert_eq(req.method()!, "GET")
+    assert_eq(req.path()!, "/users/7")
+    assert_eq(req.header("host")!, "example.test")
+    assert_eq(req.query_param("tab")!, "profile")
+    assert(get_route(req, "/users/:id")!)
+    assert_eq(route_param(req, "/users/:id", "id")!, "7")
+
+test "http builds and parses responses":
+    resp := text(201, "created").header("X-Test", "yes")
+    payload := resp.to_string()!
+    parsed := parse_response(payload)!
+
+    assert(payload.contains("HTTP/1.1 201 Created"))
+    assert(payload.contains("Content-Type: text/plain"))
+    assert(payload.contains("X-Test: yes"))
+    assert(payload.contains("Content-Length: 7"))
+    assert_eq(parsed.status_code(), 201)
+    assert(parsed.is_success())
+    assert_eq(parsed.header_value("content-type"), "text/plain")
+    assert_eq(parsed.body_text()!, "created")
+
+test "http client request builder renders headers and bodies":
+    payload := post_request("example.test", 80, "/submit").query_param("q", "forge lang").body_text("hi").to_bytes()!.to_string_utf8()!
+
+    assert(payload.starts_with("POST /submit?q=forge%20lang HTTP/1.1"))
+    assert(payload.contains("Host: example.test"))
+    assert(payload.contains("Connection: close"))
+    assert(payload.contains("Content-Length: 2"))
+    assert(payload.ends_with(chr(13) + chr(10) + chr(13) + chr(10) + "hi"))

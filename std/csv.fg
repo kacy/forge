@@ -1,20 +1,20 @@
-## std.csv — CSV parsing and encoding
-##
-## Functions:
-##   parse(text: String) -> List[List[String]]
-##   parse_file(path: String) -> List[List[String]]!
-##   parse_with_headers(text: String) -> List[Map[String, String]]
-##   parse_with_headers_file(path: String) -> List[Map[String, String]]!
-##   encode(rows: List[List[String]]) -> String
-##   save(path: String, rows: List[List[String]]) -> Int!
-##   save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!
-##   encode_row(row: List[String]) -> String
+# # std.csv — CSV parsing and encoding
+# #
+# # Functions:
+# #   parse(text: String) -> List[List[String]]
+# #   parse_file(path: String) -> List[List[String]]!
+# #   parse_with_headers(text: String) -> List[Map[String, String]]
+# #   parse_with_headers_file(path: String) -> List[Map[String, String]]!
+# #   encode(rows: List[List[String]]) -> String
+# #   save(path: String, rows: List[List[String]]) -> Int!
+# #   save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> Int!
+# #   encode_row(row: List[String]) -> String
 
 from std.io import FileStream
 
 CSV_FILE_CHUNK_SIZE := 4096
 
-## Parse CSV text into a list of rows, each row a list of fields
+# # Parse CSV text into a list of rows, each row a list of fields
 pub fn parse(text: String) -> List[List[String]]:
     mut rows: List[List[String]] := []
     lines := text.split(chr(10))
@@ -42,8 +42,8 @@ pub fn parse_file_chunked(path: String, chunk_size: Int) -> List[List[String]]!:
     stream.close()
     return rows
 
-## Parse CSV text with the first row as headers.
-## Returns a list of maps, one per data row.
+# # Parse CSV text with the first row as headers.
+# # Returns a list of maps, one per data row.
 pub fn parse_with_headers(text: String) -> List[Map[String, String]]:
     return rows_with_headers(parse(text))
 
@@ -72,7 +72,7 @@ fn rows_with_headers(all_rows: List[List[String]]) -> List[Map[String, String]]:
         result.push(record)
     return result
 
-## Encode a list of rows into CSV text
+# # Encode a list of rows into CSV text
 pub fn encode(rows: List[List[String]]) -> String:
     mut lines: List[String] := []
     for row in rows:
@@ -97,7 +97,7 @@ pub fn save_chunked(path: String, rows: List[List[String]], chunk_size: Int) -> 
     stream.close()
     return total
 
-## Encode a single row into a CSV line
+# # Encode a single row into a CSV line
 pub fn encode_row(row: List[String]) -> String:
     mut fields: List[String] := []
     for field in row:
@@ -138,3 +138,28 @@ fn parse_row(line: String) -> List[String]:
         i = i + 1
     fields.push(current.trim())
     return fields
+
+test "csv parses rows and headers":
+    rows := parse("name,score" + chr(10) + "ada,10" + chr(10) + "grace,20")
+    records := parse_with_headers("name,score" + chr(10) + "ada,10" + chr(10) + "grace,20")
+
+    assert_eq(rows.len(), 3)
+    assert_eq(rows[0][0], "name")
+    assert_eq(rows[1][1], "10")
+    assert_eq(records.len(), 2)
+    assert_eq(records[0]["name"], "ada")
+    assert_eq(records[1]["score"], "20")
+
+test "csv handles quoted fields":
+    quote := chr(34)
+    row := parse(quote + "ada, lovelace" + quote + "," + quote + "quote " + quote + quote + "mark" + quote + quote + quote)
+
+    assert_eq(row[0][0], "ada, lovelace")
+    assert_eq(row[0][1], "quote " + quote + "mark" + quote)
+
+test "csv encodes rows with escaping":
+    quote := chr(34)
+    encoded := encode_row(["ada, lovelace", "quote " + quote + "mark" + quote])
+
+    assert_eq(encoded, quote + "ada, lovelace" + quote + "," + quote + "quote " + quote + quote + "mark" + quote + quote + quote)
+    assert_eq(encode([["name", "score"], ["ada", "10"]]), "name,score" + chr(10) + "ada,10")

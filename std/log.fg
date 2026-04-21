@@ -120,3 +120,28 @@ pub fn error_kv(msg: String, fields: String):
 
 fn log_error_kv(msg: String, fields: String):
     log_kv("ERROR", msg, fields)
+
+test "log levels map to severity numbers":
+    assert_eq(level_num("DEBUG"), 0)
+    assert_eq(level_num("INFO"), 1)
+    assert_eq(level_num("WARN"), 2)
+    assert_eq(level_num("ERROR"), 3)
+    assert_eq(level_num("custom"), 0)
+
+test "log file sinks respect minimum level":
+    path := "/tmp/forge-std-log-" + time().to_string() + ".txt"
+    clear_file()
+    set_level(2)
+    set_file(path)
+
+    debug("hidden")
+    warn("visible")
+    error_kv("failed", "code=1")
+    clear_file()
+    set_level(0)
+
+    text := io.read_file_text(path)!
+    assert(not text.contains("[DEBUG] hidden"))
+    assert(text.contains("[WARN] visible"))
+    assert(text.contains("[ERROR] failed code=1"))
+    remove_file(path)

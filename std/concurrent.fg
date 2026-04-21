@@ -217,3 +217,29 @@ impl BlockingError:
 
     fn is_failed() -> Bool:
         return self.kind == 3
+
+test "concurrent contexts can be cancelled":
+    parent := background()
+    pair := with_cancel(parent)
+    ctx := pair.0
+    token := pair.1
+
+    assert(not parent.is_cancelled())
+    assert(not ctx.is_cancelled())
+    token.cancel()
+    assert(ctx.is_cancelled())
+    assert_eq(ctx.error_code(), 1)
+
+test "concurrent blocking errors classify failures":
+    cancelled := blocking_cancelled()
+    deadline := blocking_deadline_exceeded()
+    failed := blocking_failed("boom")
+
+    assert(cancelled.is_cancelled())
+    assert(not cancelled.is_failed())
+    assert(deadline.is_deadline_exceeded())
+    assert_eq(deadline.message, "deadline exceeded")
+    assert(failed.is_failed())
+    assert_eq(failed.message, "boom")
+    assert(blocking_from_wait(WaitError.Cancelled).is_cancelled())
+    assert(blocking_from_wait(WaitError.DeadlineExceeded).is_deadline_exceeded())

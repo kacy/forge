@@ -19,3 +19,8 @@ pub fn crc32(data: Bytes) -> Int:
             i = i + 1
         pos = pos + 1
     return bits.mask32(bits.invert(crc))
+
+test "crc32 matches common vectors":
+    assert_eq(crc32(bytes_from_string_utf8("")), 0)
+    assert_eq(crc32(bytes_from_string_utf8("hello")), 907060870)
+    assert_eq(crc32(bytes_from_string_utf8("123456789")), 3421780262)

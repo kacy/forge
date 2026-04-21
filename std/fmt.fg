@@ -114,3 +114,23 @@ pub fn format2(pattern: String, a: String, b: String) -> String:
 # fill the first three placeholders in a pattern.
 pub fn format3(pattern: String, a: String, b: String, c: String) -> String:
     return format_values(pattern, [a, b, c])
+
+test "integer formatters render common bases":
+    assert_eq(hex(255), "ff")
+    assert_eq(hex(-16), "-10")
+    assert_eq(oct(64), "100")
+    assert_eq(bin(5), "101")
+
+test "format fills placeholders in order":
+    slot := chr(123) + chr(125)
+    assert_eq(format("coords: " + slot + ", " + slot, ["3", "4"]), "coords: 3, 4")
+    assert_eq(format1("answer: " + slot, "42"), "answer: 42")
+    assert_eq(format2("user " + slot + " score " + slot, "forge", "7"), "user forge score 7")
+    assert_eq(format3(slot + " " + slot + " " + slot, "a", "b", "c"), "a b c")
+
+test "format handles escaped and missing placeholders":
+    slot := chr(123) + chr(125)
+    left_escape := chr(123) + chr(123)
+    right_escape := chr(125) + chr(125)
+    assert_eq(format(left_escape + slot + right_escape, ["x"]), chr(123) + "x" + chr(125))
+    assert_eq(format("left " + slot, []), "left " + slot)

@@ -566,3 +566,35 @@ pub fn has(handle: Int, key: String) -> Bool:
 
 fn toml_has(handle: Int, key: String) -> Bool:
     return table_lookup(handle, key) >= 0
+
+test "toml parses scalar values":
+    doc := "title = " + chr(34) + "forge" + chr(34) + chr(10) + "version = 3" + chr(10) + "pi = 3.14" + chr(10) + "enabled = true"
+    root := parse(doc)
+
+    assert_eq(type_of(root), "table")
+    assert_eq(get_string(root, "title"), "forge")
+    assert_eq(get_int(root, "version"), 3)
+    assert(get_float(root, "pi") > 3.1)
+    assert(get_bool(root, "enabled"))
+    assert_eq(get_string_or(root, "missing", "fallback"), "fallback")
+
+test "toml parses tables and arrays":
+    doc := "[server]" + chr(10) + "host = " + chr(34) + "localhost" + chr(34) + chr(10) + "ports = [8000, 9000]"
+    root := parse(doc)
+    server := get_table(root, "server")
+    ports := get_array(server, "ports")
+
+    assert_eq(type_of(server), "table")
+    assert_eq(get_string(server, "host"), "localhost")
+    assert_eq(array_len(ports), 2)
+    assert_eq(type_of(array_get(ports, 0)), "int")
+    assert_eq(keys(root).join(","), "server")
+
+test "toml accessors handle missing values":
+    root := parse("title = " + chr(34) + "forge" + chr(34))
+
+    assert(has(root, "title"))
+    assert(not has(root, "missing"))
+    assert_eq(get_table(root, "missing"), 0 - 1)
+    assert_eq(get_array(root, "missing"), 0 - 1)
+    assert_eq(array_get(get_array(root, "missing"), 0), 0 - 1)
