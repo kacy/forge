@@ -718,3 +718,11 @@ test "collection ordering and search helpers keep stable results":
     assert_eq(count_where(items, fn(item: CollectionTestItem) => item.team == "blue"), 2)
     assert_eq(min_by(items, fn(item: CollectionTestItem) => item.score)!.name, "bob")
     assert_eq(max_by(items, fn(item: CollectionTestItem) => item.score)!.name, "alice")
+
+test "collection string pipeline helpers compose":
+    tokens := " hello there forge ".split(" ")
+    words := filter_strings(tokens, fn(part: String) => part.len() > 0)
+    loud_words := map_strings(words, fn(part: String) => part.to_upper())
+    long_words := filter_strings(loud_words, fn(part: String) => part.len() >= 5)
+
+    assert_eq(long_words.join(","), "HELLO,THERE,FORGE")
