@@ -5,6 +5,8 @@
 
 import std.json as json
 import std.toml as toml
+import std.fs as fs
+import std.os.path as path
 
 # # config values flattened by dotted key.
 pub struct Config:
@@ -372,3 +374,67 @@ test "config flattens json and toml text":
     assert_eq(get_int_or(json_cfg, "server.port", 0), 8080)
     assert_eq(get(toml_cfg, "server.host"), "localhost")
     assert_eq(get_bool_or(toml_cfg, "server.debug", false), true)
+
+test "config loads files and reports missing values":
+    nl := chr(10)
+    q := chr(34)
+    lb := chr(123)
+    rb := chr(125)
+
+    mut toml_doc := "name = " + q + "forge" + q + nl
+    toml_doc = toml_doc + "debug = false" + nl
+    toml_doc = toml_doc + "[server]" + nl
+    toml_doc = toml_doc + "host = " + q + "localhost" + q + nl
+    toml_doc = toml_doc + "port = 8080" + nl
+    toml_doc = toml_doc + "ratio = 0.75" + nl
+    toml_doc = toml_doc + "empty = " + q + q + nl
+    toml_doc = toml_doc + "tags = [" + q + "api" + q + "]" + nl
+    toml_doc = toml_doc + "[database]" + nl
+    toml_doc = toml_doc + "url = " + q + "sqlite://local" + q + nl
+
+    toml_cfg := from_toml(toml_doc)!
+    assert_eq(get_string(toml_cfg, "server.host"), "localhost")
+    assert_eq(get_int_or(toml_cfg, "server.port", 0), 8080)
+    assert_eq(get_bool_or(toml_cfg, "debug", true), false)
+    assert_eq(get_float_or(toml_cfg, "server.ratio", 0.0).to_string(), "0.75")
+    assert(has(toml_cfg, "server.empty"))
+    assert(not has(toml_cfg, "server.tags"))
+    assert_eq(keys(toml_cfg).join(","), "database.url,debug,name,server.empty,server.host,server.port,server.ratio")
+
+    mut json_doc := lb + q + "name" + q + ":" + q + "forge-json" + q
+    json_doc = json_doc + "," + q + "server" + q + ":" + lb
+    json_doc = json_doc + q + "host" + q + ":" + q + "0.0.0.0" + q
+    json_doc = json_doc + "," + q + "port" + q + ":9090"
+    json_doc = json_doc + "," + q + "tls" + q + ":false" + rb
+    json_doc = json_doc + "," + q + "items" + q + ":[1,2]" + rb
+    json_cfg := from_json(json_doc)!
+    assert_eq(get_string(json_cfg, "name"), "forge-json")
+    assert_eq(get_string(json_cfg, "server.host"), "0.0.0.0")
+    assert_eq(get_int_or(json_cfg, "server.port", 0), 9090)
+    assert_eq(get_bool_or(json_cfg, "server.tls", true), false)
+    assert(not has(json_cfg, "items"))
+
+    mut override_values: Map[String, String] := {}
+    override_values.insert("server.port", "7070")
+    override_values.insert("feature.enabled", "yes")
+    overrides := from_map(override_values)
+    override_values.insert("feature.enabled", "no")
+    merged := merge(toml_cfg, overrides)
+    assert_eq(get_int_or(merged, "server.port", 0), 7070)
+    assert_eq(get_bool_or(merged, "feature.enabled", false), true)
+    assert_eq(get_or(merged, "missing", "fallback"), "fallback")
+    assert_eq(require(merged, "database.url")!, "sqlite://local")
+    missing := require(merged, "missing")
+    assert(missing.is_err)
+    assert_eq(missing.err.message, "missing config key: missing")
+
+    root := fs.make_temp_dir("forge-config-")!
+    toml_path := path.join(root, "app.toml")
+    json_path := path.join(root, "app.json")
+    assert(fs.write(toml_path, toml_doc)!)
+    assert(fs.write(json_path, json_doc)!)
+    assert_eq(get_string(from_toml_file(toml_path)!, "server.host"), "localhost")
+    assert_eq(get_string(from_json_file(json_path)!, "server.host"), "0.0.0.0")
+    assert(from_json("not json").is_err)
+    assert(from_toml_file(path.join(root, "missing.toml")).is_err)
+    assert(fs.remove_tree(root))
