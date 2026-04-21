@@ -149,17 +149,17 @@ candidate index lists for common region/active filters, which is closer to how
 an actual in-memory service would avoid rescanning the full catalog on every
 request.
 
-latest measured results on this machine, using the median of 3 trials:
+latest measured results on this machine, using the median of 7 trials:
 
 | iterations | go total | forge total | ratio | go batch | forge batch |
 |---|---:|---:|---:|---:|---:|
-| `200000` | `641 ms` | `151 ms` | `0.24x` | `615 ms` | `141 ms` |
+| `1000000` | `3128 ms` | `851 ms` | `0.27x` | `2993 ms` | `802 ms` |
 
 with the optional rust workload binary built:
 
 | iterations | rust total | forge/rust | rust batch | forge/rust batch |
 |---|---:|---:|---:|---:|
-| `200000` | `130 ms` | `1.16x` | `115 ms` | `1.23x` |
+| `1000000` | `689 ms` | `1.24x` | `616 ms` | `1.30x` |
 
 the current forge workload uses derived json struct decoding for the batch
 request. six-field flat structs now use a generated one-pass decode helper,
@@ -167,6 +167,19 @@ while other wider structs still use one shallow scalar scan before generated
 struct construction. the rust workload uses a tiny standalone json field
 scanner, so treat it as a lower-bound runtime comparison rather than a
 serde-style library comparison.
+
+binary size from the same build:
+
+| binary | file size | text segment |
+|---|---:|---:|
+| forge workload | `5.2M` | `1.4M` |
+| go workload | `2.7M` | `1.7M` |
+| rust workload | `3.9M` | `366K` |
+
+the forge workload binary is larger on disk than the go/rust binaries today,
+but its executable text segment is smaller than go's in this build. that points
+at debug/symbol/linker overhead as a likely size target before reading too much
+into the file-size number alone.
 
 this is the better comparison point today if you want to isolate runtime,
 language, and service-logic costs from the current long-running HTTP server
