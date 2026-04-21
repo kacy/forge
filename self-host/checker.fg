@@ -31,6 +31,9 @@ mut module_export_entries: List[String] := []
 # Wildcard import tracking - which modules have been wildcard imported
 # This enables from X import * functionality
 mut wildcard_imports: List[String] := []
+mut generic_named_import_entries: List[String] := []
+mut generic_wildcard_import_entries: List[String] := []
+mut current_checker_module_path: String := ""
 mut generic_inference_subst: Map[String, Int] := {}
 
 # Get position from AST node
@@ -103,13 +106,42 @@ pub fn initialize_checker(file_path: String):
     module_aliases = {}
     module_export_entries = []
     wildcard_imports = []
+    generic_named_import_entries = []
+    generic_wildcard_import_entries = []
+    current_checker_module_path = ""
     generic_inference_subst = {}
     current_scope = create_scope(-1)
     register_builtin_types()
 
+pub fn set_checker_module_path(module_path: String):
+    current_checker_module_path = module_path
+
 # Register an import alias for module namespace resolution
 pub fn register_import_alias(alias: String, module_path: String):
     module_aliases.insert(alias, module_path)
+
+fn module_symbol_prefix(module_path: String) -> String:
+    mut prefix := ""
+    for ch in module_path:
+        if ch == ".":
+            prefix = prefix + "_"
+        else:
+            prefix = prefix + ch
+    return prefix + "_"
+
+fn module_generic_target_name(module_path: String, name: String) -> String:
+    if module_path.len() == 0:
+        return name
+    return module_symbol_prefix(module_path) + name
+
+fn clean_import_part(part: String) -> String:
+    mut start := 0
+    mut end := part.len()
+    while start < end and part[start] == ",":
+        start = start + 1
+    while end > start and part[end - 1] == ",":
+        end = end - 1
+    return part.substring(start, end)
 
 fn module_default_alias(module_path: String) -> String:
     mut last_dot := 0 - 1
@@ -192,6 +224,14 @@ pub fn process_import_aliases(root_idx: Int):
                 if parts.len() > 1:
                     if parts[1] == "*":
                         wildcard_imports.push(mod_path)
+                        generic_wildcard_import_entries.push(current_checker_module_path + chr(9) + mod_path)
+                    else:
+                        mut pi := 1
+                        while pi < parts.len():
+                            imported_name := clean_import_part(parts[pi])
+                            if imported_name.len() > 0:
+                                generic_named_import_entries.push(current_checker_module_path + chr(9) + imported_name + chr(9) + mod_path)
+                            pi = pi + 1
 
 # Collect all pub exports from a module.
 pub fn collect_module_exports(module_path: String, root_idx: Int):
@@ -871,6 +911,8 @@ fn register_function_declaration(node_idx: Int, node: Node):
     fn_tid := resolve_function_signature(node)
     if fn_tid >= 0:
         define_binding(current_scope, name, fn_tid, false)
+        if current_checker_module_path.len() > 0:
+            define_binding(current_scope, module_generic_target_name(current_checker_module_path, name), fn_tid, false)
 
 fn resolve_function_signature(node: Node) -> Int:
     mut params: List[Int] := []
@@ -1094,19 +1136,44 @@ fn collect_generic_parameter_names(node: Node) -> List[String]:
     return params
 
 fn register_generic_declaration(name: String, node_idx: Int):
-    if generic_declaration_map.contains_key(name) == false:
+    key := module_generic_target_name(current_checker_module_path, name)
+    if generic_declaration_map.contains_key(key) == false:
+        generic_declaration_names.push(key)
+    generic_declaration_map.insert(key, node_idx)
+    if current_checker_module_path.len() > 0 and generic_declaration_map.contains_key(name) == false:
         generic_declaration_names.push(name)
-    generic_declaration_map.insert(name, node_idx)
+        generic_declaration_map.insert(name, node_idx)
+
+fn resolve_generic_declaration_key(name: String) -> String:
+    if current_checker_module_path.len() > 0:
+        current_key := module_generic_target_name(current_checker_module_path, name)
+        if generic_declaration_map.contains_key(current_key):
+            return current_key
+    if generic_declaration_map.contains_key(name):
+        return name
+    for entry in generic_named_import_entries:
+        parts := entry.split(chr(9))
+        if parts.len() >= 3:
+            if parts[0] == current_checker_module_path and parts[1] == name:
+                imported_key := module_generic_target_name(parts[2], name)
+                if generic_declaration_map.contains_key(imported_key):
+                    return imported_key
+    for entry in generic_wildcard_import_entries:
+        parts := entry.split(chr(9))
+        if parts.len() >= 2:
+            if parts[0] == current_checker_module_path:
+                imported_key := module_generic_target_name(parts[1], name)
+                if generic_declaration_map.contains_key(imported_key):
+                    return imported_key
+    return ""
 
 fn has_generic_declaration(name: String) -> Bool:
-    for generic_name in generic_declaration_names:
-        if strings_equal(generic_name, name):
-            return true
-    return false
+    return resolve_generic_declaration_key(name).len() > 0
 
 fn get_generic_declaration_index(name: String) -> Int:
-    if generic_declaration_map.contains_key(name):
-        return generic_declaration_map[name]
+    key := resolve_generic_declaration_key(name)
+    if key.len() > 0:
+        return generic_declaration_map[key]
     return - 1
 
 fn register_interface_declaration_name(name: String):
@@ -2652,9 +2719,18 @@ fn check_method_call(node: Node, scope_id: Int) -> Int:
         if module_aliases.contains_key(recv_name):
             module_path := module_aliases[recv_name]
             qualified_name := module_import_target_name(module_path, method_name)
-            mut callee_type := lookup_binding(scope_id, qualified_name)
+            module_name := module_generic_target_name(module_path, method_name)
+            mut callee_type := lookup_binding(scope_id, module_name)
+            if callee_type < 0:
+                callee_type = lookup_binding(scope_id, qualified_name)
             if callee_type < 0:
                 callee_type = lookup_binding(scope_id, method_name)
+            if callee_type < 0:
+                generic_name := module_generic_target_name(module_path, method_name)
+                if has_generic_declaration(generic_name):
+                    return check_generic_function_call(generic_name, arg_indices, scope_id)
+                if has_generic_declaration(method_name):
+                    return check_generic_function_call(method_name, arg_indices, scope_id)
             if callee_type < 0:
                 report_error("E201", "undefined function: " + recv_name + "." + method_name)
                 return TID_ERR
@@ -3190,7 +3266,11 @@ fn check_field_access_expression(node: Node, scope_id: Int) -> Int:
         if module_aliases.contains_key(obj_name):
             module_path := module_aliases[obj_name]
             qualified_name := module_import_target_name(module_path, field_name)
-            mut func_tid := lookup_binding(scope_id, qualified_name)
+            module_name := module_generic_target_name(module_path, field_name)
+            mut func_tid := lookup_binding(scope_id, module_name)
+            if func_tid >= 0:
+                return func_tid
+            func_tid = lookup_binding(scope_id, qualified_name)
             if func_tid >= 0:
                 return func_tid
             func_tid = lookup_binding(scope_id, field_name)

@@ -100,12 +100,6 @@ fn transform_row(stats: PipelineStats, row: csv.Row, cfg: BenchConfig, index: In
         quota_sum = quota_sum + quota
     return PipelineStats(active_count, selected_count, score_sum, quota_sum, stats.url_path_sum + url.path_len(row.get(6)), stats.path_part_sum + path.clean_part_count(row.get(9)), stats.note_hash_sum + hash.fnv1a(row.bytes(8)))
 
-fn transform_row_views(rows: List[csv.Row], cfg: BenchConfig) -> PipelineStats:
-    mut stats := empty_stats()
-    for row, i in rows:
-        stats = transform_row(stats, row, cfg, i)
-    return stats
-
 fn write_report(stats: PipelineStats, records: Int) -> Bytes:
     mut report := chr(123) + chr(34) + "records" + chr(34) + ":" + records.to_string()
     report = report + "," + chr(34) + "active" + chr(34) + ":" + stats.active_count.to_string()
@@ -156,11 +150,10 @@ fn main() -> Int!:
 
     start = time()
     csv_data := fs.read_bytes(csv_path)!
-    row_views := csv.rows_bytes(csv_data)
     csv_read_ms := time() - start
 
     start = time()
-    stats := transform_row_views(row_views, cfg)
+    stats := csv.fold_bytes(csv_data, empty_stats(), fn(acc: PipelineStats, row: csv.Row, index: Int) => transform_row(acc, row, cfg, index))
     transform_ms := time() - start
 
     start = time()

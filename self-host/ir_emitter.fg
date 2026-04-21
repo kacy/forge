@@ -2681,13 +2681,19 @@ fn ir_emit_method_call(idx: Int) -> Int:
 
     alias_fname := ir_resolve_module_alias_method_call_name(idx)
     if alias_fname.len() > 0:
+        mut call_name := alias_fname
+        if ir_is_generic_function_name(call_name):
+            mut generic_ret_type := ir_checked_type(idx)
+            if generic_ret_type.len() == 0:
+                generic_ret_type = ir_infer_type(idx)
+            call_name = ir_queue_generic_specialization(call_name, ir_infer_generic_concrete_types(call_name, node), generic_ret_type)
         arg_regs := ir_collect_call_arg_regs(node, 1)
         r := ir_reg()
-        uses_result_abi := ir_callee_uses_result_abi(ResolvedCallee(alias_fname, true), idx)
+        uses_result_abi := ir_callee_uses_result_abi(ResolvedCallee(call_name, true), idx)
         ret_type := ir_call_retkind(idx, uses_result_abi)
-        ir_emit_call_text(r, alias_fname, ret_type, arg_regs.len(), ir_join_arg_regs(arg_regs))
+        ir_emit_call_text(r, call_name, ret_type, arg_regs.len(), ir_join_arg_regs(arg_regs))
         if uses_result_abi and ret_type != "tuple" and ir_checked_result_kind(idx) == "tuple":
-            return ir_emit_wrapped_legacy_result(r, ret_type, alias_fname)
+            return ir_emit_wrapped_legacy_result(r, ret_type, call_name)
         return r
 
     obj_type := ir_method_receiver_type(node)
@@ -2900,6 +2906,8 @@ fn ir_emit_bool_literal(node: Node) -> Int:
 fn ir_resolve_storage_name(name: String) -> String:
     if ir_import_renames.contains_key(name):
         return ir_import_renames[name]
+    if ir_active_generic_module_path.len() > 0 and ir_import_declares_global(ir_active_generic_module_path, name):
+        return ir_import_target_name(ir_active_generic_module_path, name)
     return name
 
 fn ir_emit_ident_load(name: String) -> Int:

@@ -209,16 +209,16 @@ latest measured results on this machine, using the median of 5 trials:
 
 | records | go total | rust total | forge total | forge/go | forge/rust |
 |---|---:|---:|---:|---:|---:|
-| `50000` | `422 ms` | `215 ms` | `1232 ms` | `2.92x` | `5.73x` |
+| `50000` | `366 ms` | `212 ms` | `1198 ms` | `3.27x` | `5.65x` |
 
 phase breakdown from the same run:
 
 | phase | go | rust | forge |
 |---|---:|---:|---:|
 | config | `0 ms` | `0 ms` | `0 ms` |
-| csv write | `223 ms` | `97 ms` | `522 ms` |
-| csv read | `111 ms` | `73 ms` | `155 ms` |
-| transform | `59 ms` | `43 ms` | `553 ms` |
+| csv write | `204 ms` | `96 ms` | `475 ms` |
+| csv read | `106 ms` | `72 ms` | `5 ms` |
+| transform | `59 ms` | `42 ms` | `711 ms` |
 | json | `0 ms` | `0 ms` | `0 ms` |
 | gzip + hash | `0 ms` | `0 ms` | `0 ms` |
 | fs | `0 ms` | `0 ms` | `0 ms` |
@@ -241,8 +241,10 @@ the first cut of this benchmark had forge at `12682 ms`. moving csv onto the
 bytes path and avoiding per-row maps brought that down to `2023 ms`. the
 url/path/hash fast paths brought it down again to about `1400 ms`. lazy csv row
 views brought it to about `1230 ms` by avoiding the full `List[List[String]]`
-read path. the remaining gap is mostly csv write overhead and transform work
-that still turns url and path fields into strings.
+read path. folding csv rows through the public module API keeps the same
+zero-copy shape and lands around `1200 ms`; the remaining gap is mostly csv
+write overhead and transform work that still turns url and path fields into
+strings.
 
 three caveats matter when reading this benchmark:
 
