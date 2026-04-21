@@ -9,6 +9,7 @@ import std.binary as binary
 import std.bits as bits
 import std.checksum as checksum
 import std.fs as fs
+import std.os.path as path
 from std.bytes import ByteBuffer
 
 GZIP_STORED_BLOCK_SIZE := 65535
@@ -216,3 +217,29 @@ test "gzip rejects invalid input":
 
     assert(not is_valid(bad))
     assert(decompress(bad).is_err)
+
+test "gzip handles empty large and file round trips":
+    empty_roundtrip := decompress(compress(bytes.empty()))!
+    assert(empty_roundtrip.is_empty())
+
+    large := bytes.buffer_with_capacity(66000)
+    mut i := 0
+    while i < 66000:
+        large.write_byte(65)!
+        i = i + 1
+    large_data := large.bytes()
+    large_archive := compress(large_data)
+    large_roundtrip := decompress(large_archive)!
+    assert(is_valid(large_archive))
+    assert_eq(large_roundtrip.len(), 66000)
+    assert(bytes.eq(large_data, large_roundtrip))
+
+    root := fs.make_temp_dir("forge-gzip-")!
+    source := path.join(root, "source.txt")
+    archive := path.join(root, "source.txt.gz")
+    output := path.join(root, "output.txt")
+    assert(fs.write(source, "archive-data")!)
+    assert(compress_file(source, archive)!)
+    assert(decompress_file(archive, output)!)
+    assert_eq(fs.read(output)!, "archive-data")
+    assert(fs.remove_tree(root))
