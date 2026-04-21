@@ -615,3 +615,106 @@ test "collection map helpers transform entries":
     assert_eq(boosted["ada"], 11)
     assert_eq(kept.len(), 1)
     assert(kept.contains_key("grace"))
+
+struct CollectionTestItem:
+    pub name: String
+    pub team: String
+    pub score: Int
+
+fn collection_test_names(items: List[CollectionTestItem]) -> String:
+    mut parts: List[String] := []
+    for item in items:
+        parts.push(item.name)
+    return parts.join(",")
+
+fn collection_test_items() -> List[CollectionTestItem]:
+    mut items: List[CollectionTestItem] := []
+    items.push(CollectionTestItem("alice", "red", 8))
+    items.push(CollectionTestItem("bob", "blue", 3))
+    items.push(CollectionTestItem("carol", "red", 5))
+    items.push(CollectionTestItem("dave", "blue", 6))
+    return items
+
+test "collection copy helpers clone outer containers":
+    mut nums := [3, 1, 2]
+    nums_copy := copy_list(nums)
+    nums_copy.push(4)
+    assert_eq(nums.len(), 3)
+    assert_eq(nums_copy.len(), 4)
+
+    mut nested := [[1]]
+    nested_copy := copy_list(nested)
+    inner := nested_copy[0]
+    inner.push(2)
+    assert_eq(nested[0].len(), 2)
+
+    mut scores := {"alice": 3, "bob": 1}
+    scores_copy := copy_map(scores)
+    scores_copy.insert("carol", 2)
+    assert_eq(scores.len(), 2)
+    assert_eq(scores_copy.len(), 3)
+
+    mut tags := {"red", "blue"}
+    tags_copy := copy_set(tags)
+    tags_copy.add("green")
+    assert_eq(tags.len(), 2)
+    assert_eq(tags_copy.len(), 3)
+
+test "collection grouping helpers summarize structs":
+    items := collection_test_items()
+    counts := count_by(items, fn(item: CollectionTestItem) => item.team)
+    indexed := index_by(items, fn(item: CollectionTestItem) => item.name)
+    grouped := group_by(items, fn(item: CollectionTestItem) => item.team)
+
+    assert_eq(counts["red"], 2)
+    assert_eq(counts["blue"], 2)
+    assert_eq(indexed["carol"].score, 5)
+    assert_eq(grouped["red"].len(), 2)
+    assert_eq(grouped["blue"].len(), 2)
+
+test "collection set and map helpers preserve expected members":
+    mut scores := {"alice": 3, "bob": 1}
+    boosted := map_values(scores, fn(score: Int) => score * 10)
+    kept := filter_entries(boosted, fn(name: String, score: Int) => score >= 20)
+    assert_eq(boosted["alice"], 30)
+    assert_eq(kept.len(), 1)
+    assert(not kept.contains_key("bob"))
+
+    left := {"red", "blue"}
+    right := {"blue", "green"}
+    unioned := set_union(left, right)
+    both := set_intersection(left, right)
+    only_left := set_difference(left, right)
+    assert_eq(unioned.len(), 3)
+    assert(unioned.contains("green"))
+    assert_eq(both.len(), 1)
+    assert(both.contains("blue"))
+    assert_eq(only_left.len(), 1)
+    assert(only_left.contains("red"))
+
+test "collection ordering and search helpers keep stable results":
+    items := collection_test_items()
+    nums := [3, 1, 2]
+    ranked := sorted_by(items, fn(left: CollectionTestItem, right: CollectionTestItem) => left.score < right.score)
+    ranked_by_key := sort_by_key(items, fn(item: CollectionTestItem) => item.score)
+
+    assert_eq(collection_test_names(ranked), "bob,carol,dave,alice")
+    assert_eq(collection_test_names(items), "alice,bob,carol,dave")
+    assert_eq(collection_test_names(ranked_by_key), "bob,carol,dave,alice")
+    assert(any(items, fn(item: CollectionTestItem) => item.team == "red"))
+    assert(all(items, fn(item: CollectionTestItem) => item.score > 0))
+    assert_eq(find_index(items, fn(item: CollectionTestItem) => item.team == "blue"), 1)
+    assert_eq(find(items, fn(item: CollectionTestItem) => item.name == "carol")!.score, 5)
+    assert(find(items, fn(item: CollectionTestItem) => item.name == "zoe").is_err)
+
+    split := partition(nums, fn(n: Int) => n >= 2)
+    assert_eq(split[0].len(), 2)
+    assert_eq(split[1].len(), 1)
+    assert_eq(split[0][0], 3)
+    assert_eq(split[1][0], 1)
+
+    scores_by_team := flat_map(items, fn(item: CollectionTestItem) => [item.team + ":" + item.score.to_string()])
+    assert_eq(scores_by_team.join(","), "red:8,blue:3,red:5,blue:6")
+    assert_eq(count_where(items, fn(item: CollectionTestItem) => item.team == "blue"), 2)
+    assert_eq(min_by(items, fn(item: CollectionTestItem) => item.score)!.name, "bob")
+    assert_eq(max_by(items, fn(item: CollectionTestItem) => item.score)!.name, "alice")
