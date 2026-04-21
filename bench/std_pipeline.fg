@@ -93,9 +93,8 @@ fn transform(rows: List[List[String]], cfg: BenchConfig) -> PipelineStats:
         score := parse_int(row[4]).ok
         quota := parse_int(row[5]).ok
         active := row[3] == "true"
-        parsed_url := url.parse(row[6])
         clean_path := path.clean(row[9])
-        url_path_sum = url_path_sum + url.path(parsed_url).len()
+        url_path_sum = url_path_sum + url.path_len(row[6])
         path_part_sum = path_part_sum + path.parts(clean_path).len()
         note_hash_sum = note_hash_sum + hash.fnv1a_string(row[8])
         if active:
