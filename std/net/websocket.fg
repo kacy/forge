@@ -678,3 +678,71 @@ impl WebSocket:
         if websocket_closed_flags.contains_key(self.handle):
             return websocket_closed_flags[self.handle]
         return true
+
+test "websocket computes handshake accept values":
+    key := "dGhlIHNhbXBsZSBub25jZQ=="
+    response := handshake_response(key)!
+
+    assert_eq(compute_accept(key)!, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    assert(response.contains("HTTP/1.1 101 Switching Protocols"))
+    assert(response.contains("Upgrade: websocket"))
+    assert(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="))
+
+test "websocket client requests keep reserved headers controlled":
+    mut headers: Map[String, String] := {}
+    headers.insert("Host", "bad.example")
+    headers.insert("X-Test", "yes")
+    request := client_request("example.test", "chat", headers)!.to_string_utf8()!
+
+    assert(request.starts_with("GET /chat HTTP/1.1"))
+    assert(request.contains("Host: example.test"))
+    assert(request.contains("Upgrade: websocket"))
+    assert(request.contains("Connection: Upgrade"))
+    assert(request.contains("Sec-WebSocket-Version: 13"))
+    assert(request.contains("X-Test: yes"))
+    assert(not request.contains("bad.example"))
+
+test "websocket validates upgrade requests":
+    crlf := chr(13) + chr(10)
+    raw := "GET /ws HTTP/1.1" + crlf + "Host: example.test" + crlf + "Upgrade: websocket" + crlf + "Connection: keep-alive, Upgrade" + crlf + "Sec-WebSocket-Version: 13" + crlf + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" + crlf + crlf
+    req := http.read_request_buffered_bytes(io.bytes_reader(bytes.from_string_utf8(raw)).buffered_chunked(8))!
+    response := upgrade_response(req)!.to_string_utf8()!
+
+    assert(is_upgrade_request(req))
+    assert(is_route(req, "/ws")!)
+    assert(response.contains("101 Switching Protocols"))
+    assert(response.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="))
+
+test "websocket parses unmasked and masked frames":
+    mask := bytes.buffer()
+    mask.write_byte(1)!
+    mask.write_byte(2)!
+    mask.write_byte(3)!
+    mask.write_byte(4)!
+
+    text_frame := parse_frame(text_frame_bytes("hello")!)!
+    masked_frame := parse_frame(client_text_frame_bytes("hi", mask.bytes())!)!
+
+    assert(text_frame.is_text())
+    assert(not text_frame.masked)
+    assert_eq(text_frame.payload_text()!, "hello")
+    assert(masked_frame.is_text())
+    assert(masked_frame.masked)
+    assert_eq(masked_frame.payload_text()!, "hi")
+
+test "websocket parses close frames and rejects bad close codes":
+    frame := parse_frame(close_frame(1000, "bye")!)!
+    bad := close_frame(1, "bad")
+
+    assert(frame.is_close())
+    assert_eq(frame.close_code()!, 1000)
+    assert_eq(frame.close_reason()!, "bye")
+    assert(bad.is_err)
+
+test "websocket buffered frame reads consume full payloads":
+    payload := text_frame_bytes("chunked")!
+    reader := io.bytes_reader(payload).buffered_chunked(2)
+    frame := read_frame_buffered(reader)!
+
+    assert(frame.is_text())
+    assert_eq(frame.payload_text()!, "chunked")
