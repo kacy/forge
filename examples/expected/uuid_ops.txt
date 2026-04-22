@@ -1,5 +1,11 @@
 len: 36
-has hyphens: true
-version: 4
-unique: true
+v4 version: 4
+v4 unique: true
+v5 dns: 2ed6657d-e927-568b-95e1-2665a8aea6a2
+v7 version: 7
+v7 ordered: true
+parse version: 5
+valid upper: true
+nil version: 0
+max is max: true
 uuid ops work

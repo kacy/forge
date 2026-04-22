@@ -1,44 +1,23 @@
-# UUID v4 generation
-
-fn uuid_v4() -> String:
-    hex_chars := "0123456789abcdef"
-    mut parts: List[String] := []
-    mut i := 0
-    while i < 8:
-        parts.push(hex_chars[random_int(0, 15)])
-        i = i + 1
-    parts.push("-")
-    i = 0
-    while i < 4:
-        parts.push(hex_chars[random_int(0, 15)])
-        i = i + 1
-    parts.push("-4")
-    i = 0
-    while i < 3:
-        parts.push(hex_chars[random_int(0, 15)])
-        i = i + 1
-    parts.push("-")
-    variant := "89ab"
-    parts.push(variant[random_int(0, 3)])
-    i = 0
-    while i < 3:
-        parts.push(hex_chars[random_int(0, 15)])
-        i = i + 1
-    parts.push("-")
-    i = 0
-    while i < 12:
-        parts.push(hex_chars[random_int(0, 15)])
-        i = i + 1
-    return parts.join("")
+import std.uuid as uuid
 
 fn main():
     random_seed(42)
 
-    id1 := uuid_v4()
-    id2 := uuid_v4()
+    id1 := uuid.v4()
+    id2 := uuid.v4()
+    stable := uuid.v5(uuid.namespace_dns(), "www.example.com")
+    sortable1 := uuid.v7_at(1645557742000)
+    sortable2 := uuid.v7_at(1645557742000)
+    parsed := uuid.parse(stable).ok
 
     print("len: " + id1.len().to_string())
-    print("has hyphens: " + id1.contains("-").to_string())
-    print("version: " + id1[14])
-    print("unique: " + (id1 != id2).to_string())
+    print("v4 version: " + id1[14])
+    print("v4 unique: " + (id1 != id2).to_string())
+    print("v5 dns: " + stable)
+    print("v7 version: " + sortable1[14])
+    print("v7 ordered: " + (sortable1 < sortable2).to_string())
+    print("parse version: " + parsed.version().to_string())
+    print("valid upper: " + uuid.is_valid("2ED6657D-E927-568B-95E1-2665A8AEA6A2").to_string())
+    print("nil version: " + uuid.nil().version().to_string())
+    print("max is max: " + uuid.max().is_max().to_string())
     print("uuid ops work")

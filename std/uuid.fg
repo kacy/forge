@@ -1,41 +1,221 @@
-# # std.uuid — UUID generation
-# #
-# # Functions:
-# #   v4() -> String    Generate a random UUID v4
+# std.uuid - uuid generation, parsing, and formatting
+#
+# the practical path is v4 for random ids, v7 for sortable ids, and v5 for
+# deterministic namespace/name ids.
+
+import std.bits as bits
+import std.bytes as bytes
+import std.hash as hash
 
 from std.collections import range
 
-fn append_random_chars(parts: List[String], chars: String, count: Int):
-    for _i in range(0, count):
-        parts.push(chars[random_int(0, chars.len() - 1)])
+# a canonical lowercase uuid string.
+pub struct Uuid:
+    pub value: String
 
-# # Generate a random UUID v4 string (e.g., "550e8400-e29b-41d4-a716-446655440000")
-pub fn v4() -> String:
-    # UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-    # where y is 8, 9, a, or b
-    hex_chars := "0123456789abcdef"
-    mut parts: List[String] := []
-    # 8 hex chars
-    append_random_chars(parts, hex_chars, 8)
-    parts.push("-")
-    # 4 hex chars
-    append_random_chars(parts, hex_chars, 4)
-    parts.push("-4") # version 4
-    # 3 hex chars
-    append_random_chars(parts, hex_chars, 3)
-    parts.push("-")
-    # variant: 8, 9, a, or b
-    variant_chars := "89ab"
-    parts.push(variant_chars[random_int(0, 3)])
-    # 3 hex chars
-    append_random_chars(parts, hex_chars, 3)
-    parts.push("-")
-    # 12 hex chars
-    append_random_chars(parts, hex_chars, 12)
-    return parts.join("")
+# error returned when uuid parsing fails.
+pub struct UuidError:
+    pub message: String
+
+mut last_v7_ms: Int := 0
+mut last_v7_counter: Int := -1
+
+fn uuid_error(message: String) -> UuidError:
+    return UuidError(message)
+
+fn hex_chars() -> String:
+    return "0123456789abcdef"
+
+fn nibble_hex(value: Int) -> String:
+    return hex_chars()[bits.band(value, 15)]
+
+fn byte_hex(value: Int) -> String:
+    return nibble_hex(bits.shr(value, 4)) + nibble_hex(value)
+
+fn hex_value(c: String) -> Int:
+    if c >= "0" and c <= "9":
+        return parse_int(c) catch 0
+    if c >= "a" and c <= "f":
+        return 10 + (ord(c) - ord("a"))
+    if c >= "A" and c <= "F":
+        return 10 + (ord(c) - ord("A"))
+    return 0
 
 fn is_hex_char(c: String) -> Bool:
-    return c >= "0" and c <= "9" or c >= "a" and c <= "f"
+    return c >= "0" and c <= "9" or c >= "a" and c <= "f" or c >= "A" and c <= "F"
+
+fn lowercase_hex(c: String) -> String:
+    if c >= "A" and c <= "F":
+        return chr(ord(c) + 32)
+    return c
+
+fn is_dash_index(index: Int) -> Bool:
+    return index == 8 or index == 13 or index == 18 or index == 23
+
+fn hex_pair(high: String, low: String) -> Int:
+    return hex_value(high) * 16 + hex_value(low)
+
+fn uuid_bytes_from_text(text: String) -> List[Int]:
+    mut out: List[Int] := []
+    mut i := 0
+    while i < text.len():
+        if text[i] == "-":
+            i = i + 1
+        else:
+            out.push(hex_pair(text[i], text[i + 1]))
+            i = i + 2
+    return out
+
+fn uuid_and_name_bytes(namespace: Uuid, name: String) -> Bytes:
+    out := bytes.buffer()
+    namespace_bytes := uuid_bytes_from_text(namespace.value)
+    for value in namespace_bytes:
+        out.write_byte(value)
+    out.write_string_utf8(name)
+    return out.bytes()
+
+fn format_uuid_bytes(raw: List[Int], version: Int) -> String:
+    mut parts: List[String] := []
+    mut i := 0
+    while i < raw.len():
+        if i == 4 or i == 6 or i == 8 or i == 10:
+            parts.push("-")
+        mut value := raw[i]
+        if i == 6:
+            value = bits.bor(bits.shl(version, 4), bits.band(value, 15))
+        if i == 8:
+            value = bits.bor(128, bits.band(value, 63))
+        parts.push(byte_hex(value))
+        i = i + 1
+    return parts.join("")
+
+fn random_uuid_bytes() -> List[Int]:
+    mut out: List[Int] := []
+    for _i in range(0, 16):
+        out.push(random_int(0, 255))
+    return out
+
+fn next_v7_counter(ms: Int) -> Int:
+    if ms != last_v7_ms:
+        last_v7_ms = ms
+        last_v7_counter = 0
+        return last_v7_counter
+    if last_v7_counter >= 4095:
+        last_v7_counter = 0
+    else:
+        last_v7_counter = last_v7_counter + 1
+    return last_v7_counter
+
+fn timestamp48_bytes(ms: Int) -> List[Int]:
+    mut out: List[Int] := []
+    out.push(bits.band(bits.shr(ms, 40), 255))
+    out.push(bits.band(bits.shr(ms, 32), 255))
+    out.push(bits.band(bits.shr(ms, 24), 255))
+    out.push(bits.band(bits.shr(ms, 16), 255))
+    out.push(bits.band(bits.shr(ms, 8), 255))
+    out.push(bits.band(ms, 255))
+    return out
+
+fn v7_bytes(ms: Int) -> List[Int]:
+    counter := next_v7_counter(ms)
+    mut out := timestamp48_bytes(ms)
+    out.push(bits.shr(counter, 8))
+    out.push(bits.band(counter, 255))
+    out.push(random_int(0, 255))
+    for _i in range(0, 7):
+        out.push(random_int(0, 255))
+    return out
+
+fn digest_prefix_bytes(digest: String) -> List[Int]:
+    mut out: List[Int] := []
+    mut i := 0
+    while i < 32:
+        out.push(hex_pair(digest[i], digest[i + 1]))
+        i = i + 2
+    return out
+
+# generate a random uuid v4 string.
+pub fn v4() -> String:
+    return format_uuid_bytes(random_uuid_bytes(), 4)
+
+# generate a sortable uuid v7 string using the current time.
+pub fn v7() -> String:
+    return v7_at(time())
+
+# generate a sortable uuid v7 string for a unix millisecond timestamp.
+pub fn v7_at(ms: Int) -> String:
+    return format_uuid_bytes(v7_bytes(ms), 7)
+
+# generate a deterministic uuid v5 string from a namespace and name.
+pub fn v5(namespace: Uuid, name: String) -> String:
+    digest := hash.sha1(uuid_and_name_bytes(namespace, name))
+    return format_uuid_bytes(digest_prefix_bytes(digest), 5)
+
+# return the nil uuid.
+pub fn nil() -> Uuid:
+    return Uuid("00000000-0000-0000-0000-000000000000")
+
+# return the max uuid.
+pub fn max() -> Uuid:
+    return Uuid("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+# return the dns namespace uuid.
+pub fn namespace_dns() -> Uuid:
+    return Uuid("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+# return the url namespace uuid.
+pub fn namespace_url() -> Uuid:
+    return Uuid("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
+
+# return the oid namespace uuid.
+pub fn namespace_oid() -> Uuid:
+    return Uuid("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
+
+# return the x.500 namespace uuid.
+pub fn namespace_x500() -> Uuid:
+    return Uuid("6ba7b814-9dad-11d1-80b4-00c04fd430c8")
+
+# return a canonical lowercase uuid string.
+pub fn canonical(text: String) -> String!UuidError:
+    if text.len() != 36:
+        fail uuid_error("uuid must be 36 characters")
+    mut out: List[String] := []
+    mut i := 0
+    while i < text.len():
+        c := text[i]
+        if is_dash_index(i):
+            if c != "-":
+                fail uuid_error("uuid has misplaced separator")
+            out.push(c)
+        else:
+            if not is_hex_char(c):
+                fail uuid_error("uuid contains a non-hex character")
+            out.push(lowercase_hex(c))
+        i = i + 1
+    return out.join("")
+
+# parse a uuid string into a canonical uuid value.
+pub fn parse(text: String) -> Uuid!UuidError:
+    value := canonical(text)!
+    return Uuid(value)
+
+# return true when text is a canonical uuid-shaped string.
+pub fn is_valid(text: String) -> Bool:
+    checked := canonical(text)
+    return checked.is_ok
+
+impl Uuid:
+    fn to_string() -> String:
+        return self.value
+
+    fn version() -> Int:
+        return hex_value(self.value[14])
+
+    fn is_nil() -> Bool:
+        return self.value == nil().value
+
+    fn is_max() -> Bool:
+        return self.value == max().value
 
 test "uuid v4 has version variant and separators":
     random_seed(123)
@@ -58,3 +238,42 @@ test "uuid v4 uses lowercase hex digits":
             assert_eq(ch, "-")
         else:
             assert(is_hex_char(ch))
+            assert_eq(ch, lowercase_hex(ch))
+
+test "uuid v5 matches the rfc dns vector":
+    id := v5(namespace_dns(), "www.example.com")
+
+    assert_eq(id, "2ed6657d-e927-568b-95e1-2665a8aea6a2")
+    parsed := parse(id)!
+    assert_eq(parsed.version(), 5)
+
+test "uuid v7 has timestamp prefix and orders within a millisecond":
+    random_seed(123)
+    first := v7_at(1645557742000)
+    second := v7_at(1645557742000)
+
+    assert_eq(first.len(), 36)
+    assert_eq(first[14], "7")
+    assert(first[19] == "8" or first[19] == "9" or first[19] == "a" or first[19] == "b")
+    assert(first.starts_with("017f22e2-79b0-7"))
+    assert(first < second)
+
+test "uuid parse canonicalizes uppercase text":
+    parsed := parse("2ED6657D-E927-568B-95E1-2665A8AEA6A2")!
+
+    assert_eq(parsed.to_string(), "2ed6657d-e927-568b-95e1-2665a8aea6a2")
+    assert_eq(canonical("2ED6657D-E927-568B-95E1-2665A8AEA6A2")!, parsed.to_string())
+    assert(is_valid(parsed.to_string()))
+
+test "uuid parse rejects malformed text":
+    assert(not is_valid("not-a-uuid"))
+    assert(not is_valid("2ed6657de927568b95e12665a8aea6a2"))
+    assert(not is_valid("2ed6657d-e927-568b-95e1-2665a8aea6xz"))
+
+test "uuid nil max and namespaces are typed":
+    assert(nil().is_nil())
+    assert(max().is_max())
+    assert_eq(nil().version(), 0)
+    assert_eq(max().version(), 15)
+    assert_eq(namespace_url().version(), 1)
+    assert_eq(namespace_oid().to_string(), "6ba7b812-9dad-11d1-80b4-00c04fd430c8")
