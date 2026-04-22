@@ -20,7 +20,23 @@ pub fn crc32(data: Bytes) -> Int:
         pos = pos + 1
     return bits.mask32(bits.invert(crc))
 
+# compute the adler-32 checksum used by zlib.
+pub fn adler32(data: Bytes) -> Int:
+    mut a := 1
+    mut b := 0
+    mut pos := 0
+    while pos < data.len():
+        a = (a + data[pos]) % 65521
+        b = (b + a) % 65521
+        pos = pos + 1
+    return bits.bor(bits.shl(b, 16), a)
+
 test "crc32 matches common vectors":
     assert_eq(crc32(bytes_from_string_utf8("")), 0)
     assert_eq(crc32(bytes_from_string_utf8("hello")), 907060870)
     assert_eq(crc32(bytes_from_string_utf8("123456789")), 3421780262)
+
+test "adler32 matches common vectors":
+    assert_eq(adler32(bytes_from_string_utf8("")), 1)
+    assert_eq(adler32(bytes_from_string_utf8("hello")), 103547413)
+    assert_eq(adler32(bytes_from_string_utf8("123456789")), 152961502)
