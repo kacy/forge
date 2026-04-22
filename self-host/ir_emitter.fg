@@ -131,6 +131,20 @@ fn ir_parse_cached_int(text: String) -> Int:
         i = i + 1
     return value
 
+fn ir_parse_field_index(text: String) -> Int:
+    if text.len() == 0:
+        return 0 - 1
+    mut value := 0
+    mut i := 0
+    while i < text.len():
+        ch := text[i]
+        code := ord(ch)
+        if code < 48 or code > 57:
+            return 0 - 1
+        value = (value * 10) + (code - 48)
+        i = i + 1
+    return value
+
 fn ir_decode_int_list(encoded: String) -> List[Int]:
     mut decoded: List[Int] := []
     if encoded.len() == 0:
@@ -2225,6 +2239,21 @@ fn ir_emit_named_field_access(result_reg: Int, obj_r: Int, lookup_key: String, f
         else:
             ir_emit("field " + result_reg.to_string() + " " + obj_r.to_string() + " " + field_name)
 
+fn ir_emit_tuple_field_access(result_reg: Int, obj_r: Int, recv_idx: Int, field_name: String) -> Bool:
+    recv_tid := c_get_expr_type(recv_idx)
+    if recv_tid < 0:
+        return false
+    recv_info := get_type_info(recv_tid)
+    if recv_info.kind != "tuple":
+        return false
+    field_index := ir_parse_field_index(field_name)
+    if field_index < 0 or field_index >= recv_info.elements.len():
+        return false
+    field_tid := recv_info.elements[field_index]
+    field_offset := field_index * 8
+    ir_emit("field " + result_reg.to_string() + " " + obj_r.to_string() + " " + field_offset.to_string() + " " + ir_type_from_tid(field_tid) + " " + field_name)
+    return true
+
 fn ir_emit_field_access(idx: Int, node: Node) -> Int:
     fname := node_value(idx)
     if node.children.len() == 0:
@@ -2240,9 +2269,12 @@ fn ir_emit_field_access(idx: Int, node: Node) -> Int:
                     r := ir_reg()
                     ir_emit("iconst " + r.to_string() + " " + ir_struct_field_index_lookup[lookup_key])
                     return r
-    obj_r := ir_expr(node.children[0])
+    recv_idx := node.children[0]
+    obj_r := ir_expr(recv_idx)
     r := ir_reg()
-    ir_emit_named_field_access(r, obj_r, ir_field_lookup_key(node.children[0], fname), fname)
+    if ir_emit_tuple_field_access(r, obj_r, recv_idx, fname):
+        return r
+    ir_emit_named_field_access(r, obj_r, ir_field_lookup_key(recv_idx, fname), fname)
     return r
 
 fn ir_emit_result_flag_field(obj_r: Int, fname: String) -> Int:

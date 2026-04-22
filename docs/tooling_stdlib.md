@@ -1,7 +1,8 @@
 # tooling standard library
 
 forge now has a small set of stdlib modules aimed at tools: walking files,
-parsing command lines, rendering diagnostics, and writing tighter tests.
+scanning source-like text, parsing command lines, rendering diagnostics, and
+writing tighter tests.
 
 ## file discovery
 
@@ -20,6 +21,26 @@ by default it skips hidden entries and common build folders like `.git`,
 
 use `find_matches` when you need to know which pattern matched a file, and
 `find_excluding` when a tool has include and exclude patterns.
+
+## text scanning
+
+`std.text.scanner` is a tiny value-oriented cursor for source-like text. it
+tracks byte position plus 1-based line and column while callers peek, advance,
+and take slices.
+
+```fg
+import std.text.scanner as scanner
+
+source := "name: forge" + chr(10) + "version: 1"
+key := scanner.take_until(scanner.new(source), ":")
+line := scanner.take_line(scanner.new(source))
+
+print(key.slice.text)
+print(line.slice.text)
+```
+
+use it for tooling code that needs predictable eof behavior, line handling,
+or source positions without writing another local `while i < text.len()` loop.
 
 ## cli parsing
 

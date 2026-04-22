@@ -9,9 +9,9 @@ coding agents can read the errors, apply fixes, and iterate — fast.
 **status:** the compiler self-hosts — forge is written in forge. the
 self-hosted compiler compiles itself and produces identical output across
 stages (fixed-point verified). two backends: C transpilation and Cranelift
-native code generation — both compile all 81 examples identically, and both
+native code generation — both compile all 82 examples identically, and both
 compile the compiler itself to a fixed point. the CLI handles build, run,
-test, check, fmt, lint, lex, parse, doc, and more. 42 standard library
+test, check, fmt, lint, lex, parse, doc, and more. 43 standard library
 modules cover I/O, networking, encoding, hashing, JSON, TOML, process
 management, tooling helpers, and more.
 
@@ -102,7 +102,7 @@ fn main():
 ## what works today
 
 the self-hosted compiler handles the full pipeline: lex → parse → check →
-codegen. 81 deterministic example programs compile and produce verified
+codegen. 82 deterministic example programs compile and produce verified
 output via the Cranelift native backend.
 
 **language features:**
@@ -132,7 +132,7 @@ output via the Cranelift native backend.
 - concurrency: spawn/await, Task[T], Mutex, WaitGroup, Semaphore, Channel, select, contexts, timers
 - multi-module imports with `from ... import`
 
-**standard library (42 modules):**
+**standard library (43 modules):**
 - string methods, type conversions, math builtins
 - file I/O, env, args, exit, exec
 - collection methods (push, remove, contains, keys, values, reverse, etc.)
@@ -140,7 +140,7 @@ output via the Cranelift native backend.
 - std.net.tcp, std.net.dns, std.net.url, std.net.http, std.net.websocket — networking
 - std.hash, std.checksum, std.encoding, std.bits, std.bytes, std.binary — bytes and encoding
 - std.os.path, std.os.process, std.fs, std.glob — files, paths, and file discovery
-- std.cli, std.diagnostic, std.testing — small tooling layers
+- std.cli, std.diagnostic, std.testing, std.text.scanner — small tooling layers
 - std.log, std.fmt, std.math, std.rand, std.time, std.datetime, std.uuid — common app helpers
 
 for child processes, prefer `std.os.process.command(...)` and the structured
@@ -243,7 +243,7 @@ cranelift/             native code backend — Rust + Cranelift (~18,100 lines)
   codegen/           AST-to-IR compilation, monomorphization, type inference
   runtime/           runtime library (ARC, collections, JSON, TOML, URL, concurrency)
 
-std/                 standard library (42 native forge modules)
+std/                 standard library (43 native forge modules)
   cli.fg             command-line parsing helpers
   diagnostic.fg      reusable diagnostics for tools
   encoding.fg        base64/hex encoding
@@ -255,6 +255,7 @@ std/                 standard library (42 native forge modules)
   log.fg             structured logging
   math.fg            math builtins
   toml.fg            TOML parse/encode
+  text/scanner.fg    source-like text cursor helpers
   net/tcp.fg         TCP connect/listen/accept/read/write/close
   net/dns.fg         DNS resolution
   net/url.fg         URL parsing and percent-encoding
@@ -271,7 +272,7 @@ tests/               regression and negative compiler fixtures
   invalid/           checker-invalid programs + expected error codes
   invalid_parse/     parser-invalid programs + expected error codes
 
-examples/              81 deterministic .fg programs with verified expected output
+examples/              82 deterministic .fg programs with verified expected output
 docs/grammar.ebnf    complete EBNF for the language
 docs/errors.md       error code reference (E0xx–E3xx)
 docs/architecture.md compiler and ownership overview

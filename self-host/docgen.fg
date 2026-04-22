@@ -7,6 +7,8 @@
 #   forge doc --json <file.fg>   JSON output for agents
 #   forge doc --check <file.fg>  verify all pub items are documented
 
+import std.text.scanner as scanner
+
 # --- state (parallel lists, same pattern as codegen) ---
 
 mut d_count: Int := 0
@@ -109,6 +111,19 @@ fn strip_comment_markers(line: String) -> String:
         return ""
     return trimmed
 
+fn source_lines(source: String) -> List[String]:
+    mut lines: List[String] := []
+    mut cur := scanner.new(source)
+    while not scanner.done(cur):
+        line := scanner.take_line(cur)
+        lines.push(line.slice.text)
+        cur = line.cursor
+    if source.len() == 0:
+        return []
+    if source[source.len() - 1] == chr(10) or source[source.len() - 1] == chr(13):
+        lines.push("")
+    return lines
+
 # extract the name from a pub declaration line.
 # "pub fn abs(x: Int) -> Int" -> "abs"
 # "pub struct Foo:" -> "Foo"
@@ -205,7 +220,7 @@ fn reset_docgen_state():
 # populates module-level state with items found.
 pub fn doc_extract(source: String):
     reset_docgen_state()
-    lines := source.split(chr(10))
+    lines := source_lines(source)
     mut i := 0
 
     # collect module header — leading comment block
