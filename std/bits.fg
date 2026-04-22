@@ -46,6 +46,14 @@ pub fn mask32(value: Int) -> Int:
 pub fn mask64(value: Int) -> Int:
     return value
 
+# wrap a 32-bit addition.
+pub fn add32(left: Int, right: Int) -> Int:
+    return mask32(left + right)
+
+# wrap a 64-bit addition.
+pub fn add64(left: Int, right: Int) -> Int:
+    return mask64(left + right)
+
 # rotate a 32-bit value left.
 pub fn rotl32(value: Int, amount: Int) -> Int:
     n := amount % 32
@@ -60,6 +68,20 @@ pub fn rotr32(value: Int, amount: Int) -> Int:
         return mask32(value)
     return mask32(bit_or(bit_shr(value, n), bit_shl(value, 32 - n)))
 
+# rotate a 64-bit value left.
+pub fn rotl64(value: Int, amount: Int) -> Int:
+    n := amount % 64
+    if n == 0:
+        return mask64(value)
+    return mask64(bit_or(bit_shl(value, n), bit_shr(value, 64 - n)))
+
+# rotate a 64-bit value right.
+pub fn rotr64(value: Int, amount: Int) -> Int:
+    n := amount % 64
+    if n == 0:
+        return mask64(value)
+    return mask64(bit_or(bit_shr(value, n), bit_shl(value, 64 - n)))
+
 test "bit helpers wrap the bit builtins":
     assert_eq(band(6, 3), 2)
     assert_eq(bor(4, 1), 5)
@@ -72,12 +94,24 @@ test "bit masks keep the low bits":
     assert_eq(mask16(65537), 1)
     assert_eq(mask32(4294967296), 0)
 
+test "addition helpers wrap unsigned widths":
+    assert_eq(add32(4294967295, 1), 0)
+    assert_eq(UInt64(add64(-1, 1)).to_string(), "0")
+    assert_eq(UInt64(add64(9223372036854775807, 1)).to_string(), "9223372036854775808")
+
 test "rotations stay inside 32 bits":
     assert_eq(rotl32(1, 4), 16)
     assert_eq(rotr32(16, 4), 1)
     assert_eq(rotl32(1, 8), 256)
     assert_eq(rotr32(256, 8), 1)
     assert_eq(rotl32(5, 0), 5)
+
+test "rotations stay inside 64 bits":
+    assert_eq(rotl64(1, 8), 256)
+    assert_eq(rotr64(256, 8), 1)
+    assert_eq(UInt64(rotl64(1, 63)).to_string(), "9223372036854775808")
+    assert_eq(UInt64(rotr64(1, 1)).to_string(), "9223372036854775808")
+    assert_eq(UInt64(rotl64(-1, 17)).to_string(), "18446744073709551615")
 
 test "fixed width integer constructors wrap values":
     assert_eq(UInt8(257).to_string(), "1")
