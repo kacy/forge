@@ -264,7 +264,34 @@ pub extern "C" fn forge_bit_not(a: i64) -> i64 { !a }
 pub extern "C" fn forge_bit_shl(a: i64, b: i64) -> i64 { a << b }
 
 #[no_mangle]
-pub extern "C" fn forge_bit_shr(a: i64, b: i64) -> i64 { a >> b }
+pub extern "C" fn forge_bit_shr(a: i64, b: i64) -> i64 { ((a as u64) >> b) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_uint(n: i64) -> i64 { n }
+
+#[no_mangle]
+pub extern "C" fn forge_int8(n: i64) -> i64 { (n as i8) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_int16(n: i64) -> i64 { (n as i16) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_int32(n: i64) -> i64 { (n as i32) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_int64(n: i64) -> i64 { n }
+
+#[no_mangle]
+pub extern "C" fn forge_uint8(n: i64) -> i64 { (n as u8) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_uint16(n: i64) -> i64 { (n as u16) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_uint32(n: i64) -> i64 { (n as u32) as i64 }
+
+#[no_mangle]
+pub extern "C" fn forge_uint64(n: i64) -> i64 { n }
 
 #[no_mangle]
 pub extern "C" fn forge_abs(n: i64) -> i64 { n.abs() }
@@ -387,6 +414,23 @@ pub unsafe extern "C" fn forge_int_to_cstr(n: i64) -> *mut i8 {
     use std::alloc::{alloc, Layout};
 
     let s = n.to_string();
+    let len = s.len();
+    let layout = Layout::from_size_align(len + 1, 1).unwrap();
+    let ptr = alloc(layout) as *mut i8;
+
+    if !ptr.is_null() {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, len);
+        *ptr.add(len) = 0;
+    }
+
+    ptr
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_uint_to_cstr(n: i64) -> *mut i8 {
+    use std::alloc::{alloc, Layout};
+
+    let s = (n as u64).to_string();
     let len = s.len();
     let layout = Layout::from_size_align(len + 1, 1).unwrap();
     let ptr = alloc(layout) as *mut i8;

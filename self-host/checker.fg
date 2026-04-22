@@ -324,6 +324,15 @@ fn register_builtin_types():
     define_builtin_function("bit_xor", two_int_to_int)
     define_builtin_function("bit_shl", two_int_to_int)
     define_builtin_function("bit_shr", two_int_to_int)
+    define_builtin_function("UInt", create_function_type([TID_INT], TID_UINT))
+    define_builtin_function("Int8", create_function_type([TID_INT], TID_INT8))
+    define_builtin_function("Int16", create_function_type([TID_INT], TID_INT16))
+    define_builtin_function("Int32", create_function_type([TID_INT], TID_INT32))
+    define_builtin_function("Int64", create_function_type([TID_INT], TID_INT64))
+    define_builtin_function("UInt8", create_function_type([TID_INT], TID_UINT8))
+    define_builtin_function("UInt16", create_function_type([TID_INT], TID_UINT16))
+    define_builtin_function("UInt32", create_function_type([TID_INT], TID_UINT32))
+    define_builtin_function("UInt64", create_function_type([TID_INT], TID_UINT64))
     # (Int, Int, Int) -> Int
     define_builtin_function("clamp", create_function_type([TID_INT, TID_INT, TID_INT], TID_INT))
 
@@ -495,6 +504,15 @@ fn register_builtin_types():
     fix_builtin_binding("bit_xor", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_shl", [tid_int, tid_int], tid_int)
     fix_builtin_binding("bit_shr", [tid_int, tid_int], tid_int)
+    fix_builtin_binding("UInt", [tid_int], lookup_type_id("UInt"))
+    fix_builtin_binding("Int8", [tid_int], lookup_type_id("Int8"))
+    fix_builtin_binding("Int16", [tid_int], lookup_type_id("Int16"))
+    fix_builtin_binding("Int32", [tid_int], lookup_type_id("Int32"))
+    fix_builtin_binding("Int64", [tid_int], lookup_type_id("Int64"))
+    fix_builtin_binding("UInt8", [tid_int], lookup_type_id("UInt8"))
+    fix_builtin_binding("UInt16", [tid_int], lookup_type_id("UInt16"))
+    fix_builtin_binding("UInt32", [tid_int], lookup_type_id("UInt32"))
+    fix_builtin_binding("UInt64", [tid_int], lookup_type_id("UInt64"))
     fix_builtin_binding("clamp", [tid_int, tid_int, tid_int], tid_int)
     fix_builtin_binding("format_time", [tid_int, tid_string], tid_string)
     fix_builtin_binding("sqrt", [tid_float], tid_float)
@@ -2773,7 +2791,7 @@ fn check_method_call(node: Node, scope_id: Int) -> Int:
     if dispatch_type == tid_bytes:
         return check_bytes_method_call(method_name, arg_indices, scope_id)
     # primitive methods
-    if dispatch_type == tid_int:
+    if is_integer_type(dispatch_type):
         return check_int_method_call(method_name, arg_indices, scope_id)
     if dispatch_type == tid_float:
         return check_float_method_call(method_name, arg_indices, scope_id)

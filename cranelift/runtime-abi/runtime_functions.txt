@@ -5,6 +5,7 @@ forge_string_release|forge_string_release|I64|
 forge_string_from_cstr|forge_string_from_cstr_ptr|I64,I64|
 forge_print|forge_print|I64|
 int_to_string|forge_int_to_cstr|I64|I64
+uint_to_string|forge_uint_to_cstr|I64|I64
 float_to_string|forge_float_to_cstr|F64|I64
 bool_to_string|forge_bool_to_cstr|I64|I64
 ord|forge_ord_cstr|I64|I64
@@ -22,6 +23,15 @@ bit_xor|forge_bit_xor|I64,I64|I64
 bit_shl|forge_bit_shl|I64,I64|I64
 bit_shr|forge_bit_shr|I64,I64|I64
 bit_not|forge_bit_not|I64|I64
+UInt|forge_uint|I64|I64
+Int8|forge_int8|I64|I64
+Int16|forge_int16|I64|I64
+Int32|forge_int32|I64|I64
+Int64|forge_int64|I64|I64
+UInt8|forge_uint8|I64|I64
+UInt16|forge_uint16|I64|I64
+UInt32|forge_uint32|I64|I64
+UInt64|forge_uint64|I64|I64
 abs|forge_abs|I64|I64
 min|forge_min|I64,I64|I64
 max|forge_max|I64,I64|I64

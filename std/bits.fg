@@ -78,3 +78,12 @@ test "rotations stay inside 32 bits":
     assert_eq(rotl32(1, 8), 256)
     assert_eq(rotr32(256, 8), 1)
     assert_eq(rotl32(5, 0), 5)
+
+test "fixed width integer constructors wrap values":
+    assert_eq(UInt8(257).to_string(), "1")
+    assert_eq(UInt16(65537).to_string(), "1")
+    assert_eq(UInt32(4294967295).to_string(), "4294967295")
+    assert_eq(UInt64(-1).to_string(), "18446744073709551615")
+    assert_eq(Int8(255).to_string(), "-1")
+    assert_eq(Int16(65535).to_string(), "-1")
+    assert_eq(Int32(4294967295).to_string(), "-1")

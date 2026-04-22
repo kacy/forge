@@ -39,7 +39,7 @@ from types import TypeInfo, get_type_info
 # --- type knowledge constants (single source of truth) ---
 FLOAT_RETURNING_FUNCS := "pow,sqrt,floor,ceil,round,to_float,get_float"
 BOOL_RETURNING_FUNCS := "file_exists,dir_exists,fs_remove_dir,fs_remove_tree,os_chdir,os_set_env,os_unset_env,get_bool,object_has,has,crypto_constant_time_eq,byte_buffer_set"
-INT_RETURNING_FUNCS := "abs,min,max,clamp,len,fnv1a,ord,exec,fs_file_size,byte_buffer_len,byte_buffer_get"
+INT_RETURNING_FUNCS := "abs,min,max,clamp,len,fnv1a,ord,exec,fs_file_size,byte_buffer_len,byte_buffer_get,UInt,Int8,Int16,Int32,Int64,UInt8,UInt16,UInt32,UInt64"
 STRING_RETURNING_FUNCS := "sha256,hex_encode,hex_decode,to_hex,b64_encode,chr,read_file,env,os_getcwd,os_temp_dir,os_home_dir,scheme,host,query,fragment,decode,exec_output,type_of,get_string"
 BYTES_RETURNING_FUNCS := "bytes_from_string_utf8,read_file_bytes,file_read_bytes,tcp_read_bytes,process_read_bytes,process_read_err_bytes,byte_buffer_bytes,b64_decode,from_hex,bytes_slice,bytes_concat,secure_random_bytes"
 LIST_RETURNING_FUNCS := "args,range,repeat_val,zeros,sort,sort_desc,reversed,take,drop,slice,unique,without,intersection,difference,flatten,chunks"
@@ -2703,6 +2703,12 @@ fn ir_emit_method_call(idx: Int) -> Int:
         recv_tid := c_get_expr_type(node.children[0])
         if recv_tid >= 0:
             recv_info := get_type_info(recv_tid)
+            if recv_info.kind == "primitive" and mname == "to_string":
+                if recv_info.name == "UInt" or recv_info.name == "UInt8" or recv_info.name == "UInt16" or recv_info.name == "UInt32" or recv_info.name == "UInt64":
+                    obj_r := ir_expr(node.children[0])
+                    out_r := ir_reg()
+                    ir_emit_call1(out_r, "uint_to_string", "string", obj_r)
+                    return out_r
             if recv_info.kind == "result":
                 if mname == "unwrap_or":
                     return ir_emit_result_unwrap_or(node)
