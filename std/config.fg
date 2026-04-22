@@ -7,6 +7,7 @@ import std.json as json
 import std.toml as toml
 import std.fs as fs
 import std.os.path as path
+import std.text.scanner as scanner
 
 # # config values flattened by dotted key.
 pub struct Config:
@@ -63,8 +64,11 @@ fn config_store_toml_scalar(out: Map[String, String], key: String, raw_value: St
 
 fn config_flatten_toml_text(out: Map[String, String], text: String):
     mut section := ""
-    for raw_line in text.split(chr(10)):
-        line := config_strip_comment(raw_line).trim()
+    mut cur := scanner.new(text)
+    while not scanner.done(cur):
+        raw_line := scanner.take_line(cur)
+        cur = raw_line.cursor
+        line := config_strip_comment(raw_line.slice.text).trim()
         if line == "":
             continue
         if line.starts_with("[") and line.ends_with("]"):

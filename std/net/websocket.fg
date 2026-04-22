@@ -16,6 +16,7 @@ import std.encoding as encoding
 import std.net.http as http
 import std.io as io
 import std.rand as rand
+import std.text.scanner as scanner
 from std.bytes import ByteBuffer
 from std.io import BufferedBytesReader, BufferedBytesWriter, TcpStream
 from std.net.http import HttpRequestBytes
@@ -174,10 +175,13 @@ fn response_header(head: Bytes, name: String) -> String:
     text := header_text(head)
     if text == "":
         return ""
-    lines := text.split(chr(10))
-    mut i := 1
-    while i < lines.len():
-        line := lines[i].trim()
+    mut cur := scanner.new(text)
+    first := scanner.take_line(cur)
+    cur = first.cursor
+    while not scanner.done(cur):
+        scanned := scanner.take_line(cur)
+        cur = scanned.cursor
+        line := scanned.slice.text.trim()
         colon := line.index_of(":")
         if colon > 0:
             header_name := line.substring(0, colon).trim().to_lower()
@@ -185,16 +189,15 @@ fn response_header(head: Bytes, name: String) -> String:
                 if colon + 1 < line.len():
                     return line.substring(colon + 1, line.len()).trim()
                 return ""
-        i = i + 1
     return ""
 fn response_status_code(head: Bytes) -> Int!:
     text := header_text(head)
     if text == "":
         fail "invalid websocket response"
-    lines := text.split(chr(10))
-    if lines.len() == 0:
+    line := scanner.take_line(scanner.new(text))
+    if line.slice.text == "":
         fail "missing websocket status line"
-    parts := lines[0].trim().split(" ")
+    parts := line.slice.text.trim().split(" ")
     if parts.len() < 2:
         fail "invalid websocket status line"
     return parse_int(parts[1])
