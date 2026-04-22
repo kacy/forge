@@ -15,6 +15,7 @@ import std.bytes as bytes
 import std.encoding as encoding
 import std.json as json_mod
 import std.net.url as url_mod
+import std.text.scanner as scanner
 from std.concurrent import Context, BlockingError, blocking_cancelled, blocking_deadline_exceeded, blocking_failed
 from std.io import BufferedBytesReader, BufferedBytesWriter, BufferedStringReader
 import std.io as io
@@ -319,20 +320,12 @@ pub fn parse_request(raw: String) -> String:
     mut meth := "GET"
     mut full_path := "/"
     mut ver := "HTTP/1.1"
-    mut request_line := header_part.trim()
+    mut request_line := ""
     mut hdrs := ""
-    mut first_nl := -1
-    mut line_pos := 0
-    header_len := header_part.len()
-    while line_pos < header_len:
-        if ord(header_part[line_pos]) == 10:
-            first_nl = line_pos
-            break
-        line_pos = line_pos + 1
-    if first_nl >= 0:
-        request_line = header_part.substring(0, first_nl).trim()
-        if first_nl + 1 < header_len:
-            hdrs = header_part.substring(first_nl + 1, header_len).trim()
+    if header_part.len() > 0:
+        first_line := scanner.take_line(scanner.new(header_part))
+        request_line = first_line.slice.text.trim()
+        hdrs = scanner.remaining(first_line.cursor).trim()
     if request_line.len() > 0:
         mut sp1 := -1
         mut sp2 := -1
@@ -639,16 +632,12 @@ pub fn get_header(req: String, name: String) -> String:
     h := req_field(req, 4)
     if h.len() == 0:
         return ""
-    nl := chr(10)
-    mut start := 0
-    mut pos := 0
-    h_len := h.len()
-    while pos <= h_len:
-        mut at_end := pos == h_len
-        if not at_end:
-            at_end = ord(h[pos]) == 10
-        if at_end and pos > start:
-            line := h.substring(start, pos).trim()
+    mut cur := scanner.new(h)
+    while not scanner.done(cur):
+        scanned := scanner.take_line(cur)
+        cur = scanned.cursor
+        line := scanned.slice.text.trim()
+        if line.len() > 0:
             mut colon := -1
             mut ci := 0
             line_len := line.len()
@@ -663,12 +652,6 @@ pub fn get_header(req: String, name: String) -> String:
                     if colon + 1 < line_len:
                         return line.substring(colon + 1, line_len).trim()
                     return ""
-            if at_end and pos == h_len:
-                break
-            start = pos + 1
-        elif at_end:
-            start = pos + 1
-        pos = pos + 1
     return ""
 # looks up one query parameter in a packed request string.
 pub fn get_query_param(req: String, name: String) -> String:
