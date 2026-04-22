@@ -241,6 +241,41 @@ pub unsafe extern "C" fn forge_byte_buffer_bytes(handle: i64) -> i64 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn forge_byte_buffer_len(handle: i64) -> i64 {
+    let Some(buffer) = forge_byte_buffer_mut(handle) else {
+        return 0;
+    };
+    buffer.data.len() as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_byte_buffer_get(handle: i64, index: i64) -> i64 {
+    let Some(buffer) = forge_byte_buffer_mut(handle) else {
+        return 0;
+    };
+    if index < 0 {
+        return 0;
+    }
+    buffer.data.get(index as usize).copied().unwrap_or(0) as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forge_byte_buffer_set(handle: i64, index: i64, value: i64) -> i64 {
+    let Some(buffer) = forge_byte_buffer_mut(handle) else {
+        return 0;
+    };
+    if index < 0 || !(0..=255).contains(&value) {
+        return 0;
+    }
+    let idx = index as usize;
+    if idx >= buffer.data.len() {
+        return 0;
+    }
+    buffer.data[idx] = value as u8;
+    1
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn forge_byte_buffer_clear(handle: i64) {
     if let Some(buffer) = forge_byte_buffer_mut(handle) {
         buffer.data.clear();

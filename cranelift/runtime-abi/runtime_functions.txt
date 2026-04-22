@@ -81,6 +81,9 @@ byte_buffer_write|forge_byte_buffer_write|I64,I64|I64
 byte_buffer_write_string_utf8|forge_byte_buffer_write_string_utf8|I64,I64|I64
 byte_buffer_write_byte|forge_byte_buffer_write_byte|I64,I64|I64
 byte_buffer_bytes|forge_byte_buffer_bytes|I64|I64
+byte_buffer_len|forge_byte_buffer_len|I64|I64
+byte_buffer_get|forge_byte_buffer_get|I64,I64|I64
+byte_buffer_set|forge_byte_buffer_set|I64,I64,I64|I64
 byte_buffer_clear|forge_byte_buffer_clear|I64|
 file_exists|forge_file_exists|I64|I64
 dir_exists|forge_dir_exists|I64|I64

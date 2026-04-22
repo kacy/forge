@@ -18,6 +18,10 @@ pub struct Utf8DecodeError:
 pub struct ByteBuffer:
     pub handle: Int
 
+# packed mutable byte storage for algorithms that need in-place state.
+pub struct ByteArray:
+    pub handle: Int
+
 # return an empty bytes value.
 pub fn empty() -> Bytes:
     return bytes_from_string_utf8("")
@@ -75,6 +79,31 @@ pub fn buffer() -> ByteBuffer:
 pub fn buffer_with_capacity(capacity: Int) -> ByteBuffer:
     return ByteBuffer(byte_buffer_handle(capacity))
 
+# create an empty mutable byte array.
+pub fn array() -> ByteArray:
+    return ByteArray(byte_buffer_handle(0))
+
+# create a mutable byte array with a capacity hint.
+pub fn array_with_capacity(capacity: Int) -> ByteArray:
+    return ByteArray(byte_buffer_handle(capacity))
+
+# copy immutable bytes into a mutable byte array.
+pub fn array_from(data: Bytes) -> ByteArray!:
+    out := array_with_capacity(data.len())
+    out.write(data)!
+    return out
+
+# create a mutable byte array filled with one byte value.
+pub fn array_filled(count: Int, value: Int) -> ByteArray!:
+    if count < 0:
+        fail "byte array count must be non-negative"
+    out := array_with_capacity(count)
+    mut i := 0
+    while i < count:
+        out.push(value)!
+        i = i + 1
+    return out
+
 impl ByteBuffer:
     fn write(data: Bytes) -> Int!:
         return byte_buffer_write(self.handle, data)
@@ -92,11 +121,42 @@ impl ByteBuffer:
     fn bytes() -> Bytes:
         return byte_buffer_bytes(self.handle)
 
+    fn len() -> Int:
+        return byte_buffer_len(self.handle)
+
+    fn get(index: Int) -> Int:
+        return byte_buffer_get(self.handle, index)
+
+    fn set(index: Int, value: Int) -> Bool:
+        return byte_buffer_set(self.handle, index, value)
+
     fn clear():
         byte_buffer_clear(self.handle)
 
     fn reset():
         self.clear()
+
+impl ByteArray:
+    fn write(data: Bytes) -> Int!:
+        return byte_buffer_write(self.handle, data)
+
+    fn push(value: Int) -> Int!:
+        return byte_buffer_write_byte(self.handle, value)
+
+    fn len() -> Int:
+        return byte_buffer_len(self.handle)
+
+    fn get(index: Int) -> Int:
+        return byte_buffer_get(self.handle, index)
+
+    fn set(index: Int, value: Int) -> Bool:
+        return byte_buffer_set(self.handle, index, value)
+
+    fn bytes() -> Bytes:
+        return byte_buffer_bytes(self.handle)
+
+    fn clear():
+        byte_buffer_clear(self.handle)
 
 test "bytes helpers wrap raw byte operations":
     data := from_string_utf8("forge")
@@ -118,6 +178,19 @@ test "bytes helpers wrap raw byte operations":
     assert_eq(concat_text, "forge!")
     assert(eq(data, from_string_utf8("forge")))
     assert(not eq(data, from_string_utf8("forged")))
+
+test "byte arrays support packed mutable state":
+    data := array_filled(4, 0)!
+
+    assert_eq(data.len(), 4)
+    assert(data.set(1, 255))
+    assert(data.set(3, 7))
+    assert_eq(data.get(0), 0)
+    assert_eq(data.get(1), 255)
+    assert_eq(data.get(3), 7)
+    assert(not data.set(4, 1))
+    assert(not data.set(0, 256))
+    assert_eq(data.bytes().len(), 4)
 
 test "bytes decode utf8 surfaces typed errors":
     data := from_string_utf8("forge")
