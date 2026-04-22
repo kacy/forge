@@ -9,6 +9,8 @@
 #       check_true(10 > 5, "comparison")
 #       done()
 
+import std.fs as fs
+
 mut pass_count: Int := 0
 mut fail_count: Int := 0
 mut silent: Bool := false
@@ -105,6 +107,41 @@ pub fn assert_contains(text: String, part: String):
     else:
         record_fail("assert_contains", "missing substring: " + chr(34) + part + chr(34))
 
+# assert that two strings are equal and print a compact diff hint.
+pub fn assert_eq_text(got: String, want: String):
+    if got == want:
+        record_pass("assert_eq_text")
+    else:
+        record_fail("assert_eq_text", "got " + got.len().to_string() + " chars, want " + want.len().to_string() + " chars")
+
+# assert that a file exists.
+pub fn assert_file_exists(path: String):
+    if fs.exists(path) and fs.is_file(path):
+        record_pass("assert_file_exists")
+    else:
+        record_fail("assert_file_exists", "missing file: " + path)
+
+# assert that a directory exists.
+pub fn assert_dir_exists(path: String):
+    if fs.exists(path) and fs.is_dir(path):
+        record_pass("assert_dir_exists")
+    else:
+        record_fail("assert_dir_exists", "missing dir: " + path)
+
+# run a callback with a temporary directory and remove it afterwards.
+pub fn with_temp_dir(prefix: String, run: fn(String) -> Bool) -> Bool:
+    dir := fs.make_temp_dir(prefix)
+    if dir.is_err:
+        record_fail("with_temp_dir", "could not create temp dir")
+        return false
+    ok := run(dir.ok)
+    fs.remove_tree(dir.ok)
+    if ok:
+        record_pass("with_temp_dir")
+    else:
+        record_fail("with_temp_dir", "callback returned false")
+    return ok
+
 # print summary
 pub fn done():
     total := pass_count + fail_count
@@ -128,8 +165,9 @@ test "testing helpers count passing checks":
     assert_true(true)
     assert_false(false)
     assert_contains("hello forge", "forge")
+    assert_eq_text("same", "same")
 
-    assert(pass_count == 10)
+    assert(pass_count == 11)
     assert(fail_count == 0)
 
 test "testing helpers count failing checks":
@@ -146,6 +184,17 @@ test "testing helpers count failing checks":
     assert_true(false)
     assert_false(true)
     assert_contains("hello", "forge")
+    assert_eq_text("left", "right")
 
     assert(pass_count == 0)
-    assert(fail_count == 10)
+    assert(fail_count == 11)
+
+test "testing helpers inspect files and temp dirs":
+    reset_counts()
+    silence_output()
+
+    ok := with_temp_dir("forge-std-testing-", fn(dir: String) => fs.is_dir(dir))
+
+    assert(ok)
+    assert(pass_count == 1)
+    assert(fail_count == 0)

@@ -1,0 +1,4 @@
+command: fmt
+check: true
+pattern: **/*.fg
+help has command: true

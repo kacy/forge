@@ -144,6 +144,21 @@ fn extract_documentation_kind(line: String) -> String:
         return "enum"
     return ""
 
+fn is_public_documentation_decl(trimmed: String) -> Bool:
+    return string_starts_with(trimmed, "pub fn ") or string_starts_with(trimmed, "pub struct ") or string_starts_with(trimmed, "pub enum ")
+
+fn comment_block_documents_pub(lines: List[String], start: Int) -> Bool:
+    mut j := start
+    while j < lines.len():
+        trimmed := d_trim_left(lines[j])
+        if trimmed.len() == 0:
+            return false
+        if trimmed[0] == "#":
+            j = j + 1
+            continue
+        return is_public_documentation_decl(trimmed)
+    return false
+
 # extract the signature from a pub declaration line (strip trailing colon).
 fn extract_documentation_signature(line: String) -> String:
     trimmed := trim_whitespace(line)
@@ -217,6 +232,8 @@ pub fn doc_extract(source: String):
             if trimmed.len() == 0:
                 break
             if trimmed[0] == "#":
+                if comment_block_documents_pub(lines, i):
+                    break
                 d_header_lines.push(strip_comment_markers(lines[i]))
                 i = i + 1
                 continue
@@ -229,7 +246,7 @@ pub fn doc_extract(source: String):
         trimmed := d_trim_left(lines[i])
 
         # check for pub fn/struct/enum
-        if string_starts_with(trimmed, "pub fn ") or string_starts_with(trimmed, "pub struct ") or string_starts_with(trimmed, "pub enum "):
+        if is_public_documentation_decl(trimmed):
             name := extract_documentation_name(trimmed)
             kind := extract_documentation_kind(trimmed)
             sig := extract_documentation_signature(trimmed)
