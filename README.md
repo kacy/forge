@@ -276,6 +276,7 @@ examples/              82 deterministic .fg programs with verified expected outp
 docs/grammar.ebnf    complete EBNF for the language
 docs/errors.md       error code reference (E0xx–E3xx)
 docs/architecture.md compiler and ownership overview
+docs/logging.md      structured logging guide
 docs/contributing.md contributor setup and validation loop
 ```
 

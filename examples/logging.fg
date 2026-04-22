@@ -4,6 +4,9 @@ import std.fs as fs
 
 fn main() -> String!:
     path := "/tmp/forge_logging.txt"
+    fs.remove(path)
+    log.set_console()
+    log.set_level(log.debug_level())
     log.set_file(path)
     log.info("server starting on port 8080")
     log.warn("cache miss rate above threshold")
@@ -14,5 +17,16 @@ fn main() -> String!:
     print("file has info: " + content.contains("[INFO]").to_string())
     print("file has error: " + content.contains("[ERROR]").to_string())
     fs.remove(path)
+
+    json_path := "/tmp/forge_logging_json.txt"
+    fs.remove(json_path)
+    logger := log.root().json().file(json_path).with([log.str("service", "api")]).target("http").trace_context("trace-demo", "span-demo")
+    logger.info().int("port", 8080).bool("tls", false).duration_ms("elapsed_ms", 12).msg("server started")
+    json_content := fs.read(json_path)!
+    print("json has message: " + json_content.contains(chr(34) + "message" + chr(34) + ":" + chr(34) + "server started" + chr(34)).to_string())
+    print("json has service: " + json_content.contains(chr(34) + "service" + chr(34) + ":" + chr(34) + "api" + chr(34)).to_string())
+    print("json has trace: " + json_content.contains(chr(34) + "trace_id" + chr(34) + ":" + chr(34) + "trace-demo" + chr(34)).to_string())
+    fs.remove(json_path)
+
     print("logging works")
     return ""
