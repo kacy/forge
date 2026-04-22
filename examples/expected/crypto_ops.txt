@@ -1,6 +1,9 @@
 hmac sha256: f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
 hmac verify: true
+hmac sha512 prefix: b42af09057bac1e2d41708e48a902e09
 hkdf prefix: 3cb25f25faacd57a90434f64d0362f2a
+hkdf sha512 prefix: 832390086cda71fb47625bb5ceb168e4
 pbkdf2 prefix: ae4d0c95af6b46d32d0adff928f06dd0
+pbkdf2 sha512 prefix: e1d9c16aa681708a45f5c7c4e215ceb6
 subtle equal: true
 crypto ops work
