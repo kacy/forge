@@ -22,10 +22,20 @@ fn normalize_key_sha256(key: Bytes) -> Bytes:
         return hash.sha256_bytes(key)
     return key
 
-fn hmac_pad(key: Bytes, pad: Int) -> Bytes:
-    out := bytes.buffer_with_capacity(64)
+fn normalize_key_sha384(key: Bytes) -> Bytes:
+    if key.len() > 128:
+        return hash.sha384_bytes(key)
+    return key
+
+fn normalize_key_sha512(key: Bytes) -> Bytes:
+    if key.len() > 128:
+        return hash.sha512_bytes(key)
+    return key
+
+fn hmac_pad(key: Bytes, pad: Int, block_size: Int) -> Bytes:
+    out := bytes.buffer_with_capacity(block_size)
     mut i := 0
-    while i < 64:
+    while i < block_size:
         mut value := 0
         if i < key.len():
             value = key[i]
@@ -35,17 +45,31 @@ fn hmac_pad(key: Bytes, pad: Int) -> Bytes:
 
 fn hmac_sha1_digest(key: Bytes, message: Bytes) -> Bytes:
     k := normalize_key_sha1(key)
-    inner := hmac_pad(k, 54).concat(message)
+    inner := hmac_pad(k, 54, 64).concat(message)
     inner_digest := hash.sha1_bytes(inner)
-    outer := hmac_pad(k, 92).concat(inner_digest)
+    outer := hmac_pad(k, 92, 64).concat(inner_digest)
     return hash.sha1_bytes(outer)
 
 fn hmac_sha256_digest(key: Bytes, message: Bytes) -> Bytes:
     k := normalize_key_sha256(key)
-    inner := hmac_pad(k, 54).concat(message)
+    inner := hmac_pad(k, 54, 64).concat(message)
     inner_digest := hash.sha256_bytes(inner)
-    outer := hmac_pad(k, 92).concat(inner_digest)
+    outer := hmac_pad(k, 92, 64).concat(inner_digest)
     return hash.sha256_bytes(outer)
+
+fn hmac_sha384_digest(key: Bytes, message: Bytes) -> Bytes:
+    k := normalize_key_sha384(key)
+    inner := hmac_pad(k, 54, 128).concat(message)
+    inner_digest := hash.sha384_bytes(inner)
+    outer := hmac_pad(k, 92, 128).concat(inner_digest)
+    return hash.sha384_bytes(outer)
+
+fn hmac_sha512_digest(key: Bytes, message: Bytes) -> Bytes:
+    k := normalize_key_sha512(key)
+    inner := hmac_pad(k, 54, 128).concat(message)
+    inner_digest := hash.sha512_bytes(inner)
+    outer := hmac_pad(k, 92, 128).concat(inner_digest)
+    return hash.sha512_bytes(outer)
 
 # compute HMAC-SHA1 and return raw bytes.
 pub fn sha1(key: Bytes, message: Bytes) -> Bytes:
@@ -63,9 +87,33 @@ pub fn sha256(key: Bytes, message: Bytes) -> Bytes:
 pub fn sha256_hex(key: Bytes, message: Bytes) -> String:
     return encoding.to_hex(sha256(key, message))
 
+# compute HMAC-SHA384 and return raw bytes.
+pub fn sha384(key: Bytes, message: Bytes) -> Bytes:
+    return hmac_sha384_digest(key, message)
+
+# compute HMAC-SHA384 and return lowercase hex.
+pub fn sha384_hex(key: Bytes, message: Bytes) -> String:
+    return encoding.to_hex(sha384(key, message))
+
+# compute HMAC-SHA512 and return raw bytes.
+pub fn sha512(key: Bytes, message: Bytes) -> Bytes:
+    return hmac_sha512_digest(key, message)
+
+# compute HMAC-SHA512 and return lowercase hex.
+pub fn sha512_hex(key: Bytes, message: Bytes) -> String:
+    return encoding.to_hex(sha512(key, message))
+
 # verify HMAC-SHA256 using a no-early-return comparison.
 pub fn verify_sha256(key: Bytes, message: Bytes, expected: Bytes) -> Bool:
     return subtle.equal(sha256(key, message), expected)
+
+# verify HMAC-SHA384 using a no-early-return comparison.
+pub fn verify_sha384(key: Bytes, message: Bytes, expected: Bytes) -> Bool:
+    return subtle.equal(sha384(key, message), expected)
+
+# verify HMAC-SHA512 using a no-early-return comparison.
+pub fn verify_sha512(key: Bytes, message: Bytes, expected: Bytes) -> Bool:
+    return subtle.equal(sha512(key, message), expected)
 
 test "hmac sha256 matches rfc 4231 vector":
     key := list_to_bytes([11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
@@ -81,3 +129,21 @@ test "hmac sha1 matches common vector":
     message := bytes.from_string_utf8("The quick brown fox jumps over the lazy dog")
 
     assert_eq(sha1_hex(key, message), "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9")
+
+test "hmac sha384 matches rfc 4231 vector":
+    key := list_to_bytes([11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
+    message := bytes.from_string_utf8("Hi There")
+    expected := "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6"
+
+    assert_eq(sha384_hex(key, message), expected)
+    assert(verify_sha384(key, message, encoding.from_hex(expected)!))
+    assert(not verify_sha384(key, bytes.from_string_utf8("hi there"), encoding.from_hex(expected)!))
+
+test "hmac sha512 matches rfc 4231 vector":
+    key := list_to_bytes([11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
+    message := bytes.from_string_utf8("Hi There")
+    expected := "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854"
+
+    assert_eq(sha512_hex(key, message), expected)
+    assert(verify_sha512(key, message, encoding.from_hex(expected)!))
+    assert(not verify_sha512(key, bytes.from_string_utf8("hi there"), encoding.from_hex(expected)!))
