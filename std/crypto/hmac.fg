@@ -6,14 +6,6 @@ import std.encoding as encoding
 import std.hash as hash
 import std.crypto.subtle as subtle
 
-fn bytes_to_list(data: Bytes) -> List[Int]:
-    mut out: List[Int] := []
-    mut i := 0
-    while i < data.len():
-        out.push(data[i])
-        i = i + 1
-    return out
-
 fn list_to_bytes(data: List[Int]) -> Bytes:
     out := bytes.buffer_with_capacity(data.len())
     for value in data:
@@ -31,13 +23,12 @@ fn normalize_key_sha256(key: Bytes) -> Bytes:
     return key
 
 fn hmac_pad(key: Bytes, pad: Int) -> Bytes:
-    normalized := bytes_to_list(key)
     out := bytes.buffer_with_capacity(64)
     mut i := 0
     while i < 64:
         mut value := 0
-        if i < normalized.len():
-            value = normalized[i]
+        if i < key.len():
+            value = key[i]
         out.write_byte(bits.xor(value, pad))
         i = i + 1
     return out.bytes()

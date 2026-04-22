@@ -417,7 +417,9 @@ test "base64 round trips bytes and text":
     assert_eq(b64_url_encode(bytes.from_string_utf8("?")), "Pw==")
     assert_eq(b64_raw_encode(bytes.from_string_utf8("foo")), "Zm9v")
     assert_eq(b64_url_raw_encode(bytes.from_string_utf8("??")), "Pz8")
+    assert_eq(b64_url_decode("Pw==")!.to_string_utf8()!, "?")
     assert_eq(b64_raw_decode("Zm9v")!.to_string_utf8()!, "foo")
+    assert_eq(b64_url_raw_decode("Pz8")!.to_string_utf8()!, "??")
     assert_eq(b64_decode_ignore_ws("Z m9v" + chr(10))!.to_string_utf8()!, "foo")
 
 test "base32 round trips rfc vectors":
