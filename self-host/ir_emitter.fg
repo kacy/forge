@@ -807,6 +807,23 @@ fn ir_is_json_decode_callee(index_idx: Int, member_name: String) -> Bool:
             return true
     return recv.value == "json" or recv.value == "json_mod"
 
+fn ir_is_config_decode_callee(index_idx: Int, member_name: String) -> Bool:
+    index_node := get_node(index_idx)
+    if index_node.kind != "index" or index_node.children.len() < 2:
+        return false
+    base_node := get_node(index_node.children[0])
+    if base_node.kind != "field_access" or base_node.value != member_name:
+        return false
+    if base_node.children.len() < 1:
+        return false
+    recv := get_node(base_node.children[0])
+    if recv.kind != "ident":
+        return false
+    if ir_module_aliases.contains_key(recv.value):
+        if ir_module_aliases[recv.value] == "std.config":
+            return true
+    return recv.value == "config" or recv.value == "config_mod"
+
 fn ir_callee_uses_result_abi(callee: ResolvedCallee, idx: Int) -> Bool:
     raw_kind := ir_declared_callable_ir_retkind(callee.name)
     if raw_kind == "tuple" or raw_kind == "result_int" or raw_kind == "result_bool":
@@ -1933,6 +1950,17 @@ fn ir_json_require_helper_name(field_tid: Int) -> String:
             return "std_json_require_bool"
     return ""
 
+fn ir_config_require_helper_name(field_tid: Int) -> String:
+    info := get_type_info(field_tid)
+    if info.kind == "primitive":
+        if info.name == "String":
+            return "std_config_require"
+        if info.name == "Int":
+            return "std_config_require_int"
+        if info.name == "Bool":
+            return "std_config_require_bool"
+    return ""
+
 fn ir_json_field_type_tag(field_tid: Int) -> Int:
     info := get_type_info(field_tid)
     if info.kind == "primitive":
@@ -1948,6 +1976,75 @@ fn ir_emit_json_field_ok(result_r: Int, field_tid: Int) -> Int:
     ok_r := ir_reg()
     ir_emit("field " + ok_r.to_string() + " " + result_r.to_string() + " 8 " + ir_type_from_tid(field_tid) + " ok")
     return ok_r
+
+fn ir_emit_config_field_key(field_name: String, prefix_r: Int) -> Int:
+    key_r := ir_reg()
+    ir_emit("strref " + key_r.to_string() + " " + ir_str(field_name))
+    if prefix_r < 0:
+        return key_r
+    full_key_r := ir_reg()
+    ir_emit_call2(full_key_r, "std_config_dotted_key", "string", prefix_r, key_r)
+    return full_key_r
+
+fn ir_emit_config_decode_call(idx: Int, node: Node, prefixed: Bool) -> Int:
+    arg_regs := ir_collect_call_arg_regs(node, 1)
+    if arg_regs.len() == 0:
+        return ir_zero_reg()
+
+    cfg_r := arg_regs[0]
+    mut prefix_r := -1
+    if prefixed:
+        if arg_regs.len() < 2:
+            return ir_zero_reg()
+        prefix_r = arg_regs[1]
+
+    ret_tid := c_get_expr_type(idx)
+    if ret_tid < 0:
+        return ir_zero_reg()
+    ret_info := get_type_info(ret_tid)
+    if ret_info.kind != "result":
+        return ir_zero_reg()
+    target_tid := ret_info.inner
+    target_info := get_type_info(target_tid)
+    if target_info.kind != "struct":
+        return ir_zero_reg()
+
+    temp_name := ir_new_temp_name("config_decode")
+    ir_var_types.insert(temp_name, "tuple")
+    done_l := ir_label()
+    mut field_regs: List[Int] := []
+
+    for field_name, i in target_info.fields:
+        if i >= target_info.field_types.len():
+            continue
+        field_tid := target_info.field_types[i]
+        helper_name := ir_config_require_helper_name(field_tid)
+        if helper_name.len() == 0:
+            continue
+        full_key_r := ir_emit_config_field_key(field_name, prefix_r)
+        field_result_r := ir_reg()
+        ir_emit_call2(field_result_r, helper_name, "tuple", cfg_r, full_key_r)
+        ok_flag_r := ir_emit_result_flag_field(field_result_r, "is_ok")
+        ok_l := ir_label()
+        err_l := ir_label()
+        ir_emit("brif " + ok_flag_r.to_string() + " " + ok_l + " " + err_l)
+        ir_emit("label " + err_l)
+        ir_emit("store " + temp_name + " " + field_result_r.to_string())
+        ir_emit("jmp " + done_l)
+        ir_emit("label " + ok_l)
+        field_regs.push(ir_emit_json_field_ok(field_result_r, field_tid))
+
+    struct_r := ir_reg()
+    field_count_r := ir_reg()
+    ir_emit("iconst " + field_count_r.to_string() + " " + field_regs.len().to_string())
+    ir_emit_call1(struct_r, "__struct_alloc", "struct:" + target_info.name, field_count_r)
+    for field_reg, fi in field_regs:
+        ir_emit("sstore " + struct_r.to_string() + " " + fi.to_string() + " " + field_reg.to_string())
+    ir_emit("store " + temp_name + " " + ir_emit_ok_result_tuple(struct_r).to_string())
+    ir_emit("label " + done_l)
+    r := ir_reg()
+    ir_emit("load " + r.to_string() + " " + temp_name)
+    return r
 
 fn ir_emit_json_decode_map_call(input_r: Int, target_info: TypeInfo) -> Int:
     temp_name := ir_new_temp_name("json_decode")
@@ -2092,6 +2189,10 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
                 return ir_emit_json_decode_call(idx, node, false)
             if ir_is_json_decode_callee(node.children[0], "decode_text"):
                 return ir_emit_json_decode_call(idx, node, true)
+            if ir_is_config_decode_callee(node.children[0], "decode"):
+                return ir_emit_config_decode_call(idx, node, false)
+            if ir_is_config_decode_callee(node.children[0], "decode_prefix"):
+                return ir_emit_config_decode_call(idx, node, true)
 
     mut callee := ResolvedCallee("unknown", false)
     if node.children.len() > 0:

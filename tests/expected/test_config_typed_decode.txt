@@ -1,0 +1,4 @@
+app:forge:true
+server:127.0.0.1:8080:true
+missing:missing config key: name
+bad:invalid int config key: server.port

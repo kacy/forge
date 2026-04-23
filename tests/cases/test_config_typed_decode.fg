@@ -1,0 +1,39 @@
+import std.config as config
+
+struct AppConfig:
+    pub name: String
+    pub debug: Bool
+
+struct ServerConfig:
+    pub host: String
+    pub port: Int
+    pub tls: Bool
+
+fn main() -> String!:
+    mut values: Map[String, String] := {}
+    values.insert("name", "forge")
+    values.insert("debug", "true")
+    values.insert("server.host", "127.0.0.1")
+    values.insert("server.port", "8080")
+    values.insert("server.tls", "yes")
+    cfg := config.from_map(values)
+
+    app := config.decode[AppConfig](cfg)
+    server := config.decode_prefix[ServerConfig](cfg, "server")
+    assert(app.is_ok)
+    assert(server.is_ok)
+    print("app:{app.ok.name}:{app.ok.debug}")
+    print("server:{server.ok.host}:{server.ok.port}:{server.ok.tls}")
+
+    missing := config.decode[AppConfig](config.empty())
+    assert(missing.is_err)
+    print("missing:" + missing.err.message)
+
+    mut bad_values: Map[String, String] := {}
+    bad_values.insert("server.host", "127.0.0.1")
+    bad_values.insert("server.port", "oops")
+    bad_values.insert("server.tls", "maybe")
+    bad := config.decode_prefix[ServerConfig](config.from_map(bad_values), "server")
+    assert(bad.is_err)
+    print("bad:" + bad.err.message)
+    return ""

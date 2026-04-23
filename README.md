@@ -136,7 +136,7 @@ output via the Cranelift native backend.
 - string methods, type conversions, math builtins
 - file I/O, env, args, exit, exec
 - collection methods (push, remove, contains, keys, values, reverse, etc.)
-- std.json, std.toml, std.csv, std.config — parse/encode config and data
+- std.json, std.toml, std.csv, std.config — parse/encode config and data, including typed config decode
 - std.net.tcp, std.net.dns, std.net.url, std.net.http, std.net.websocket, std.net.tls — networking
 - std.hash, std.checksum, std.encoding, std.crypto, std.bits, std.bytes, std.binary — bytes, crypto, and encoding
 - std.os.path, std.os.process, std.fs, std.glob — files, paths, and file discovery
