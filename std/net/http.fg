@@ -1588,18 +1588,21 @@ fn instrumented_logger(base: log.Logger, req: HttpRequestBytes) -> log.Logger:
     child := base.target("http").child_span() catch base.target("http")
     return child.with([log.str("method", req.method_text), log.str("path", req.path_text)])
 
+fn instrumentation_metric_name(prefix: String, suffix: String) -> String:
+    return prefix + "_" + suffix
+
 fn instrument_request(handler: fn(HttpRequestBytes) -> HttpResponse, logger: log.Logger, metric_prefix: String, req: HttpRequestBytes) -> HttpResponse:
     started := time_mod.now()
-    metrics.counter(metric_prefix + "_requests_total").inc()
-    inflight := metrics.gauge(metric_prefix + "_in_flight")
+    metrics.counter(instrumentation_metric_name(metric_prefix, "requests_total")).inc()
+    inflight := metrics.gauge(instrumentation_metric_name(metric_prefix, "in_flight"))
     inflight.add(1)
 
     resp := handler(req)
 
     inflight.add(0 - 1)
     elapsed := time_mod.now() - started
-    metrics.counter(metric_prefix + "_responses_total_" + resp.status.to_string()).inc()
-    metrics.histogram(metric_prefix + "_request_duration_ms").observe(elapsed)
+    metrics.counter(instrumentation_metric_name(metric_prefix, "responses_total_" + resp.status.to_string())).inc()
+    metrics.histogram(instrumentation_metric_name(metric_prefix, "request_duration_ms")).observe(elapsed)
     instrumented_logger(logger, req).info().int("status", resp.status).duration_ms("elapsed_ms", elapsed).msg("request complete")
     return resp
 

@@ -105,6 +105,14 @@ fn metric_names_from_values(values: Map[String, Int], names: List[String], seen:
         out.push(name)
     return out
 
+fn metric_names() -> List[String]:
+    mut seen: Map[String, Bool] := {}
+    mut names: List[String] := []
+    names = metric_names_from_values(counter_values, names, seen)
+    names = metric_names_from_values(gauge_values, names, seen)
+    names = metric_names_from_values(histogram_counts, names, seen)
+    return names.sort()
+
 # drop all in-memory metric values. useful for tests and short-lived tools.
 pub fn reset():
     counter_values = {}
@@ -209,26 +217,19 @@ fn render_histogram_lines(name: String) -> List[String]:
         lines.push(name + "_max " + histogram_max(name).to_string())
     return lines
 
+fn render_metric_lines(name: String) -> List[String]:
+    if counter_values.contains_key(name):
+        return render_counter_lines(name)
+    if gauge_values.contains_key(name):
+        return render_gauge_lines(name)
+    return render_histogram_lines(name)
+
 # export a stable text snapshot of all registered metrics.
 pub fn snapshot_text() -> String:
-    mut seen: Map[String, Bool] := {}
-    mut names: List[String] := []
-    names = metric_names_from_values(counter_values, names, seen)
-    names = metric_names_from_values(gauge_values, names, seen)
-    names = metric_names_from_values(histogram_counts, names, seen)
-    names = names.sort()
-
     mut lines: List[String] := []
-    for name in names:
-        if counter_values.contains_key(name):
-            for line in render_counter_lines(name):
-                lines.push(line)
-        elif gauge_values.contains_key(name):
-            for line in render_gauge_lines(name):
-                lines.push(line)
-        elif histogram_counts.contains_key(name):
-            for line in render_histogram_lines(name):
-                lines.push(line)
+    for name in metric_names():
+        for line in render_metric_lines(name):
+            lines.push(line)
     return lines.join(chr(10))
 
 test "metrics counters and gauges normalize names and store values":
