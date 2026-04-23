@@ -7,6 +7,7 @@ import std.bits as bits
 import std.bytes as bytes
 import std.encoding as encoding
 import std.fs as fs
+import std.crypto.signature as signature
 
 TAG_BOOLEAN := 1
 TAG_INTEGER := 2
@@ -41,6 +42,10 @@ pub struct DerValue:
 # parsed x.509 certificate metadata used by tls verification.
 pub struct Certificate:
     pub der: Bytes
+    pub tbs_der: Bytes
+    pub subject_public_key_info: Bytes
+    pub subject_public_key: Bytes
+    pub signature: Bytes
     pub version: Int
     pub serial_hex: String
     pub signature_algorithm: String
@@ -157,6 +162,16 @@ fn read_int_hex(data: Bytes, value: DerValue) -> String!:
         fail "expected integer"
     return encoding.to_hex(value_bytes(data, value))
 
+fn read_bit_string(data: Bytes, value: DerValue) -> Bytes!:
+    if value.tag != TAG_BIT_STRING:
+        fail "expected bit string"
+    body := value_bytes(data, value)
+    if body.len() == 0:
+        fail "empty bit string"
+    if body[0] != 0:
+        fail "bit strings with unused bits are not supported"
+    return body.slice(1, body.len())
+
 fn read_algorithm_oid(data: Bytes, value: DerValue) -> String!:
     if value.tag != TAG_SEQUENCE:
         fail "expected algorithm sequence"
@@ -195,6 +210,13 @@ fn parse_spki_algorithm(data: Bytes, value: DerValue) -> String!:
         fail "expected public key info sequence"
     alg := expect_tag(data, value.value_start, TAG_SEQUENCE)!
     return read_algorithm_oid(data, alg)!
+
+fn parse_spki_public_key(data: Bytes, value: DerValue) -> Bytes!:
+    if value.tag != TAG_SEQUENCE:
+        fail "expected public key info sequence"
+    alg := expect_tag(data, value.value_start, TAG_SEQUENCE)!
+    key_bits := expect_tag(data, alg.next, TAG_BIT_STRING)!
+    return read_bit_string(data, key_bits)!
 
 fn byte_to_decimal(value: Int) -> String:
     return value.to_string()
@@ -254,7 +276,7 @@ fn parse_extensions(data: Bytes, value: DerValue, dns_names: List[String], ip_ad
 fn skip_optional_tbs_field(tag: Int) -> Bool:
     return tag == 129 or tag == 161 or tag == 130 or tag == 162
 
-fn parse_tbs(data: Bytes, tbs: DerValue) -> Certificate!:
+fn parse_tbs(data: Bytes, tbs: DerValue, signature_value: Bytes) -> Certificate!:
     mut pos := tbs.value_start
     mut version := 1
     first := read_value(data, pos)!
@@ -290,13 +312,15 @@ fn parse_tbs(data: Bytes, tbs: DerValue) -> Certificate!:
             fail "unexpected tbs certificate field"
         pos = child.next
 
-    return Certificate(data, version, read_int_hex(data, serial)!, read_algorithm_oid(data, signature_alg)!, parse_spki_algorithm(data, spki)!, parse_name_common_name(data, issuer)!, parse_name_common_name(data, subject)!, validity_parts[0], validity_parts[1], dns_names, ip_addresses, is_ca)
+    return Certificate(data, data.slice(tbs.header_start, tbs.next), data.slice(spki.header_start, spki.next), parse_spki_public_key(data, spki)!, signature_value, version, read_int_hex(data, serial)!, read_algorithm_oid(data, signature_alg)!, parse_spki_algorithm(data, spki)!, parse_name_common_name(data, issuer)!, parse_name_common_name(data, subject)!, validity_parts[0], validity_parts[1], dns_names, ip_addresses, is_ca)
 
 # parse a der-encoded x.509 certificate.
 pub fn parse_der(data: Bytes) -> Certificate!:
     cert := expect_tag(data, 0, TAG_SEQUENCE)!
     tbs := expect_tag(data, cert.value_start, TAG_SEQUENCE)!
-    return parse_tbs(data, tbs)!
+    outer_sig_alg := expect_tag(data, tbs.next, TAG_SEQUENCE)!
+    sig_bits := expect_tag(data, outer_sig_alg.next, TAG_BIT_STRING)!
+    return parse_tbs(data, tbs, read_bit_string(data, sig_bits)!)!
 
 # parse the first certificate in a pem document.
 pub fn parse_pem(text: String) -> Certificate!:
@@ -353,6 +377,21 @@ impl Certificate:
 fn issuer_matches(cert: Certificate, issuer: Certificate) -> Bool:
     return cert.issuer_common_name != "" and cert.issuer_common_name == issuer.subject_common_name
 
+fn verify_signature_for_algorithm(cert: Certificate, issuer: Certificate) -> Bool:
+    if cert.signature_algorithm == "1.2.840.113549.1.1.11":
+        return signature.verify_rsa_pkcs1_sha256(issuer.subject_public_key, cert.tbs_der, cert.signature)
+    if cert.signature_algorithm == "1.2.840.10045.4.3.2":
+        return signature.verify_ecdsa_p256_sha256_asn1(issuer.subject_public_key, cert.tbs_der, cert.signature)
+    if cert.signature_algorithm == "1.3.101.112":
+        return signature.verify_ed25519(issuer.subject_public_key, cert.tbs_der, cert.signature)
+    return false
+
+# verify a certificate signature with its issuer certificate.
+pub fn verify_signature(cert: Certificate, issuer: Certificate) -> Bool:
+    if cert.signature.len() == 0 or cert.tbs_der.len() == 0:
+        return false
+    return verify_signature_for_algorithm(cert, issuer)
+
 fn verification_reason(hostname_ok: Bool, issuer_ok: Bool, root_ca_ok: Bool, signature_verified: Bool) -> String:
     if not hostname_ok:
         return "hostname does not match certificate san"
@@ -361,7 +400,7 @@ fn verification_reason(hostname_ok: Bool, issuer_ok: Bool, root_ca_ok: Bool, sig
     if not root_ca_ok:
         return "trusted root is not a ca certificate"
     if not signature_verified:
-        return "certificate signature verification needs native rsa/ecdsa support"
+        return "certificate signature verification failed"
     return "ok"
 
 # check the server name against the certificate san list.
@@ -371,13 +410,12 @@ pub fn verify_hostname(cert: Certificate, host: String) -> VerificationResult:
 
 # run the native trust preflight for a server certificate and root.
 #
-# this checks hostname, issuer metadata, and ca constraints. it intentionally
-# leaves signature_verified=false until native rsa/ecdsa verification lands.
+# this checks hostname, issuer metadata, ca constraints, and certificate signature.
 pub fn preflight_server_certificate(cert: Certificate, trusted_root: Certificate, host: String) -> VerificationResult:
     hostname_ok := matches_hostname(cert, host)
     issuer_ok := issuer_matches(cert, trusted_root)
     root_ca_ok := trusted_root.is_ca
-    signature_verified := false
+    signature_verified := verify_signature(cert, trusted_root)
     ok := hostname_ok and issuer_ok and root_ca_ok and signature_verified
     return VerificationResult(ok, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
 
@@ -394,6 +432,10 @@ test "x509 parses tls fixture certificates":
     assert_eq(cert.issuer_common_name, "forge-test-ca")
     assert_eq(cert.signature_algorithm, "1.2.840.113549.1.1.11")
     assert_eq(cert.public_key_algorithm, "1.2.840.113549.1.1.1")
+    assert(cert.tbs_der.len() > 0)
+    assert(cert.subject_public_key_info.len() > 0)
+    assert(cert.subject_public_key.len() > 0)
+    assert(cert.signature.len() > 0)
     assert(cert.dns_names.contains("localhost"))
     assert(cert.ip_addresses.contains("127.0.0.1"))
     assert(not cert.is_ca)
@@ -406,16 +448,17 @@ test "x509 hostname matching uses san names":
     assert(cert.matches_hostname("127.0.0.1"))
     assert(not cert.matches_hostname("example.com"))
 
-test "x509 trust preflight reports native signature gap":
+test "x509 trust preflight verifies fixture signature":
     cert := parse_pem(fs.read("tests/live/fixtures/localhost.crt")!)!
     ca := parse_pem(fs.read("tests/live/fixtures/localhost-ca.crt")!)!
     good := preflight_server_certificate(cert, ca, "localhost")
     bad_host := preflight_server_certificate(cert, ca, "example.com")
 
+    assert(verify_signature(cert, ca))
     assert(good.hostname_ok)
     assert(good.issuer_ok)
     assert(good.root_ca_ok)
-    assert(not good.signature_verified)
-    assert(not good.ok)
-    assert(good.reason.contains("rsa/ecdsa"))
+    assert(good.signature_verified)
+    assert(good.ok)
+    assert_eq(good.reason, "ok")
     assert(not bad_host.hostname_ok)
