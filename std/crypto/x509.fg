@@ -414,6 +414,21 @@ fn verification_reason(hostname_ok: Bool, issuer_ok: Bool, root_ca_ok: Bool, sig
         return "certificate signature verification failed"
     return "ok"
 
+fn find_issuer_in_chain(cert: Certificate, chain: List[Certificate], start: Int) -> Certificate!:
+    mut i := start
+    while i < chain.len():
+        candidate := chain[i]
+        if issuer_matches(cert, candidate):
+            return candidate
+        i = i + 1
+    fail "issuer not found in chain"
+
+fn find_issuer_in_roots(cert: Certificate, roots: List[Certificate]) -> Certificate!:
+    for root in roots:
+        if issuer_matches(cert, root):
+            return root
+    fail "issuer not found in trusted roots"
+
 # check the server name against the certificate san list.
 pub fn verify_hostname(cert: Certificate, host: String) -> VerificationResult:
     hostname_ok := matches_hostname(cert, host)
@@ -429,6 +444,47 @@ pub fn preflight_server_certificate(cert: Certificate, trusted_root: Certificate
     signature_verified := verify_signature(cert, trusted_root)
     ok := hostname_ok and issuer_ok and root_ca_ok and signature_verified
     return VerificationResult(ok, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
+
+# verify a server certificate chain against trusted roots.
+pub fn verify_server_chain(chain: List[Certificate], trusted_roots: List[Certificate], host: String) -> VerificationResult:
+    if chain.len() == 0:
+        return VerificationResult(false, false, false, false, false, "certificate chain is empty")
+    if trusted_roots.len() == 0:
+        return VerificationResult(false, false, false, false, false, "trusted roots are empty")
+    leaf := chain[0]
+    hostname_ok := matches_hostname(leaf, host)
+    if not hostname_ok:
+        return VerificationResult(false, false, true, true, true, verification_reason(false, true, true, true))
+
+    mut current := leaf
+    mut next_chain_index := 1
+    mut issuer_ok := false
+    mut root_ca_ok := false
+    mut signature_verified := false
+    mut depth := 0
+    while depth < chain.len() + trusted_roots.len() + 1:
+        issuer_from_chain := find_issuer_in_chain(current, chain, next_chain_index)
+        if issuer_from_chain.is_ok:
+            issuer := issuer_from_chain.ok
+            issuer_ok = true
+            root_ca_ok = issuer.is_ca
+            signature_verified = verify_signature(current, issuer)
+            if not root_ca_ok or not signature_verified:
+                return VerificationResult(false, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
+            current = issuer
+            next_chain_index = next_chain_index + 1
+        else:
+            root_result := find_issuer_in_roots(current, trusted_roots)
+            if root_result.is_err:
+                return VerificationResult(false, hostname_ok, false, false, false, "certificate issuer is not trusted")
+            root := root_result.ok
+            issuer_ok = true
+            root_ca_ok = root.is_ca
+            signature_verified = verify_signature(current, root)
+            ok := hostname_ok and issuer_ok and root_ca_ok and signature_verified
+            return VerificationResult(ok, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
+        depth = depth + 1
+    return VerificationResult(false, hostname_ok, issuer_ok, root_ca_ok, signature_verified, "certificate chain is too deep")
 
 test "der oid decoder reads common object ids":
     data := encoding.from_hex("0603551D11")!
@@ -481,3 +537,19 @@ test "x509 trust preflight verifies fixture signature":
     assert(good.ok)
     assert_eq(good.reason, "ok")
     assert(not bad_host.hostname_ok)
+
+test "x509 verifies server chains against trusted roots":
+    cert := parse_pem(fs.read("tests/live/fixtures/localhost.crt")!)!
+    ca := parse_pem(fs.read("tests/live/fixtures/localhost-ca.crt")!)!
+    good := verify_server_chain([cert], [ca], "localhost")
+    bad_host := verify_server_chain([cert], [ca], "example.com")
+    bad_roots := verify_server_chain([cert], [], "localhost")
+
+    assert(good.ok)
+    assert(good.hostname_ok)
+    assert(good.issuer_ok)
+    assert(good.root_ca_ok)
+    assert(good.signature_verified)
+    assert(not bad_host.ok)
+    assert(not bad_host.hostname_ok)
+    assert(not bad_roots.ok)
