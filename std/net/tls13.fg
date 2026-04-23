@@ -4,7 +4,9 @@
 # std.net.tls until the native handshake is ready.
 
 import std.binary as binary
+import std.bits as bits
 import std.bytes as bytes
+import std.crypto.aead as aead
 import std.crypto.kdf as kdf
 import std.encoding as encoding
 
@@ -60,6 +62,76 @@ fn write_bytes_if_any(out: ByteBuffer, data: Bytes) -> Bool!:
     if data.len() > 0:
         out.write(data)!
     return true
+
+fn sequence_nonce(static_iv: Bytes, sequence: Int) -> Bytes!:
+    if static_iv.len() != 12:
+        fail "tls static iv must be 12 bytes"
+    if sequence < 0:
+        fail "tls sequence must be non-negative"
+    out := bytes.buffer_with_capacity(12)
+    mut i := 0
+    while i < 12:
+        mut seq_byte := 0
+        if i >= 4:
+            shift := (11 - i) * 8
+            seq_byte = bits.band(bits.shr(sequence, shift), 255)
+        out.write_byte(bits.xor(static_iv[i], seq_byte))!
+        i = i + 1
+    return out.bytes()
+
+fn record_header(content_type: Int, length: Int) -> Bytes!:
+    out := bytes.buffer_with_capacity(5)
+    write_u8(out, content_type)!
+    write_u16_be(out, TLS_LEGACY_VERSION)!
+    write_u16_be(out, length)!
+    return out.bytes()
+
+fn inner_plaintext(content_type: Int, plaintext: Bytes) -> Bytes!:
+    if not valid_content_type(content_type):
+        fail tls13_fail("invalid tls inner content type")
+    out := bytes.buffer_with_capacity(plaintext.len() + 1)
+    write_bytes_if_any(out, plaintext)!
+    write_u8(out, content_type)!
+    return out.bytes()
+
+fn open_inner_plaintext(data: Bytes) -> Record!:
+    if data.len() == 0:
+        fail "empty tls inner plaintext"
+    mut pos := data.len() - 1
+    while pos > 0 and data[pos] == 0:
+        pos = pos - 1
+    content_type := data[pos]
+    if not valid_content_type(content_type):
+        fail "invalid tls inner content type"
+    return Record(content_type, TLS_LEGACY_VERSION, data.slice(0, pos))
+
+fn seal_record_with_aes(key: Bytes, static_iv: Bytes, sequence: Int, content_type: Int, plaintext: Bytes) -> Bytes!:
+    inner := inner_plaintext(content_type, plaintext)!
+    header := record_header(CONTENT_APPLICATION_DATA, inner.len() + 16)!
+    ciphertext := aead.aes_128_gcm_seal(key, sequence_nonce(static_iv, sequence)!, header, inner)!
+    return header.concat(ciphertext)
+
+fn open_record_with_aes(key: Bytes, static_iv: Bytes, sequence: Int, record: Bytes) -> Record!:
+    outer := decode_record(record)!
+    if outer.content_type != CONTENT_APPLICATION_DATA:
+        fail "expected tls application data record"
+    header := record_header(CONTENT_APPLICATION_DATA, outer.payload.len())!
+    inner := aead.aes_128_gcm_open(key, sequence_nonce(static_iv, sequence)!, header, outer.payload)!
+    return open_inner_plaintext(inner)
+
+fn seal_record_with_chacha(key: Bytes, static_iv: Bytes, sequence: Int, content_type: Int, plaintext: Bytes) -> Bytes!:
+    inner := inner_plaintext(content_type, plaintext)!
+    header := record_header(CONTENT_APPLICATION_DATA, inner.len() + 16)!
+    ciphertext := aead.chacha20_poly1305_seal(key, sequence_nonce(static_iv, sequence)!, header, inner)!
+    return header.concat(ciphertext)
+
+fn open_record_with_chacha(key: Bytes, static_iv: Bytes, sequence: Int, record: Bytes) -> Record!:
+    outer := decode_record(record)!
+    if outer.content_type != CONTENT_APPLICATION_DATA:
+        fail "expected tls application data record"
+    header := record_header(CONTENT_APPLICATION_DATA, outer.payload.len())!
+    inner := aead.chacha20_poly1305_open(key, sequence_nonce(static_iv, sequence)!, header, outer.payload)!
+    return open_inner_plaintext(inner)
 
 fn valid_content_type(content_type: Int) -> Bool:
     return content_type == CONTENT_CHANGE_CIPHER_SPEC or content_type == CONTENT_ALERT or content_type == CONTENT_HANDSHAKE or content_type == CONTENT_APPLICATION_DATA
@@ -141,6 +213,22 @@ pub fn hkdf_label(label: String, context: Bytes, length: Int) -> Bytes!:
 pub fn hkdf_expand_label_sha256(secret: Bytes, label: String, context: Bytes, length: Int) -> Bytes!:
     return kdf.hkdf_expand_sha256(secret, hkdf_label(label, context, length)!, length)
 
+# seal a tls 1.3 application record with aes-128-gcm.
+pub fn seal_application_aes_128_gcm(key: Bytes, static_iv: Bytes, sequence: Int, content_type: Int, plaintext: Bytes) -> Bytes!:
+    return seal_record_with_aes(key, static_iv, sequence, content_type, plaintext)
+
+# open a tls 1.3 application record with aes-128-gcm.
+pub fn open_application_aes_128_gcm(key: Bytes, static_iv: Bytes, sequence: Int, record: Bytes) -> Record!:
+    return open_record_with_aes(key, static_iv, sequence, record)
+
+# seal a tls 1.3 application record with chacha20-poly1305.
+pub fn seal_application_chacha20_poly1305(key: Bytes, static_iv: Bytes, sequence: Int, content_type: Int, plaintext: Bytes) -> Bytes!:
+    return seal_record_with_chacha(key, static_iv, sequence, content_type, plaintext)
+
+# open a tls 1.3 application record with chacha20-poly1305.
+pub fn open_application_chacha20_poly1305(key: Bytes, static_iv: Bytes, sequence: Int, record: Bytes) -> Record!:
+    return open_record_with_chacha(key, static_iv, sequence, record)
+
 test "tls13 encodes and decodes records":
     payload := bytes.from_string_utf8("hello")
     encoded := encode_record(CONTENT_HANDSHAKE, payload)!
@@ -182,3 +270,23 @@ test "tls13 encodes hkdf labels":
 
     assert_eq(encoding.to_hex(label), "00200d746c733133206465726976656400")
     assert_eq(hkdf_expand_label_sha256(secret, "derived", bytes.empty(), 32)!.len(), 32)
+
+test "tls13 seals and opens aes application records":
+    key := encoding.from_hex("00000000000000000000000000000000")!
+    iv := encoding.from_hex("000000000000000000000000")!
+    sealed := seal_application_aes_128_gcm(key, iv, 1, CONTENT_APPLICATION_DATA, bytes.from_string_utf8("payload"))!
+    opened := open_application_aes_128_gcm(key, iv, 1, sealed)!
+
+    assert_eq(decode_record(sealed)!.content_type, CONTENT_APPLICATION_DATA)
+    assert_eq(opened.content_type, CONTENT_APPLICATION_DATA)
+    assert_eq(opened.payload.to_string_utf8()!, "payload")
+    assert(open_application_aes_128_gcm(key, iv, 2, sealed).is_err)
+
+test "tls13 seals and opens chacha application records":
+    key := encoding.from_hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")!
+    iv := encoding.from_hex("000000000001020304050607")!
+    sealed := seal_application_chacha20_poly1305(key, iv, 7, CONTENT_HANDSHAKE, bytes.from_string_utf8("finished"))!
+    opened := open_application_chacha20_poly1305(key, iv, 7, sealed)!
+
+    assert_eq(opened.content_type, CONTENT_HANDSHAKE)
+    assert_eq(opened.payload.to_string_utf8()!, "finished")
