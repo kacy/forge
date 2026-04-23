@@ -13,6 +13,10 @@ query-mode-or:raw
 query-miss-or:fallback
 header-hit-or:yes
 header-miss-or:fallback
+cookie-hit:incoming
+cookie-hit-or:incoming
+cookie-miss-or:fallback
+has-cookie:true
 is-put:false
 is-patch:false
 served-status:201
@@ -22,6 +26,9 @@ served-id:42
 served-empty:true
 served-success:true
 served-status-ok:false
+served-trace:trace-req
+served-cookie-count:1
+served-cookie-first:session=fresh; Path=/; HttpOnly
 bad-request-client-error:true
 server-error-server-error:true
 no-content-status:204
@@ -32,7 +39,23 @@ client-query-mode:fast%20path
 client-header:yes
 client-accept:application/json
 client-auth:Bearer abc123
+client-cookie:client-side
 client-body:ping
 form-type:application/x-www-form-urlencoded
 form-auth:Basic dXNlcjpwYXNz
 form-body:name=forge+cli
+multipart-type:multipart/form-data; boundary=forge-boundary-test
+multipart-is:true
+multipart-boundary:forge-boundary-test
+multipart-count:2
+multipart-note:hello multipart
+multipart-note-or:hello multipart
+multipart-miss-or:fallback
+multipart-body-default:binary
+multipart-has-blob:true
+multipart-has-missing:false
+multipart-filename:blob.bin
+multipart-file-type:application/octet-stream
+multipart-file-len:4
+multipart-file-byte2:255
+multipart-file-text-or:binary
