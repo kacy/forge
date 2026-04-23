@@ -46,6 +46,35 @@ use typed field constructors instead of formatting key/value strings by hand:
 `logger.with(fields)` returns a child logger with context fields. event fields
 are added fluently before `msg(...)`.
 
+for generated ids, use:
+
+- `log.new_trace_id()`
+- `log.new_span_id()`
+- `logger.with_new_trace()`
+- `logger.child_span()`
+
+that keeps trace ids compact and avoids every app inventing its own uuid
+formatting.
+
+## metrics
+
+`std.metrics` is the matching in-memory metrics layer for apps and tools.
+
+```fg
+import std.metrics as metrics
+
+requests := metrics.counter("requests total")
+latency := metrics.histogram("request latency ms")
+
+requests.inc()
+latency.observe(12)
+
+print(metrics.snapshot_text())
+```
+
+the text snapshot is stable and readable enough for tests, local tools, and
+simple export paths.
+
 ## otel-ready shape
 
 json logs intentionally keep stable mapping points for a future first-party

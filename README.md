@@ -132,7 +132,7 @@ output via the Cranelift native backend.
 - concurrency: spawn/await, Task[T], Mutex, WaitGroup, Semaphore, Channel, select, contexts, timers
 - multi-module imports with `from ... import`
 
-**standard library (56 modules):**
+**standard library (57 modules):**
 - string methods, type conversions, math builtins
 - file I/O, env, args, exit, exec
 - collection methods (push, remove, contains, keys, values, reverse, etc.)
@@ -141,7 +141,7 @@ output via the Cranelift native backend.
 - std.hash, std.checksum, std.encoding, std.crypto, std.bits, std.bytes, std.binary — bytes, crypto, and encoding
 - std.os.path, std.os.process, std.fs, std.glob — files, paths, and file discovery
 - std.cli, std.diagnostic, std.testing, std.text.scanner — small tooling layers
-- std.log, std.fmt, std.math, std.rand, std.time, std.datetime, std.uuid — common app helpers
+- std.log, std.metrics, std.fmt, std.math, std.rand, std.time, std.datetime, std.uuid — common app helpers
 
 for child processes, prefer `std.os.process.command(...)` and the structured
 `run` / `output` / `start` flow. keep `std.io` for low-level stream work.

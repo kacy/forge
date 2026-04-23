@@ -150,6 +150,29 @@ handler := http.wrap(app, auth)
 
 stack multiple wrappers by repeating `wrap(...)`.
 
+for the common "log every request and keep a few process metrics" path, use
+`http.instrument(...)` with `std.log` and `std.metrics`:
+
+```fg
+import std.log as log
+import std.metrics as metrics
+
+logger := log.root().json().with([log.str("service", "api")])
+handler := http.instrument(app, logger, "http_api")
+
+http.serve_one(reader, writer, handler)!
+print(metrics.snapshot_text())
+```
+
+that records:
+- total requests
+- in-flight requests
+- per-status totals
+- request duration histogram
+
+and it emits one structured `request complete` line per request with method,
+path, status, elapsed time, trace id, and span id.
+
 ## serving one request
 
 for tests, in-memory examples, or small buffered handlers:

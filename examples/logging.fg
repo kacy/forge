@@ -1,5 +1,6 @@
 # structured logging examples
 import std.log as log
+import std.metrics as metrics
 import std.fs as fs
 
 fn main() -> String!:
@@ -27,6 +28,24 @@ fn main() -> String!:
     print("json has service: " + json_content.contains(chr(34) + "service" + chr(34) + ":" + chr(34) + "api" + chr(34)).to_string())
     print("json has trace: " + json_content.contains(chr(34) + "trace_id" + chr(34) + ":" + chr(34) + "trace-demo" + chr(34)).to_string())
     fs.remove(json_path)
+
+    trace_id := log.new_trace_id()!
+    span_id := log.new_span_id()!
+    print("trace ids look compact: " + (trace_id.len() == 32 and span_id.len() == 16 and not trace_id.contains("-") and not span_id.contains("-")).to_string())
+
+    metrics.reset()
+    requests := metrics.counter("requests total")
+    inflight := metrics.gauge("requests in flight")
+    latency := metrics.histogram("request latency ms")
+    requests.inc()
+    requests.add(2)
+    inflight.set(1)
+    inflight.add(0 - 1)
+    latency.observe(12)
+    latency.observe(30)
+    snapshot := metrics.snapshot_text()
+    print("metrics has counter: " + snapshot.contains("requests_total 3").to_string())
+    print("metrics has histogram: " + snapshot.contains("request_latency_ms_count 2").to_string())
 
     print("logging works")
     return ""

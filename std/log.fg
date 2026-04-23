@@ -11,6 +11,7 @@
 #   logger.info().int("port", 8080).msg("listening")
 
 import std.io as io
+import std.uuid as uuid
 
 # debug logs are useful while developing.
 pub LEVEL_DEBUG := 0
@@ -120,6 +121,9 @@ pub fn duration_ms(key: String, value: Int) -> Field:
 fn raw_fields(value: String) -> Field:
     return make_field("", "raw", value, 0, 0.0, false)
 
+fn compact_trace_value(value: String) -> String:
+    return value.replace("-", "")
+
 fn copy_fields(items: List[Field]) -> List[Field]:
     mut out: List[Field] := []
     for item in items:
@@ -140,6 +144,17 @@ fn add_field(base: List[Field], item: Field) -> List[Field]:
 # create a logger from the current global settings.
 pub fn root() -> Logger:
     return Logger(min_level, output_format, sink_path, [], "", "", "")
+
+# create a compact trace id suitable for logs and future propagation.
+pub fn new_trace_id() -> String!:
+    return compact_trace_value(uuid.v7() catch uuid.v4()!)
+
+# create a compact span id.
+pub fn new_span_id() -> String!:
+    mut trace_id := new_trace_id()!
+    if trace_id.len() >= 16:
+        return trace_id.substring(0, 16)
+    return trace_id
 
 # set minimum level (trace=-1, debug=0, info=1, warn=2, error=3, fatal=4).
 pub fn set_level(level: Int):
@@ -183,6 +198,15 @@ impl Logger:
 
     fn trace_context(trace_id: String, span_id: String) -> Logger:
         return Logger(self.min_level, self.format, self.sink_path, copy_fields(self.context), trace_id, span_id, self.target_name)
+
+    fn with_new_trace() -> Logger!:
+        return self.trace_context(new_trace_id()!, new_span_id()!)
+
+    fn child_span() -> Logger!:
+        mut trace_id := self.trace_id
+        if trace_id == "":
+            trace_id = new_trace_id()!
+        return self.trace_context(trace_id, new_span_id()!)
 
     fn level(level: Int) -> Logger:
         return Logger(level, self.format, self.sink_path, copy_fields(self.context), self.trace_id, self.span_id, self.target_name)
@@ -554,6 +578,18 @@ test "structured logger renders json fields and context":
     assert(text.contains(chr(34) + "port" + chr(34) + ":8080"))
     assert(text.contains(chr(34) + "cached" + chr(34) + ":false"))
     remove_file(path)
+
+test "trace ids are compact and span ids stay short":
+    trace_id := new_trace_id()!
+    span_id := new_span_id()!
+    child := root().with_new_trace()!.child_span()!
+
+    assert_eq(trace_id.len(), 32)
+    assert_eq(span_id.len(), 16)
+    assert(not trace_id.contains("-"))
+    assert(not span_id.contains("-"))
+    assert(child.trace_id.len() == 32)
+    assert(child.span_id.len() == 16)
 
 test "structured logger filters by local minimum level":
     path := "/tmp/forge-std-log-filter-" + time().to_string() + ".txt"

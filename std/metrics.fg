@@ -1,0 +1,269 @@
+# std.metrics - small in-memory metrics for apps and tools
+#
+# this stays intentionally simple:
+# - counters accumulate
+# - gauges move up and down
+# - histograms keep fixed buckets plus count/sum/min/max
+
+# a monotonically increasing metric.
+pub struct Counter:
+    pub name: String
+
+# a point-in-time integer value.
+pub struct Gauge:
+    pub name: String
+
+# a histogram with fixed buckets and integer observations.
+pub struct Histogram:
+    pub name: String
+
+mut counter_values: Map[String, Int] := {}
+mut gauge_values: Map[String, Int] := {}
+mut histogram_counts: Map[String, Int] := {}
+mut histogram_sums: Map[String, Int] := {}
+mut histogram_mins: Map[String, Int] := {}
+mut histogram_maxs: Map[String, Int] := {}
+mut histogram_bucket_counts: Map[String, Int] := {}
+
+fn default_histogram_buckets() -> List[Int]:
+    return [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000]
+
+fn bucket_key(name: String, upper_bound: Int) -> String:
+    return name + "|" + upper_bound.to_string()
+
+fn metric_name_char(c: String) -> String:
+    if (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_":
+        return c
+    return "_"
+
+fn normalize_metric_name(name: String) -> String:
+    if name == "":
+        return "metric"
+    mut out := ""
+    mut i := 0
+    while i < name.len():
+        out = out + metric_name_char(name[i])
+        i = i + 1
+    if out == "":
+        return "metric"
+    if out[0] >= "0" and out[0] <= "9":
+        return "_" + out
+    return out
+
+fn ensure_counter(name: String):
+    if not counter_values.contains_key(name):
+        counter_values.insert(name, 0)
+
+fn ensure_gauge(name: String):
+    if not gauge_values.contains_key(name):
+        gauge_values.insert(name, 0)
+
+fn ensure_histogram(name: String):
+    if histogram_counts.contains_key(name):
+        return
+    histogram_counts.insert(name, 0)
+    histogram_sums.insert(name, 0)
+    histogram_mins.insert(name, 0)
+    histogram_maxs.insert(name, 0)
+    for bucket in default_histogram_buckets():
+        histogram_bucket_counts.insert(bucket_key(name, bucket), 0)
+
+fn counter_value(name: String) -> Int:
+    ensure_counter(name)
+    return counter_values[name]
+
+fn gauge_value(name: String) -> Int:
+    ensure_gauge(name)
+    return gauge_values[name]
+
+fn histogram_count(name: String) -> Int:
+    ensure_histogram(name)
+    return histogram_counts[name]
+
+fn histogram_sum(name: String) -> Int:
+    ensure_histogram(name)
+    return histogram_sums[name]
+
+fn histogram_min(name: String) -> Int:
+    ensure_histogram(name)
+    return histogram_mins[name]
+
+fn histogram_max(name: String) -> Int:
+    ensure_histogram(name)
+    return histogram_maxs[name]
+
+fn histogram_bucket_value(name: String, upper_bound: Int) -> Int:
+    ensure_histogram(name)
+    return histogram_bucket_counts[bucket_key(name, upper_bound)]
+
+fn metric_names_from_values(values: Map[String, Int], names: List[String], seen: Map[String, Bool]) -> List[String]:
+    mut out := names
+    for name in values:
+        if seen.contains_key(name):
+            continue
+        seen.insert(name, true)
+        out.push(name)
+    return out
+
+# drop all in-memory metric values. useful for tests and short-lived tools.
+pub fn reset():
+    counter_values = {}
+    gauge_values = {}
+    histogram_counts = {}
+    histogram_sums = {}
+    histogram_mins = {}
+    histogram_maxs = {}
+    histogram_bucket_counts = {}
+
+# create or reopen a counter by name.
+pub fn counter(name: String) -> Counter:
+    normalized := normalize_metric_name(name)
+    ensure_counter(normalized)
+    return Counter(normalized)
+
+# create or reopen a gauge by name.
+pub fn gauge(name: String) -> Gauge:
+    normalized := normalize_metric_name(name)
+    ensure_gauge(normalized)
+    return Gauge(normalized)
+
+# create or reopen a histogram by name.
+pub fn histogram(name: String) -> Histogram:
+    normalized := normalize_metric_name(name)
+    ensure_histogram(normalized)
+    return Histogram(normalized)
+
+impl Counter:
+    fn inc():
+        self.add(1)
+
+    fn add(delta: Int):
+        ensure_counter(self.name)
+        counter_values.insert(self.name, counter_values[self.name] + delta)
+
+    fn value() -> Int:
+        return counter_value(self.name)
+
+impl Gauge:
+    fn set(value: Int):
+        ensure_gauge(self.name)
+        gauge_values.insert(self.name, value)
+
+    fn add(delta: Int):
+        ensure_gauge(self.name)
+        gauge_values.insert(self.name, gauge_values[self.name] + delta)
+
+    fn value() -> Int:
+        return gauge_value(self.name)
+
+impl Histogram:
+    fn observe(value: Int):
+        ensure_histogram(self.name)
+        next_count := histogram_counts[self.name] + 1
+        histogram_counts.insert(self.name, next_count)
+        histogram_sums.insert(self.name, histogram_sums[self.name] + value)
+        if next_count == 1:
+            histogram_mins.insert(self.name, value)
+            histogram_maxs.insert(self.name, value)
+        else:
+            if value < histogram_mins[self.name]:
+                histogram_mins.insert(self.name, value)
+            if value > histogram_maxs[self.name]:
+                histogram_maxs.insert(self.name, value)
+        for bucket in default_histogram_buckets():
+            if value <= bucket:
+                key := bucket_key(self.name, bucket)
+                histogram_bucket_counts.insert(key, histogram_bucket_counts[key] + 1)
+
+    fn count() -> Int:
+        return histogram_count(self.name)
+
+    fn sum() -> Int:
+        return histogram_sum(self.name)
+
+    fn min() -> Int:
+        return histogram_min(self.name)
+
+    fn max() -> Int:
+        return histogram_max(self.name)
+
+fn render_counter_lines(name: String) -> List[String]:
+    mut lines := ["# TYPE " + name + " counter"]
+    lines.push(name + " " + counter_value(name).to_string())
+    return lines
+
+fn render_gauge_lines(name: String) -> List[String]:
+    mut lines := ["# TYPE " + name + " gauge"]
+    lines.push(name + " " + gauge_value(name).to_string())
+    return lines
+
+fn render_histogram_lines(name: String) -> List[String]:
+    mut lines := ["# TYPE " + name + " histogram"]
+    for bucket in default_histogram_buckets():
+        lines.push(name + "_bucket" + chr(123) + "le=" + chr(34) + bucket.to_string() + chr(34) + chr(125) + " " + histogram_bucket_value(name, bucket).to_string())
+    lines.push(name + "_bucket" + chr(123) + "le=" + chr(34) + "+Inf" + chr(34) + chr(125) + " " + histogram_count(name).to_string())
+    lines.push(name + "_count " + histogram_count(name).to_string())
+    lines.push(name + "_sum " + histogram_sum(name).to_string())
+    if histogram_count(name) > 0:
+        lines.push(name + "_min " + histogram_min(name).to_string())
+        lines.push(name + "_max " + histogram_max(name).to_string())
+    return lines
+
+# export a stable text snapshot of all registered metrics.
+pub fn snapshot_text() -> String:
+    mut seen: Map[String, Bool] := {}
+    mut names: List[String] := []
+    names = metric_names_from_values(counter_values, names, seen)
+    names = metric_names_from_values(gauge_values, names, seen)
+    names = metric_names_from_values(histogram_counts, names, seen)
+    names = names.sort()
+
+    mut lines: List[String] := []
+    for name in names:
+        if counter_values.contains_key(name):
+            for line in render_counter_lines(name):
+                lines.push(line)
+        elif gauge_values.contains_key(name):
+            for line in render_gauge_lines(name):
+                lines.push(line)
+        elif histogram_counts.contains_key(name):
+            for line in render_histogram_lines(name):
+                lines.push(line)
+    return lines.join(chr(10))
+
+test "metrics counters and gauges normalize names and store values":
+    reset()
+    requests := counter("requests total")
+    inflight := gauge("requests in flight")
+
+    requests.inc()
+    requests.add(2)
+    inflight.set(3)
+    inflight.add(0 - 1)
+
+    snapshot := snapshot_text()
+    assert_eq(requests.value(), 3)
+    assert_eq(inflight.value(), 2)
+    assert(snapshot.contains("# TYPE requests_total counter"))
+    assert(snapshot.contains("requests_total 3"))
+    assert(snapshot.contains("# TYPE requests_in_flight gauge"))
+    assert(snapshot.contains("requests_in_flight 2"))
+
+test "metrics histograms export bucketed text":
+    reset()
+    latency := histogram("request latency ms")
+
+    latency.observe(4)
+    latency.observe(30)
+
+    snapshot := snapshot_text()
+    assert_eq(latency.count(), 2)
+    assert_eq(latency.sum(), 34)
+    assert_eq(latency.min(), 4)
+    assert_eq(latency.max(), 30)
+    assert(snapshot.contains("# TYPE request_latency_ms histogram"))
+    assert(snapshot.contains("request_latency_ms_bucket" + chr(123) + "le=" + chr(34) + "5" + chr(34) + chr(125) + " 1"))
+    assert(snapshot.contains("request_latency_ms_bucket" + chr(123) + "le=" + chr(34) + "50" + chr(34) + chr(125) + " 2"))
+    assert(snapshot.contains("request_latency_ms_bucket" + chr(123) + "le=" + chr(34) + "+Inf" + chr(34) + chr(125) + " 2"))
+    assert(snapshot.contains("request_latency_ms_count 2"))
+    assert(snapshot.contains("request_latency_ms_sum 34"))

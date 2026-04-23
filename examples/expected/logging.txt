@@ -3,4 +3,7 @@ file has error: true
 json has message: true
 json has service: true
 json has trace: true
+trace ids look compact: true
+metrics has counter: true
+metrics has histogram: true
 logging works
