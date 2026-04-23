@@ -1,0 +1,46 @@
+# std.crypto.ecdh - key agreement helpers
+#
+# x25519 private keys are runtime handles and are single-use after derive.
+
+import std.bytes as bytes
+
+# an ephemeral x25519 keypair for one key agreement.
+pub struct X25519KeyPair:
+    pub handle: Int
+    pub public_key: Bytes
+
+# generate a fresh x25519 ephemeral key pair.
+pub fn x25519_keypair() -> X25519KeyPair!:
+    handle := crypto_x25519_keygen()!
+    public_key := crypto_x25519_public_key(handle)!
+    return X25519KeyPair(handle, public_key)
+
+# derive a shared secret with a peer public key. this consumes the private key.
+pub fn x25519_shared_secret(key: X25519KeyPair, peer_public_key: Bytes) -> Bytes!:
+    if peer_public_key.len() != 32:
+        fail "x25519 peer public key must be 32 bytes"
+    return crypto_x25519_shared_secret(key.handle, peer_public_key)!
+
+impl X25519KeyPair:
+    fn shared_secret(peer_public_key: Bytes) -> Bytes!:
+        return x25519_shared_secret(self, peer_public_key)
+
+    fn close():
+        crypto_x25519_close(self.handle)
+
+test "x25519 derives matching shared secrets":
+    alice := x25519_keypair()!
+    bob := x25519_keypair()!
+    alice_secret := alice.shared_secret(bob.public_key)!
+    bob_secret := bob.shared_secret(alice.public_key)!
+
+    assert_eq(alice.public_key.len(), 32)
+    assert_eq(bob.public_key.len(), 32)
+    assert_eq(alice_secret.len(), 32)
+    assert_eq(bob_secret.len(), 32)
+    assert(bytes.eq(alice_secret, bob_secret))
+
+test "x25519 rejects malformed peer keys":
+    key := x25519_keypair()!
+    assert(key.shared_secret(bytes.from_string_utf8("bad")).is_err)
+    key.close()

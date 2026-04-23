@@ -84,6 +84,18 @@ bytes_concat|forge_bytes_concat|I64,I64|I64
 bytes_eq|forge_bytes_eq|I64,I64|I64
 crypto_constant_time_eq|forge_crypto_constant_time_eq|I64,I64|I64
 secure_random_bytes|forge_secure_random_bytes|I64|I64
+crypto_x25519_keygen|forge_crypto_x25519_keygen||I64
+crypto_x25519_public_key|forge_crypto_x25519_public_key|I64|I64
+crypto_x25519_shared_secret|forge_crypto_x25519_shared_secret|I64,I64|I64
+crypto_x25519_close|forge_crypto_x25519_close|I64|
+crypto_aes_128_gcm_seal|forge_crypto_aes_128_gcm_seal|I64,I64,I64,I64|I64
+crypto_aes_128_gcm_open|forge_crypto_aes_128_gcm_open|I64,I64,I64,I64|I64
+crypto_chacha20_poly1305_seal|forge_crypto_chacha20_poly1305_seal|I64,I64,I64,I64|I64
+crypto_chacha20_poly1305_open|forge_crypto_chacha20_poly1305_open|I64,I64,I64,I64|I64
+crypto_verify_ed25519|forge_crypto_verify_ed25519|I64,I64,I64|I64
+crypto_verify_ecdsa_p256_sha256_asn1|forge_crypto_verify_ecdsa_p256_sha256_asn1|I64,I64,I64|I64
+crypto_verify_rsa_pkcs1_sha256|forge_crypto_verify_rsa_pkcs1_sha256|I64,I64,I64|I64
+crypto_verify_rsa_pss_sha256|forge_crypto_verify_rsa_pss_sha256|I64,I64,I64|I64
 json_decode_flat6|forge_json_decode_flat6|I64,I64,I64,I64,I64,I64,I64,I64,I64,I64,I64,I64,I64|I64
 byte_buffer_new|forge_byte_buffer_new||I64
 byte_buffer_with_capacity|forge_byte_buffer_with_capacity|I64|I64
@@ -110,6 +122,7 @@ os_temp_dir|forge_os_temp_dir||I64
 os_home_dir|forge_os_home_dir||I64
 os_set_env|forge_os_set_env|I64,I64|I64
 os_unset_env|forge_os_unset_env|I64|I64
+os_cert_roots_pem|forge_os_cert_roots_pem||I64
 read_file|forge_read_file|I64|I64
 read_file_bytes|forge_read_file_bytes|I64|I64
 write_file|forge_write_file|I64,I64|I64

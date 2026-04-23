@@ -274,6 +274,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "libc",
  "parking_lot",
+ "ring",
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",

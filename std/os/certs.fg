@@ -1,0 +1,18 @@
+# std.os.certs - system certificate roots
+#
+# this is intentionally tiny: native tls needs a way to load trusted roots
+# without going through rustls.
+
+# return the operating system certificate root bundle as pem text.
+pub fn roots_pem() -> String!:
+    data := os_cert_roots_pem()
+    if data == "":
+        fail "system certificate roots not found"
+    return data
+
+test "system roots helper is callable":
+    roots := roots_pem()
+    if roots.is_ok:
+        assert(roots.ok.contains("BEGIN CERTIFICATE"))
+    else:
+        assert(roots.err.len() > 0)

@@ -1,0 +1,35 @@
+# std.crypto.signature - verification helpers
+#
+# these are runtime-backed verifier kernels for x.509 and tls.
+
+import std.bytes as bytes
+import std.encoding as encoding
+
+# verify an ed25519 signature.
+pub fn verify_ed25519(public_key: Bytes, message: Bytes, signature: Bytes) -> Bool:
+    return crypto_verify_ed25519(public_key, message, signature)
+
+# verify an ecdsa p-256 sha-256 signature encoded as asn.1 der.
+pub fn verify_ecdsa_p256_sha256_asn1(public_key: Bytes, message: Bytes, signature: Bytes) -> Bool:
+    return crypto_verify_ecdsa_p256_sha256_asn1(public_key, message, signature)
+
+# verify an rsa pkcs#1 v1.5 sha-256 signature.
+pub fn verify_rsa_pkcs1_sha256(public_key: Bytes, message: Bytes, signature: Bytes) -> Bool:
+    return crypto_verify_rsa_pkcs1_sha256(public_key, message, signature)
+
+# verify an rsa-pss sha-256 signature.
+pub fn verify_rsa_pss_sha256(public_key: Bytes, message: Bytes, signature: Bytes) -> Bool:
+    return crypto_verify_rsa_pss_sha256(public_key, message, signature)
+
+test "ed25519 verification matches rfc 8032 empty message vector":
+    public_key := encoding.from_hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")!
+    sig := encoding.from_hex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")!
+
+    assert(verify_ed25519(public_key, bytes.empty(), sig))
+    assert(not verify_ed25519(public_key, bytes.from_string_utf8("bad"), sig))
+
+test "signature verifiers reject malformed inputs":
+    bad := bytes.from_string_utf8("bad")
+    assert(not verify_ecdsa_p256_sha256_asn1(bad, bad, bad))
+    assert(not verify_rsa_pkcs1_sha256(bad, bad, bad))
+    assert(not verify_rsa_pss_sha256(bad, bad, bad))
