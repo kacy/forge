@@ -61,6 +61,9 @@ pub struct ClientRequest:
     pub path: String
     pub headers: Map[String, String]
     pub body: Bytes
+    pub use_tls: Bool
+    pub timeout_ms: Int
+    pub redirect_limit: Int
 
 # cookie builder used by request and response helpers.
 pub struct Cookie:
@@ -1522,7 +1525,7 @@ pub fn parse_response(raw: String) -> HttpResponse!:
 # starts building an outbound request.
 pub fn request(method: String, host: String, port: Int, url_path: String) -> ClientRequest:
     mut headers: Map[String, String] := {}
-    return ClientRequest(method, host, port, normalize_path(url_path), headers, bytes.empty())
+    return ClientRequest(method, host, port, normalize_path(url_path), headers, bytes.empty(), false, -1, 0)
 
 # starts a get request builder.
 pub fn get_request(host: String, port: Int, url_path: String) -> ClientRequest:
@@ -1542,11 +1545,11 @@ pub fn delete_request(host: String, port: Int, url_path: String) -> ClientReques
 
 # starts building an outbound https request on port 443.
 pub fn https_request(method: String, host: String, url_path: String) -> ClientRequest:
-    return request(method, host, 443, url_path)
+    return ClientRequest(method, host, 443, normalize_path(url_path), {}, bytes.empty(), true, -1, 0)
 
 # starts building an outbound https request on an explicit port.
 pub fn https_request_port(method: String, host: String, port: Int, url_path: String) -> ClientRequest:
-    return request(method, host, port, url_path)
+    return ClientRequest(method, host, port, normalize_path(url_path), {}, bytes.empty(), true, -1, 0)
 
 # starts a get https request builder.
 pub fn get_https_request(host: String, url_path: String) -> ClientRequest:
@@ -1561,9 +1564,140 @@ pub fn multipart_file(name: String, filename: String, content_type: String, body
 pub fn multipart_file_text(name: String, filename: String, content_type: String, body_text: String) -> MultipartPart:
     return multipart_file(name, filename, content_type, bytes.from_string_utf8(body_text))
 
+fn request_default_port(use_tls: Bool) -> Int:
+    if use_tls:
+        return 443
+    return 80
+
+fn request_origin_changed(req: ClientRequest, next_use_tls: Bool, next_host: String, next_port: Int) -> Bool:
+    return req.use_tls != next_use_tls or req.host != next_host or req.port != next_port
+
+fn redirect_status(status: Int) -> Bool:
+    return status == 301 or status == 302 or status == 303 or status == 307 or status == 308
+
+fn redirect_preserves_method(status: Int, method: String) -> Bool:
+    if status == 307 or status == 308:
+        return true
+    if (status == 301 or status == 302) and (method == "GET" or method == "HEAD"):
+        return true
+    return false
+
+fn redirect_target_path(current_path: String, location: String) -> String:
+    if location == "":
+        return current_path
+    if location.starts_with("/"):
+        return location
+    if location.starts_with("?"):
+        current_query := current_path.index_of("?")
+        if current_query >= 0:
+            return current_path.substring(0, current_query) + location
+        return current_path + location
+    if location.starts_with("#"):
+        return current_path
+    current_query := current_path.index_of("?")
+    mut base_path := current_path
+    if current_query >= 0:
+        base_path = current_path.substring(0, current_query)
+    slash := base_path.last_index_of("/")
+    if slash < 0:
+        return "/" + location
+    return base_path.substring(0, slash + 1) + location
+
+fn redirect_request(req: ClientRequest, resp: HttpResponse) -> ClientRequest!:
+    location := resp.header_value("Location")
+    if location == "":
+        fail "redirect response is missing location"
+
+    mut next_use_tls := req.use_tls
+    mut next_host := req.host
+    mut next_port := req.port
+    mut next_path := req.path
+
+    if location.starts_with("http://") or location.starts_with("https://"):
+        parsed := url_mod.parse(location)
+        scheme := url_mod.scheme(parsed)
+        next_use_tls = scheme == "https"
+        next_host = url_mod.host(parsed)
+        if next_host == "":
+            fail "redirect location is missing host"
+        next_port = url_mod.port(parsed)
+        if next_port < 0:
+            next_port = request_default_port(next_use_tls)
+        next_path = url_mod.path(parsed)
+        if next_path == "":
+            next_path = "/"
+        query_text := url_mod.query(parsed)
+        if query_text != "":
+            next_path = next_path + "?" + query_text
+    else:
+        next_path = redirect_target_path(req.path, location)
+
+    mut next_method := req.method
+    mut next_body := req.body
+    mut next_headers := copy_headers_map(req.headers)
+    if not redirect_preserves_method(resp.status, req.method):
+        next_method = "GET"
+        next_body = bytes.empty()
+        next_headers = header_without(next_headers, "Content-Type")
+    if request_origin_changed(req, next_use_tls, next_host, next_port):
+        next_headers = header_without(next_headers, "Authorization")
+        next_headers = header_without(next_headers, "Cookie")
+    return ClientRequest(next_method, next_host, next_port, normalize_path(next_path), next_headers, next_body, next_use_tls, req.timeout_ms, req.redirect_limit)
+
+fn send_request_plain(req: ClientRequest) -> HttpResponse!:
+    stream := io.connect(req.host, req.port)!
+    if req.timeout_ms >= 0:
+        stream.set_timeout(req.timeout_ms)
+    writer := stream.buffered_bytes_writer()
+    writer.write_all_bytes(req.to_bytes()!)!
+    writer.flush()!
+    raw := stream.read_all_bytes_chunked(4096)!
+    stream.close()
+    return parse_response_bytes(raw)
+
+fn send_request_tls(req: ClientRequest, server_name: String, config: tls.Config) -> HttpResponse!:
+    stream := io.connect(req.host, req.port)!
+    if req.timeout_ms >= 0:
+        stream.set_timeout(req.timeout_ms)
+    conn := tls.client(stream, server_name, config)!
+    conn.write_all_bytes(req.to_bytes()!)!
+    raw := conn.read_all_bytes_chunked(4096)!
+    conn.close()
+    return parse_response_bytes(raw)
+
+fn send_request_once(req: ClientRequest) -> HttpResponse!:
+    if req.use_tls:
+        return send_request_tls(req, req.host, tls.client_config()!)
+    return send_request_plain(req)
+
+fn send_request_once_with_tls_config(req: ClientRequest, tls_config: tls.Config) -> HttpResponse!:
+    if req.use_tls:
+        return send_request_tls(req, req.host, tls_config)
+    return send_request_plain(req)
+
+fn send_request_following_redirects(req: ClientRequest) -> HttpResponse!:
+    mut current := req
+    mut redirects_left := req.redirect_limit
+    while true:
+        resp := send_request_once(current)!
+        if redirects_left <= 0 or not redirect_status(resp.status):
+            return resp
+        current = redirect_request(current, resp)!
+        redirects_left = redirects_left - 1
+
+fn send_request_following_redirects_with_tls_config(req: ClientRequest, tls_config: tls.Config) -> HttpResponse!:
+    mut current := req
+    mut redirects_left := req.redirect_limit
+    while true:
+        resp := send_request_once_with_tls_config(current, tls_config)!
+        if redirects_left <= 0 or not redirect_status(resp.status):
+            return resp
+        current = redirect_request(current, resp)!
+        redirects_left = redirects_left - 1
+
 impl ClientRequest:
     fn header(name: String, value: String) -> ClientRequest:
-        return ClientRequest(self.method, self.host, self.port, self.path, header_with(self.headers, name, value), self.body)
+        return ClientRequest(self.method, self.host, self.port, self.path, header_with(self.headers, name, value), self.body, self.use_tls, self.timeout_ms, self.redirect_limit)
 
     fn keep_alive() -> ClientRequest:
         return self.header("Connection", "keep-alive")
@@ -1571,8 +1705,20 @@ impl ClientRequest:
     fn close_connection() -> ClientRequest:
         return self.header("Connection", "close")
 
+    fn with_timeout(ms: Int) -> ClientRequest:
+        return ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), self.body, self.use_tls, ms, self.redirect_limit)
+
+    fn follow_redirects(limit: Int) -> ClientRequest:
+        mut next_limit := limit
+        if next_limit < 0:
+            next_limit = 0
+        return ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), self.body, self.use_tls, self.timeout_ms, next_limit)
+
+    fn no_redirects() -> ClientRequest:
+        return self.follow_redirects(0)
+
     fn query_param(name: String, value: String) -> ClientRequest:
-        return ClientRequest(self.method, self.host, self.port, append_query_param_to_path(self.path, name, value), copy_headers_map(self.headers), self.body)
+        return ClientRequest(self.method, self.host, self.port, append_query_param_to_path(self.path, name, value), copy_headers_map(self.headers), self.body, self.use_tls, self.timeout_ms, self.redirect_limit)
 
     fn query_params(values: Map[String, String]) -> ClientRequest:
         mut next := self
@@ -1581,10 +1727,10 @@ impl ClientRequest:
         return next
 
     fn body_text(text: String) -> ClientRequest:
-        return ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), bytes.from_string_utf8(text))
+        return ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), bytes.from_string_utf8(text), self.use_tls, self.timeout_ms, self.redirect_limit)
 
     fn body_bytes(data: Bytes) -> ClientRequest:
-        return ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), data)
+        return ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), data, self.use_tls, self.timeout_ms, self.redirect_limit)
 
     fn text_body(text: String) -> ClientRequest:
         return self.body_text(text)
@@ -1639,13 +1785,7 @@ impl ClientRequest:
         return buf.bytes()
 
     fn send() -> HttpResponse!:
-        conn := io.connect(self.host, self.port)!
-        writer := conn.buffered_bytes_writer()
-        writer.write_all_bytes(self.to_bytes()!)!
-        writer.flush()!
-        raw := conn.read_all_bytes_chunked(4096)!
-        conn.close()
-        return parse_response_bytes(raw)
+        return send_request_following_redirects(self)
 
     fn send_tls() -> HttpResponse!:
         return self.send_tls_with_config(self.host, tls.client_config()!)
@@ -1654,11 +1794,10 @@ impl ClientRequest:
         return self.send_tls()
 
     fn send_tls_with_config(server_name: String, config: tls.Config) -> HttpResponse!:
-        conn := tls.dial_with_config(self.host, self.port, server_name, config)!
-        conn.write_all_bytes(self.to_bytes()!)!
-        raw := conn.read_all_bytes_chunked(4096)!
-        conn.close()
-        return parse_response_bytes(raw)
+        current := ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), self.body, true, self.timeout_ms, self.redirect_limit)
+        if server_name != self.host:
+            return send_request_tls(current, server_name, config)
+        return send_request_following_redirects_with_tls_config(current, config)
 
     fn send_bytes() -> Bytes!:
         return self.send()!.body_bytes()
@@ -1892,6 +2031,31 @@ test "http client request builder renders headers and bodies":
     assert(payload.contains("Connection: close"))
     assert(payload.contains("Content-Length: 2"))
     assert(payload.ends_with(chr(13) + chr(10) + chr(13) + chr(10) + "hi"))
+
+test "http client requests carry transport options":
+    req := https_request("GET", "example.test", "/").with_timeout(1500).follow_redirects(4)
+    assert(req.use_tls)
+    assert_eq(req.timeout_ms, 1500)
+    assert_eq(req.redirect_limit, 4)
+    assert_eq(req.no_redirects().redirect_limit, 0)
+
+test "http redirect helper rewrites requests safely":
+    req := post_request("example.test", 80, "/submit").header("Authorization", "Bearer x").cookie("session", "abc").json_body(json_mod.make_object()).follow_redirects(2)
+    same_origin := redirect_request(req, response(302).header("Location", "/next"))!
+    assert_eq(same_origin.method, "GET")
+    assert_eq(same_origin.path, "/next")
+    assert_eq(same_origin.body.len(), 0)
+    assert_eq(header_lookup(same_origin.headers, "Authorization"), "Bearer x")
+    assert_eq(header_lookup(same_origin.headers, "Cookie"), "session=abc")
+
+    cross_origin := redirect_request(req, response(307).header("Location", "https://api.example.test/v2/items?draft=1"))!
+    assert_eq(cross_origin.method, "POST")
+    assert(cross_origin.use_tls)
+    assert_eq(cross_origin.host, "api.example.test")
+    assert_eq(cross_origin.port, 443)
+    assert_eq(cross_origin.path, "/v2/items?draft=1")
+    assert_eq(header_lookup(cross_origin.headers, "Authorization"), "")
+    assert_eq(header_lookup(cross_origin.headers, "Cookie"), "")
 
 test "http serves keep-alive connections":
     first := get_request("example.test", 80, "/one").keep_alive().to_bytes()!

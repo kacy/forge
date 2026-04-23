@@ -239,6 +239,21 @@ print(resp.status_code().to_string())
 print(resp.body_text()!)
 ```
 
+for transport control, keep it on the request builder:
+
+```fg
+resp := http.get_https_request("example.com", "/docs")
+    .with_timeout(1500)
+    .follow_redirects(3)
+    .send()!
+```
+
+`follow_redirects(...)` handles:
+- relative `Location` headers
+- absolute `http://` and `https://` redirects
+- method rewrite to `GET` for `301` / `302` / `303` when needed
+- auth and cookie header stripping when the redirect changes origin
+
 that keeps request construction, response parsing, and body decoding in one
 module instead of splitting the work across app code.
 
