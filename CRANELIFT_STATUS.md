@@ -17,44 +17,47 @@ Forge source (.fg)
   → native executable
 ```
 
-## Status: 90/90 Deterministic Examples Passing
+## status
 
-The current self-hosted frontend plus Cranelift backend passes all 90
-deterministic expected-output examples in this repository.
+the current self-hosted frontend plus Cranelift backend handles the tracked
+deterministic example suite and the native tls stack used by the live tls echo
+coverage in this repo.
 
-Two examples remain environment-dependent rather than compiler-dependent:
-`net_basics` and `net_echo`. In this sandbox they do not provide a stable
-socket/DNS signal, so they are excluded from the deterministic pass count.
+some networking examples remain environment-dependent rather than
+compiler-dependent. those are still better treated as live probes than as
+portable deterministic signals.
 
 The deterministic suite covers:
 structs, enums, match, generics, lambdas/closures, collections (List/Map/Set),
 string methods, error propagation (try/fail), concurrency (spawn/await),
 JSON/TOML/URL parsing, file I/O, path/process helpers, and more.
 
-## Codebase (~11,000 lines Rust)
+## codebase (~10,500 lines Rust)
 
 | Component | Lines | Purpose |
 |-----------|-------|---------|
-| `cranelift/runtime/src/lib.rs` | ~3,240 | Core FFI runtime |
-| `cranelift/runtime/src/collections/` | ~2,405 | List, Map, Set |
-| `cranelift/codegen/src/ir_consumer.rs` | ~1,970 | Text IR → Cranelift IR |
-| `cranelift/runtime/src/string.rs` | ~650 | String operations |
-| `cranelift/cli/src/main.rs` | ~630 | CLI (build/run/check/parse/lex) |
-| `cranelift/codegen/src/lib.rs` | ~545 | Runtime function declarations, struct registry |
-| `cranelift/runtime/src/json.rs` | ~490 | JSON parser (arena-based DOM) |
-| `cranelift/runtime/src/toml.rs` | ~290 | TOML parser |
-| `cranelift/codegen/src/linker.rs` | ~125 | Object file linking |
+| `cranelift/runtime/src/` | 8,040 | runtime storage, ARC, collections, OS/IO, crypto helpers |
+| `cranelift/codegen/src/` | 1,917 | text IR → Cranelift lowering and link support |
+| `cranelift/cli/src/` | 418 | CLI (build/run/check/parse/lex) |
+| `cranelift/codegen/src/ir_consumer.rs` | 1,568 | text IR → Cranelift IR |
+| `cranelift/runtime/src/collections/list.rs` | 952 | list runtime |
+| `cranelift/runtime/src/collections/map.rs` | 719 | map runtime |
+| `cranelift/runtime/src/host_fs.rs` | 609 | file and host filesystem helpers |
+| `cranelift/runtime/src/runtime_core.rs` | 572 | core runtime glue |
+| `cranelift/runtime/src/string_list.rs` | 555 | string list helpers |
+| `cranelift/runtime/src/crypto.rs` | 354 | AEAD, x25519, signature, and TLS-facing crypto kernels |
 
 ## Self-Hosting Status: Complete
 
 The Cranelift backend compiles the entire self-hosted compiler into a working
 native binary. The self-hosted compiler plus stdlib source surface is now well
-past 19k lines, with the frontend and most language logic already living in
+past 40k lines, with the frontend and most language logic already living in
 Forge rather than Rust.
 
 **Verified:**
 - `forge version`, `lex`, `parse`, `check` — all work
-- `forge build` / `forge run` — compiles and executes all 53 examples
+- `forge build` / `forge run` — compiles and executes the tracked example suite
+- `std.net.tls` now owns both client and server TLS 1.3 handshakes in Forge
 - Fixed-point reached: C output is byte-for-byte identical whether the
   compiler was compiled via C transpilation or Cranelift (837,451 bytes)
 

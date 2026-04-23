@@ -1,9 +1,13 @@
 # performance audit
 
-## status: march 2026
+## status: april 2026
 
 audit of both the zig bootstrap compiler and the self-hosted forge compiler.
 all issues below have been fixed.
+
+this snapshot predates the native tls move, but the high-level conclusion still
+holds: the expensive parts worth fixing were compiler/runtime hot paths, not the
+old Rust TLS module we have since deleted.
 
 ---
 

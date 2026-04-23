@@ -9,25 +9,25 @@ backend demos.
 
 Source totals:
 
-- `self-host/*.fg`: 14,684 lines
-- `std/**/*.fg`: 5,072 lines
-- `cranelift/**/*.rs`: 10,962 lines
+- `self-host/*.fg`: 18,814 lines
+- `std/**/*.fg`: 21,281 lines
+- `cranelift/**/*.rs`: 10,532 lines
 
 Rust breakdown:
 
-- runtime: 7,689 lines
-- codegen: 2,643 lines
-- CLI: 630 lines
+- runtime: 8,040 lines
+- codegen: 1,917 lines
+- CLI: 418 lines
 
 Largest Rust files:
 
-- `cranelift/runtime/src/lib.rs`: 3,241
-- `cranelift/codegen/src/ir_consumer.rs`: 1,972
-- `cranelift/runtime/src/collections/list.rs`: 893
-- `cranelift/runtime/src/collections/map.rs`: 891
-- `cranelift/runtime/src/string.rs`: 650
-- `cranelift/cli/src/main.rs`: 630
-- `cranelift/codegen/src/lib.rs`: 545
+- `cranelift/codegen/src/ir_consumer.rs`: 1,568
+- `cranelift/runtime/src/collections/list.rs`: 952
+- `cranelift/runtime/src/collections/map.rs`: 719
+- `cranelift/runtime/src/host_fs.rs`: 609
+- `cranelift/runtime/src/runtime_core.rs`: 572
+- `cranelift/runtime/src/string_list.rs`: 555
+- `cranelift/runtime/src/collections/set.rs`: 486
 
 ## Keep In Rust
 
@@ -42,6 +42,10 @@ These should remain Rust for the foreseeable future:
 
 The desired end state is not zero Rust. It is a thin Rust backend/runtime with
 the language, compiler policy, and most standard-library logic living in Forge.
+
+That line is even more true now that TLS has moved out of a Rust runtime module
+and into `std.net.tls`, `std.net.tls13`, and the Forge-side crypto helpers that
+support them.
 
 ## Migration Targets
 

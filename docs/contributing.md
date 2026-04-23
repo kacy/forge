@@ -64,6 +64,7 @@ make bootstrap
 - bootstrap code generation: `bootstrap/codegen.zig`
 - self-hosted implementation: `self-host/`
 - runtime support: `runtime/forge_runtime.h`
+- native tls and higher-level protocol work: `std/net/tls.fg`, `std/net/tls13.fg`, `std/net/http.fg`, `std/net/websocket.fg`
 - language and diagnostic docs: `docs/`
 
 ## common validation commands
@@ -77,4 +78,10 @@ make self-host
 make run-examples-self
 make run-regressions-self
 make bootstrap
+```
+
+for tls-facing changes, add a live sanity check after the normal loop:
+
+```
+./self-host/forge_main run tests/live/test_tls_echo_live.fg
 ```
