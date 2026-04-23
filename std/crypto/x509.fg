@@ -6,7 +6,6 @@
 import std.bits as bits
 import std.bytes as bytes
 import std.encoding as encoding
-import std.fs as fs
 import std.crypto.signature as signature
 
 TAG_BOOLEAN := 1
@@ -491,8 +490,8 @@ test "der oid decoder reads common object ids":
     assert_eq(read_oid(data, 0)!, OID_SUBJECT_ALT_NAME)
 
 test "x509 parses tls fixture certificates":
-    cert := parse_pem(fs.read("tests/live/fixtures/localhost.crt")!)!
-    ca := parse_pem(fs.read("tests/live/fixtures/localhost-ca.crt")!)!
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
+    ca := parse_pem(read_file("tests/live/fixtures/localhost-ca.crt")!)!
 
     assert_eq(cert.version, 3)
     assert_eq(cert.subject_common_name, "localhost")
@@ -509,14 +508,14 @@ test "x509 parses tls fixture certificates":
     assert(ca.is_ca)
 
 test "x509 hostname matching uses san names":
-    cert := parse_pem(fs.read("tests/live/fixtures/localhost.crt")!)!
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
 
     assert(cert.matches_hostname("localhost"))
     assert(cert.matches_hostname("127.0.0.1"))
     assert(not cert.matches_hostname("example.com"))
 
 test "x509 parses pem certificate chains":
-    chain := fs.read("tests/live/fixtures/localhost.crt")! + fs.read("tests/live/fixtures/localhost-ca.crt")!
+    chain := read_file("tests/live/fixtures/localhost.crt")! + read_file("tests/live/fixtures/localhost-ca.crt")!
     certs := parse_pem_chain(chain)!
 
     assert_eq(certs.len(), 2)
@@ -524,8 +523,8 @@ test "x509 parses pem certificate chains":
     assert_eq(certs[1].subject_common_name, "forge-test-ca")
 
 test "x509 trust preflight verifies fixture signature":
-    cert := parse_pem(fs.read("tests/live/fixtures/localhost.crt")!)!
-    ca := parse_pem(fs.read("tests/live/fixtures/localhost-ca.crt")!)!
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
+    ca := parse_pem(read_file("tests/live/fixtures/localhost-ca.crt")!)!
     good := preflight_server_certificate(cert, ca, "localhost")
     bad_host := preflight_server_certificate(cert, ca, "example.com")
 
@@ -539,8 +538,8 @@ test "x509 trust preflight verifies fixture signature":
     assert(not bad_host.hostname_ok)
 
 test "x509 verifies server chains against trusted roots":
-    cert := parse_pem(fs.read("tests/live/fixtures/localhost.crt")!)!
-    ca := parse_pem(fs.read("tests/live/fixtures/localhost-ca.crt")!)!
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
+    ca := parse_pem(read_file("tests/live/fixtures/localhost-ca.crt")!)!
     good := verify_server_chain([cert], [ca], "localhost")
     bad_host := verify_server_chain([cert], [ca], "example.com")
     bad_roots := verify_server_chain([cert], [], "localhost")
