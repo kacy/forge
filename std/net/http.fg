@@ -887,6 +887,76 @@ fn parse_decimal_bytes(raw: Bytes) -> Int!:
         pos = pos + 1
     return value
 
+fn parse_hex_bytes(raw: Bytes) -> Int!:
+    start := trim_ascii_start(raw, 0, raw.len())
+    end := trim_ascii_end(raw, start, raw.len())
+    if start >= end:
+        fail "expected hex digits"
+
+    mut value := 0
+    mut pos := start
+    while pos < end:
+        digit := raw[pos]
+        mut digit_value := -1
+        if digit >= 48 and digit <= 57:
+            digit_value = digit - 48
+        elif digit >= 65 and digit <= 70:
+            digit_value = 10 + digit - 65
+        elif digit >= 97 and digit <= 102:
+            digit_value = 10 + digit - 97
+        else:
+            fail "expected hex digits"
+        value = value * 16 + digit_value
+        pos = pos + 1
+    return value
+
+fn transfer_encoding_value(raw_head: Bytes) -> String:
+    return (decode_utf8(header_value_bytes(raw_head, "Transfer-Encoding")) catch "").to_lower()
+
+fn uses_chunked_transfer_encoding(raw_head: Bytes) -> Bool:
+    return transfer_encoding_value(raw_head).contains("chunked")
+
+fn chunk_size_line_bytes(raw: Bytes) -> Bytes:
+    mut end := raw.len()
+    if end > 0 and raw[end - 1] == 10:
+        end = end - 1
+    if end > 0 and raw[end - 1] == 13:
+        end = end - 1
+    mut line := raw.slice(0, end)
+    semi := find_byte(line, 0, 59)
+    if semi >= 0:
+        line = line.slice(0, semi)
+    return line
+
+fn chunk_line_is_blank(raw: Bytes) -> Bool:
+    return chunk_size_line_bytes(raw).is_empty()
+
+fn consume_chunk_line_ending(reader: BufferedBytesReader):
+    ending := reader.read_exact_bytes(1) catch bytes.empty()
+    if ending.is_empty():
+        return
+    if ending[0] == 13:
+        reader.read_exact_bytes(1) catch bytes.empty()
+
+fn read_chunked_body(reader: BufferedBytesReader) -> Bytes!:
+    nl := bytes.from_string_utf8(chr(10))
+    out := bytes.buffer()
+    while true:
+        line := reader.read_until_bytes_including(nl)!
+        if line.is_empty():
+            fail "incomplete chunk size"
+        chunk_size := parse_hex_bytes(chunk_size_line_bytes(line))!
+        if chunk_size == 0:
+            while true:
+                trailer := reader.read_until_bytes_including(nl)!
+                if trailer.is_empty() or chunk_line_is_blank(trailer):
+                    return out.bytes()
+        out.write(reader.read_exact_bytes(chunk_size)!)!
+        consume_chunk_line_ending(reader)
+
+fn decode_chunked_body(raw: Bytes) -> Bytes!:
+    return read_chunked_body(io.bytes_reader(raw).buffered_chunked(64))!
+
 fn content_length_from_head_bytes(raw_head: Bytes) -> Int!:
     length_text := header_value_bytes(raw_head, "Content-Length")
     if length_text.is_empty():
@@ -1299,6 +1369,8 @@ fn read_request_from_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestB
         return build_http_request(buf.bytes(), bytes.empty())
     raw := buf.bytes()
     head_bytes := raw.slice(0, body_start)
+    if uses_chunked_transfer_encoding(head_bytes):
+        return build_http_request(head_bytes, read_chunked_body(reader)!)
     content_length := content_length_from_head_bytes(head_bytes)!
     body_buf := bytes.buffer_with_capacity(content_length)
     if body_start < raw.len():
@@ -1435,7 +1507,9 @@ pub fn parse_response_bytes(raw: Bytes) -> HttpResponse!:
     headers := response_headers_map(head)
     content_type := header_lookup(headers, "Content-Type")
     set_cookie_headers := response_set_cookie_headers(head)
-    body := raw.slice(body_start, raw.len())
+    mut body := raw.slice(body_start, raw.len())
+    if uses_chunked_transfer_encoding(head):
+        body = decode_chunked_body(body)!
     return HttpResponse(status, content_type, header_without(headers, "Content-Type"), body, set_cookie_headers)
 
 # parses a raw http response string into a structured response.
@@ -1782,6 +1856,16 @@ test "http accepts zero content length":
 
     assert_eq(req.method()!, "GET")
     assert_eq(req.body_bytes().len(), 0)
+
+test "http decodes chunked request and response bodies":
+    crlf := chr(13) + chr(10)
+    raw_req := "POST /chunked HTTP/1.1" + crlf + "Host: example.test" + crlf + "Transfer-Encoding: chunked" + crlf + crlf + "4" + crlf + "wiki" + crlf + "5" + crlf + "pedia" + crlf + "0" + crlf + crlf
+    req := read_request_buffered_bytes(io.bytes_reader(bytes.from_string_utf8(raw_req)).buffered_chunked(4))!
+    assert_eq(req.body_text()!, "wikipedia")
+
+    raw_resp := "HTTP/1.1 200 OK" + crlf + "Transfer-Encoding: chunked" + crlf + crlf + "4" + crlf + "pong" + crlf + "0" + crlf + crlf
+    resp := parse_response(raw_resp)!
+    assert_eq(resp.body_text()!, "pong")
 
 test "http cookies work across request and response helpers":
     req_bytes := get_request("example.test", 80, "/").cookie("session", "abc123").cookie("theme", "dark").to_bytes()!
