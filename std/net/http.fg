@@ -758,6 +758,10 @@ impl HttpRequestBytes:
         return self.query_text
     fn version() -> String!:
         return self.version_text
+    fn wants_keep_alive() -> Bool:
+        return not request_prefers_close(self)
+    fn wants_close() -> Bool:
+        return request_prefers_close(self)
     fn headers() -> String!:
         return self.headers_text
     fn header(name: String) -> String!:
@@ -1116,6 +1120,12 @@ impl HttpResponse:
     fn content_type(value: String) -> HttpResponse:
         return self.header("Content-Type", value)
 
+    fn keep_alive() -> HttpResponse:
+        return self.header("Connection", "keep-alive")
+
+    fn close_connection() -> HttpResponse:
+        return self.header("Connection", "close")
+
     fn set_cookie(item: Cookie) -> HttpResponse:
         mut next := copy_string_list(self.set_cookie_headers)
         next.push(serialize_cookie(item))
@@ -1226,6 +1236,30 @@ pub fn redirect(url: String) -> String:
 # ===============================================================
 # Server Helpers
 # ===============================================================
+fn request_connection_value(req: HttpRequestBytes) -> String:
+    return req.header_or("Connection", "").to_lower()
+
+fn request_prefers_close(req: HttpRequestBytes) -> Bool:
+    connection := request_connection_value(req)
+    if req.version_text == "HTTP/1.0":
+        return connection != "keep-alive"
+    return connection == "close"
+
+fn response_connection_value(resp: HttpResponse) -> String:
+    return resp.header_value("Connection").to_lower()
+
+fn response_for_connection(req: HttpRequestBytes, resp: HttpResponse) -> HttpResponse:
+    if request_prefers_close(req):
+        return resp.close_connection()
+    if response_connection_value(resp) != "":
+        return resp
+    return resp.keep_alive()
+
+fn response_closes_connection(req: HttpRequestBytes, resp: HttpResponse) -> Bool:
+    if request_prefers_close(req):
+        return true
+    return response_connection_value(resp) == "close"
+
 fn find_request_head_end_from(raw: Bytes, start: Int) -> Int:
     mut i := start
     if i < 0:
@@ -1457,6 +1491,12 @@ impl ClientRequest:
     fn header(name: String, value: String) -> ClientRequest:
         return ClientRequest(self.method, self.host, self.port, self.path, header_with(self.headers, name, value), self.body)
 
+    fn keep_alive() -> ClientRequest:
+        return self.header("Connection", "keep-alive")
+
+    fn close_connection() -> ClientRequest:
+        return self.header("Connection", "close")
+
     fn query_param(name: String, value: String) -> ClientRequest:
         return ClientRequest(self.method, self.host, self.port, append_query_param_to_path(self.path, name, value), copy_headers_map(self.headers), self.body)
 
@@ -1620,14 +1660,39 @@ pub fn serve_one(reader: BufferedBytesReader, writer: BufferedBytesWriter, handl
     resp := handler(req)
     return send_buffered(writer, resp)
 
+# serves requests on one connection until either side asks to close.
+pub fn serve_connection(reader: BufferedBytesReader, writer: BufferedBytesWriter, handler: fn(HttpRequestBytes) -> HttpResponse) -> Int!:
+    mut total := 0
+    while true:
+        req := read_request_buffered_bytes(reader)!
+        if req.head.is_empty() and req.method_text == "":
+            return total
+        resp := response_for_connection(req, handler(req))
+        total = total + send_buffered(writer, resp)!
+        if response_closes_connection(req, resp):
+            return total
+
 # serves one request from a client fd and closes the connection after writing the response.
 pub fn serve_fd(fd: Int, handler: fn(HttpRequestBytes) -> HttpResponse) -> Int!:
     req := read_request_bytes(fd)!
     return send(fd, handler(req))
 
+# serves requests from one client fd until the connection closes.
+pub fn serve_connection_fd(fd: Int, handler: fn(HttpRequestBytes) -> HttpResponse) -> Int!:
+    stream := io.from_fd(fd)
+    reader := stream.buffered_bytes_reader_chunked(512)
+    writer := stream.buffered_bytes_writer()
+    written := serve_connection(reader, writer, handler)!
+    tcp_close(fd)
+    return written
+
 # accepts one client from a listener fd and serves exactly one request.
 pub fn serve_listener_once(listener_fd: Int, handler: fn(HttpRequestBytes) -> HttpResponse) -> Int!:
     return serve_fd(tcp_accept(listener_fd)!, handler)
+
+# accepts one client from a listener fd and serves that whole connection.
+pub fn serve_listener_connection(listener_fd: Int, handler: fn(HttpRequestBytes) -> HttpResponse) -> Int!:
+    return serve_connection_fd(tcp_accept(listener_fd)!, handler)
 
 # serves one request like serve_one(), but respects cancellation and deadlines.
 pub fn serve_one_ctx(reader: BufferedBytesReader, writer: BufferedBytesWriter, handler: fn(HttpRequestBytes) -> HttpResponse, ctx: Context) -> Int!BlockingError:
@@ -1743,6 +1808,23 @@ test "http client request builder renders headers and bodies":
     assert(payload.contains("Connection: close"))
     assert(payload.contains("Content-Length: 2"))
     assert(payload.ends_with(chr(13) + chr(10) + chr(13) + chr(10) + "hi"))
+
+test "http serves keep-alive connections":
+    first := get_request("example.test", 80, "/one").keep_alive().to_bytes()!
+    second := get_request("example.test", 80, "/two").close_connection().to_bytes()!
+    input := bytes.buffer()
+    input.write(first)!
+    input.write(second)!
+    output := bytes.buffer()
+
+    written := serve_connection(io.bytes_reader(input.bytes()).buffered_chunked(5), output.buffered_chunked(6), fn(req: HttpRequestBytes) => text(200, req.path_text))!
+    payload := output.bytes().to_string_utf8()!
+
+    assert_eq(written, output.bytes().len())
+    assert(payload.contains("Connection: keep-alive"))
+    assert(payload.contains("Connection: close"))
+    assert(payload.contains(chr(13) + chr(10) + chr(13) + chr(10) + "/one"))
+    assert(payload.contains(chr(13) + chr(10) + chr(13) + chr(10) + "/two"))
 
 test "http multipart helpers keep binary bodies raw":
     file_buf := bytes.buffer()

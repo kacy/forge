@@ -191,6 +191,26 @@ for fd-based servers that already accepted a client connection, use:
 http.serve_fd(client_fd, handler)!
 ```
 
+for one persistent client connection, use:
+
+```fg
+http.serve_connection(reader, writer, handler)!
+```
+
+or with an already-accepted fd:
+
+```fg
+http.serve_connection_fd(client_fd, handler)!
+```
+
+if you want the connection to stay open, set it explicitly on the request or
+response builder:
+
+```fg
+req := http.get_request("example.test", 80, "/events").keep_alive()
+resp := http.text(200, "ok").keep_alive()
+```
+
 if a handler wants to recover from parse or query issues, just map those
 results into a normal response:
 
