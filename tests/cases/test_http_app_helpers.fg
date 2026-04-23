@@ -116,4 +116,31 @@ fn main() -> String!:
     print("form-type:" + form_http_req.header("Content-Type")!)
     print("form-auth:" + form_http_req.header("Authorization")!)
     print("form-body:" + form_http_req.body_text()!)
+
+    file_buf := bytes.buffer()
+    file_buf.write_string_utf8("FG")!
+    file_buf.write_byte(255)!
+    file_buf.write_byte(0)!
+    mut multipart_parts: List[http.MultipartPart] := []
+    multipart_parts.push(http.multipart_field("note", "hello multipart"))
+    multipart_parts.push(http.multipart_file("blob", "blob.bin", "application/octet-stream", file_buf.bytes()))
+    multipart_req := http.post_request("upload.example", 8080, "/upload").multipart_body_with_boundary(multipart_parts, "forge-boundary-test")!
+    multipart_req_bytes := multipart_req.to_bytes()!
+    multipart_http_req := http.read_request_buffered_bytes(io.bytes_reader(multipart_req_bytes).buffered_chunked(7))!
+    blob_part := multipart_http_req.multipart_part("blob")!
+    print("multipart-type:" + multipart_http_req.header("Content-Type")!)
+    print("multipart-is:" + multipart_http_req.is_multipart()!.to_string())
+    print("multipart-boundary:" + multipart_http_req.multipart_boundary()!)
+    print("multipart-count:" + multipart_http_req.multipart_parts()!.len().to_string())
+    print("multipart-note:" + multipart_http_req.multipart_text("note")!)
+    print("multipart-note-or:" + multipart_http_req.multipart_text_or("note", "fallback"))
+    print("multipart-miss-or:" + multipart_http_req.multipart_text_or("missing", "fallback"))
+    print("multipart-body-default:" + multipart_http_req.body_text_or("binary"))
+    print("multipart-has-blob:" + multipart_http_req.has_multipart_part("blob")!.to_string())
+    print("multipart-has-missing:" + multipart_http_req.has_multipart_part("missing")!.to_string())
+    print("multipart-filename:" + blob_part.filename)
+    print("multipart-file-type:" + blob_part.header("Content-Type"))
+    print("multipart-file-len:" + blob_part.body_bytes().len().to_string())
+    print("multipart-file-byte2:" + blob_part.body_bytes()[2].to_string())
+    print("multipart-file-text-or:" + blob_part.text_or("binary"))
     return ""

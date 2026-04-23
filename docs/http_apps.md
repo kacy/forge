@@ -101,6 +101,40 @@ client requests can carry cookies the same way:
 req := http.get_request("example.test", 80, "/profile").cookie("session", "abc123")
 ```
 
+## multipart forms
+
+`std.net.http` now has a small multipart surface for the common upload path.
+
+on the request side:
+- `req.is_multipart()`
+- `req.multipart_boundary()`
+- `req.multipart_parts()`
+- `req.has_multipart_part(...)`
+- `req.multipart_part(...)`
+- `req.multipart_text(...)`
+- `req.multipart_text_or(...)`
+
+parts keep their raw bytes, so file uploads do not need to decode as utf-8:
+
+```fg
+part := req.multipart_part("avatar")!
+size := part.body_bytes().len()
+filename := part.filename
+kind := part.header("Content-Type")
+```
+
+for client-side requests, build parts explicitly:
+
+```fg
+mut parts: List[http.MultipartPart] := []
+parts.push(http.multipart_field("note", "hello"))
+parts.push(http.multipart_file("blob", "blob.bin", "application/octet-stream", payload))
+
+req := http.post_request("example.test", 80, "/upload").multipart_body(parts)!
+```
+
+if you want a stable boundary for tests, use `multipart_body_with_boundary(...)`.
+
 ## middleware
 
 middleware wraps a normal handler and returns another normal handler:

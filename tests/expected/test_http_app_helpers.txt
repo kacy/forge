@@ -44,3 +44,18 @@ client-body:ping
 form-type:application/x-www-form-urlencoded
 form-auth:Basic dXNlcjpwYXNz
 form-body:name=forge+cli
+multipart-type:multipart/form-data; boundary=forge-boundary-test
+multipart-is:true
+multipart-boundary:forge-boundary-test
+multipart-count:2
+multipart-note:hello multipart
+multipart-note-or:hello multipart
+multipart-miss-or:fallback
+multipart-body-default:binary
+multipart-has-blob:true
+multipart-has-missing:false
+multipart-filename:blob.bin
+multipart-file-type:application/octet-stream
+multipart-file-len:4
+multipart-file-byte2:255
+multipart-file-text-or:binary

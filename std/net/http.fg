@@ -17,6 +17,7 @@ import std.json as json_mod
 import std.net.url as url_mod
 import std.net.tls as tls
 import std.text.scanner as scanner
+import std.uuid as uuid
 from std.concurrent import Context, BlockingError, blocking_cancelled, blocking_deadline_exceeded, blocking_failed
 from std.io import BufferedBytesReader, BufferedBytesWriter, BufferedStringReader
 import std.io as io
@@ -26,6 +27,7 @@ import std.io as io
 pub MIME_TEXT := "text/plain"
 pub MIME_HTML := "text/html"
 pub MIME_JSON := "application/json"
+pub MIME_MULTIPART_FORM := "multipart/form-data"
 # raw request parts plus lazy decoded helpers for bytes-first request handling.
 pub struct HttpRequestBytes:
     pub head: Bytes
@@ -68,6 +70,14 @@ pub struct Cookie:
     pub secure_flag: Bool
     pub http_only_flag: Bool
     pub same_site_value: String
+
+# one multipart/form-data part.
+pub struct MultipartPart:
+    pub name: String
+    pub filename: String
+    pub content_type: String
+    pub headers: Map[String, String]
+    pub body: Bytes
 fn str_eq(a: String, b: String) -> Bool:
     if a.len() != b.len():
         return false
@@ -137,6 +147,164 @@ fn serialize_cookie(item: Cookie) -> String:
     if item.same_site_value != "":
         out = out + "; SameSite=" + item.same_site_value
     return out
+
+fn trim_quotes(value: String) -> String:
+    if value.len() >= 2 and value[0] == chr(34) and value[value.len() - 1] == chr(34):
+        return value.substring(1, value.len() - 1)
+    return value
+
+fn header_param_value(header_value: String, key: String) -> String:
+    for part in header_value.split(";"):
+        entry := part.trim()
+        eq := entry.index_of("=")
+        if eq <= 0:
+            continue
+        name := entry.substring(0, eq).trim()
+        if name.to_lower() != key.to_lower():
+            continue
+        return trim_quotes(entry.substring(eq + 1, entry.len()).trim())
+    return ""
+
+fn multipart_boundary_from_content_type(content_type: String) -> String!:
+    if not content_type.to_lower().starts_with(MIME_MULTIPART_FORM):
+        fail "request is not multipart/form-data"
+    boundary := header_param_value(content_type, "boundary")
+    if boundary == "":
+        fail "multipart boundary is missing"
+    return boundary
+
+fn bytes_starts_with_at(data: Bytes, start: Int, needle: Bytes) -> Bool:
+    if start < 0 or start + needle.len() > data.len():
+        return false
+    mut i := 0
+    while i < needle.len():
+        if data[start + i] != needle[i]:
+            return false
+        i = i + 1
+    return true
+
+fn find_bytes(data: Bytes, start: Int, needle: Bytes) -> Int:
+    if needle.len() == 0:
+        return start
+    mut pos := start
+    while pos + needle.len() <= data.len():
+        if bytes_starts_with_at(data, pos, needle):
+            return pos
+        pos = pos + 1
+    return - 1
+
+fn multipart_header_bounds(data: Bytes, start: Int) -> List[Int]:
+    crlf := bytes.from_string_utf8(chr(13) + chr(10) + chr(13) + chr(10))
+    lf := bytes.from_string_utf8(chr(10) + chr(10))
+    crlf_pos := find_bytes(data, start, crlf)
+    lf_pos := find_bytes(data, start, lf)
+    if crlf_pos >= 0 and (lf_pos < 0 or crlf_pos <= lf_pos):
+        return [crlf_pos, 4]
+    if lf_pos >= 0:
+        return [lf_pos, 2]
+    return []
+
+fn parse_header_text_map(text: String) -> Map[String, String]:
+    mut result: Map[String, String] := {}
+    mut cur := scanner.new(text)
+    while not scanner.done(cur):
+        scanned := scanner.take_line(cur)
+        cur = scanned.cursor
+        line := scanned.slice.text.trim()
+        if line == "":
+            continue
+        colon := line.index_of(":")
+        if colon <= 0:
+            continue
+        name := line.substring(0, colon).trim()
+        value := line.substring(colon + 1, line.len()).trim()
+        result = header_with(result, name, value)
+    return result
+
+fn multipart_find_next_boundary(data: Bytes, start: Int, boundary: String) -> List[Int]:
+    crlf_marker := bytes.from_string_utf8(chr(13) + chr(10) + "--" + boundary)
+    lf_marker := bytes.from_string_utf8(chr(10) + "--" + boundary)
+    crlf_pos := find_bytes(data, start, crlf_marker)
+    lf_pos := find_bytes(data, start, lf_marker)
+    if crlf_pos >= 0 and (lf_pos < 0 or crlf_pos <= lf_pos):
+        return [crlf_pos, 2]
+    if lf_pos >= 0:
+        return [lf_pos, 1]
+    return []
+
+fn multipart_consume_newline(data: Bytes, start: Int) -> Int:
+    if start + 1 < data.len() and data[start] == 13 and data[start + 1] == 10:
+        return start + 2
+    if start < data.len() and data[start] == 10:
+        return start + 1
+    return start
+
+fn parse_multipart_parts(body: Bytes, boundary: String) -> List[MultipartPart]!:
+    marker := bytes.from_string_utf8("--" + boundary)
+    closing := bytes.from_string_utf8("--")
+    mut first := find_bytes(body, 0, marker)
+    if first < 0:
+        fail "multipart boundary not found"
+    mut pos := first + marker.len()
+    if bytes_starts_with_at(body, pos, closing):
+        return []
+    pos = multipart_consume_newline(body, pos)
+    mut parts: List[MultipartPart] := []
+    while pos <= body.len():
+        header_bounds := multipart_header_bounds(body, pos)
+        if header_bounds.len() != 2:
+            fail "multipart headers are incomplete"
+        headers_raw := body.slice(pos, header_bounds[0])
+        headers_text := headers_raw.to_string_utf8()!
+        headers := parse_header_text_map(headers_text)
+        disposition := header_lookup(headers, "Content-Disposition")
+        if disposition == "":
+            fail "multipart part is missing content-disposition"
+        name := header_param_value(disposition, "name")
+        if name == "":
+            fail "multipart part is missing name"
+        filename := header_param_value(disposition, "filename")
+        content_type := header_lookup(headers, "Content-Type")
+        body_start := header_bounds[0] + header_bounds[1]
+        next_boundary := multipart_find_next_boundary(body, body_start, boundary)
+        if next_boundary.len() != 2:
+            fail "multipart closing boundary not found"
+        part_body := body.slice(body_start, next_boundary[0])
+        parts.push(MultipartPart(name, filename, content_type, headers, part_body))
+        pos = next_boundary[0] + next_boundary[1] + marker.len()
+        if bytes_starts_with_at(body, pos, closing):
+            break
+        pos = multipart_consume_newline(body, pos)
+    return parts
+
+fn multipart_content_disposition(part: MultipartPart) -> String:
+    mut out := "form-data; name=" + chr(34) + part.name + chr(34)
+    if part.filename != "":
+        out = out + "; filename=" + chr(34) + part.filename + chr(34)
+    return out
+
+fn multipart_random_boundary() -> String!:
+    id := uuid.v4()!
+    return "forge-boundary-" + id.replace("-", "")
+
+fn encode_multipart(parts: List[MultipartPart], boundary: String) -> Bytes!:
+    crlf := chr(13) + chr(10)
+    out := bytes.buffer()
+    for part in parts:
+        out.write_string_utf8("--" + boundary + crlf)!
+        out.write_string_utf8("Content-Disposition: " + multipart_content_disposition(part) + crlf)!
+        if part.content_type != "":
+            out.write_string_utf8("Content-Type: " + part.content_type + crlf)!
+        for key in part.headers:
+            if header_key_matches(key, "Content-Disposition") or header_key_matches(key, "Content-Type"):
+                continue
+            out.write_string_utf8(key + ": " + part.headers[key] + crlf)!
+        out.write_string_utf8(crlf)!
+        if not part.body.is_empty():
+            out.write(part.body)!
+        out.write_string_utf8(crlf)!
+    out.write_string_utf8("--" + boundary + "--" + crlf)!
+    return out.bytes()
 
 fn header_key_matches(left: String, right: String) -> Bool:
     return left.to_lower() == right.to_lower()
@@ -545,7 +713,7 @@ fn build_http_request(head: Bytes, body: Bytes) -> HttpRequestBytes!:
     query_text := decode_utf8(request_target_query_bytes(head))!
     version_text := decode_utf8(request_line_field_bytes(head, 2))!
     headers_text := decode_utf8(headers_bytes(head))!
-    body_text := decode_utf8(body)!
+    body_text := decode_utf8(body) catch ""
     headers_map := request_headers_map(head)!
     query_map := query_params_map_from_string(query_text)
     path_parts := path_segments(path_text)
@@ -598,7 +766,9 @@ impl HttpRequestBytes:
     fn body_bytes() -> Bytes:
         return self.body
     fn body_text() -> String!:
-        return self.body_text_cache
+        if self.body_text_cache != "" or self.body.is_empty():
+            return self.body_text_cache
+        return self.body.to_string_utf8()!
     fn body_text_or(fallback: String) -> String:
         return self.body_text() catch fallback
     fn body_json() -> Int!:
@@ -642,6 +812,26 @@ impl HttpRequestBytes:
         return value
     fn has_cookie(name: String) -> Bool!:
         return self.cookies()!.contains_key(name)
+    fn is_multipart() -> Bool!:
+        return self.header_or("Content-Type", "").to_lower().starts_with(MIME_MULTIPART_FORM)
+    fn multipart_boundary() -> String!:
+        return multipart_boundary_from_content_type(self.header("Content-Type")!)
+    fn multipart_parts() -> List[MultipartPart]!:
+        return parse_multipart_parts(self.body, self.multipart_boundary()!)
+    fn has_multipart_part(name: String) -> Bool!:
+        for part in self.multipart_parts()!:
+            if part.name == name:
+                return true
+        return false
+    fn multipart_part(name: String) -> MultipartPart!:
+        for part in self.multipart_parts()!:
+            if part.name == name:
+                return part
+        fail "multipart part not found: " + name
+    fn multipart_text(name: String) -> String!:
+        return self.multipart_part(name)!.text()
+    fn multipart_text_or(name: String, fallback: String) -> String:
+        return self.multipart_text(name) catch fallback
     fn path_parts() -> List[String]!:
         return copy_string_list(self.path_parts_cache)
     fn matches_path(pattern: String) -> Bool!:
@@ -653,6 +843,18 @@ impl HttpRequestBytes:
         if value == "":
             return fallback
         return value
+
+impl MultipartPart:
+    fn header(name: String) -> String:
+        return header_lookup(self.headers, name)
+    fn body_bytes() -> Bytes:
+        return self.body
+    fn text() -> String!:
+        return self.body.to_string_utf8()!
+    fn text_or(fallback: String) -> String:
+        return self.text() catch fallback
+    fn is_file() -> Bool:
+        return self.filename != ""
 fn content_length_from_head_bytes(raw_head: Bytes) -> Int!:
     length_text := header_value_bytes(raw_head, "Content-Length")
     if length_text.is_empty():
@@ -1215,6 +1417,15 @@ pub fn https_request_port(method: String, host: String, port: Int, url_path: Str
 pub fn get_https_request(host: String, url_path: String) -> ClientRequest:
     return https_request("GET", host, url_path)
 
+pub fn multipart_field(name: String, value: String) -> MultipartPart:
+    return MultipartPart(name, "", "", {}, bytes.from_string_utf8(value))
+
+pub fn multipart_file(name: String, filename: String, content_type: String, body: Bytes) -> MultipartPart:
+    return MultipartPart(name, filename, content_type, {}, body)
+
+pub fn multipart_file_text(name: String, filename: String, content_type: String, body_text: String) -> MultipartPart:
+    return multipart_file(name, filename, content_type, bytes.from_string_utf8(body_text))
+
 impl ClientRequest:
     fn header(name: String, value: String) -> ClientRequest:
         return ClientRequest(self.method, self.host, self.port, self.path, header_with(self.headers, name, value), self.body)
@@ -1245,6 +1456,14 @@ impl ClientRequest:
 
     fn form_body(fields: Map[String, String]) -> ClientRequest:
         return self.body_text(form_encode_fields(fields)).header("Content-Type", "application/x-www-form-urlencoded")
+
+    fn multipart_body(parts: List[MultipartPart]) -> ClientRequest!:
+        return self.multipart_body_with_boundary(parts, multipart_random_boundary()!)
+
+    fn multipart_body_with_boundary(parts: List[MultipartPart], boundary: String) -> ClientRequest!:
+        body := encode_multipart(parts, boundary)!
+        content_type := MIME_MULTIPART_FORM + "; boundary=" + boundary
+        return self.body_bytes(body).header("Content-Type", content_type)
 
     fn accept(content_type: String) -> ClientRequest:
         return self.header("Accept", content_type)
@@ -1463,3 +1682,36 @@ test "http client request builder renders headers and bodies":
     assert(payload.contains("Connection: close"))
     assert(payload.contains("Content-Length: 2"))
     assert(payload.ends_with(chr(13) + chr(10) + chr(13) + chr(10) + "hi"))
+
+test "http multipart helpers keep binary bodies raw":
+    file_buf := bytes.buffer()
+    file_buf.write_string_utf8("FG")!
+    file_buf.write_byte(255)!
+    file_buf.write_byte(0)!
+    mut parts: List[MultipartPart] := []
+    parts.push(multipart_field("note", "hello multipart"))
+    parts.push(multipart_file("blob", "blob.bin", "application/octet-stream", file_buf.bytes()))
+
+    req_bytes := post_request("example.test", 80, "/upload").multipart_body_with_boundary(parts, "forge-boundary-test")!.to_bytes()!
+    req := read_request_buffered_bytes(io.bytes_reader(req_bytes).buffered_chunked(5))!
+
+    assert(req.is_multipart()!)
+    assert_eq(req.multipart_boundary()!, "forge-boundary-test")
+    assert_eq(req.body_text_or("binary"), "binary")
+    assert_eq(req.multipart_text("note")!, "hello multipart")
+    assert_eq(req.multipart_text_or("missing", "fallback"), "fallback")
+    assert(req.has_multipart_part("blob")!)
+    assert(not req.has_multipart_part("missing")!)
+
+    parsed_parts := req.multipart_parts()!
+    assert_eq(parsed_parts.len(), 2)
+    blob := req.multipart_part("blob")!
+    assert(blob.is_file())
+    assert_eq(blob.filename, "blob.bin")
+    assert_eq(blob.header("Content-Type"), "application/octet-stream")
+    assert_eq(blob.body_bytes().len(), 4)
+    assert_eq(blob.body_bytes()[0], 70)
+    assert_eq(blob.body_bytes()[1], 71)
+    assert_eq(blob.body_bytes()[2], 255)
+    assert_eq(blob.body_bytes()[3], 0)
+    assert_eq(blob.text_or("binary"), "binary")

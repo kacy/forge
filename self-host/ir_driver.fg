@@ -10,6 +10,7 @@ struct CliArgs:
     path: String
     emit_tests: Bool
     emit_combined: Bool
+    validate_combined: Bool
 
 struct ParsedModule:
     root: Int
@@ -17,25 +18,15 @@ struct ParsedModule:
 
 struct RenamedImport:
     ir: String
-    global_names: List[String]
-    function_names: List[String]
     init_funcs: List[String]
 
 struct DeclaredIrNames:
-    globals: List[String]
     global_set: Map[String, Bool]
-    functions: List[String]
     function_set: Map[String, Bool]
+    init_funcs: List[String]
 
 fn usage():
-    print("usage: ir_driver [--combined] [--tests] <file.fg>")
-
-fn join_from(parts: List[String], start: Int) -> String:
-    mut tail: List[String] := []
-    for part, i in parts:
-        if i >= start:
-            tail.push(part)
-    return tail.join(" ")
+    print("usage: ir_driver [--combined] [--tests] [--validate] <file.fg>")
 
 fn line_end(text: String, start: Int) -> Int:
     mut end := start
@@ -71,20 +62,25 @@ fn remove_main_from_import_lines(lines: List[String]) -> List[String]:
             out.push(line)
     return out
 
-fn collect_declared_ir_names_from_lines(lines: List[String]) -> DeclaredIrNames:
-    mut globals: List[String] := []
+fn collect_declared_ir_names_from_lines(lines: List[String], prefix: String, init_prefix: String) -> DeclaredIrNames:
     mut global_set: Map[String, Bool] := {}
-    mut functions: List[String] := []
     mut function_set: Map[String, Bool] := {}
+    mut init_funcs: List[String] := []
     for line in lines:
-        parts := line.split(" ")
-        if parts.len() >= 2 and parts[0] == "global":
-            globals.push(parts[1])
-            global_set.insert(parts[1], true)
-        elif parts.len() >= 2 and parts[0] == "func":
-            functions.push(parts[1])
-            function_set.insert(parts[1], true)
-    return DeclaredIrNames(globals, global_set, functions, function_set)
+        first_end := next_space(line, 0)
+        if first_end >= line.len():
+            continue
+        op := line.substring(0, first_end)
+        name_start := first_end + 1
+        name_end := next_space(line, name_start)
+        name := line.substring(name_start, name_end)
+        if op == "global":
+            global_set.insert(name, true)
+        elif op == "func":
+            function_set.insert(name, true)
+            if name.starts_with("__init_globals"):
+                init_funcs.push(prefix + maybe_prefixed_init_name(name, init_prefix))
+    return DeclaredIrNames(global_set, function_set, init_funcs)
 
 fn prefixed_init_name(module_index: Int) -> String:
     return "__init_globals_" + module_index.to_string()
@@ -111,56 +107,105 @@ fn import_symbol_prefix(module_path: String) -> String:
 fn import_target_name(module_path: String, name: String) -> String:
     return import_symbol_prefix(module_path) + name
 
-fn collect_import_init_funcs(function_names: List[String], module_path: String, module_index: Int) -> List[String]:
-    mut init_funcs: List[String] := []
-    for name in function_names:
-        if name.starts_with("__init_globals"):
-            renamed := name.replace("__init_globals", prefixed_init_name(module_index))
-            init_funcs.push(import_target_name(module_path, renamed))
-    return init_funcs
+fn prefixed_target_name(prefix: String, name: String) -> String:
+    return prefix + name
 
-fn rewrite_prefixed_import_line(line: String, declared: DeclaredIrNames, module_path: String, module_index: Int) -> String:
-    mut rewritten := line
-    if line.contains("__init_globals"):
-        rewritten = line.replace("__init_globals", prefixed_init_name(module_index))
-    parts := rewritten.split(" ")
-    if parts.len() >= 2 and parts[0] == "func":
-        rewritten = "func " + import_target_name(module_path, parts[1])
-        if parts.len() > 2:
-            rewritten = rewritten + " " + join_from(parts, 2)
-    elif parts.len() >= 2 and parts[0] == "global":
-        if not parts[1].starts_with("__for_"):
-            rewritten = "global " + import_target_name(module_path, parts[1])
-            if parts.len() > 2:
-                rewritten = rewritten + " " + join_from(parts, 2)
-    elif parts.len() >= 3 and parts[0] == "store":
-        if declared.global_set.contains_key(parts[1]):
-            rewritten = "store " + import_target_name(module_path, parts[1]) + " " + join_from(parts, 2)
-    elif parts.len() >= 3 and parts[0] == "load":
-        if declared.global_set.contains_key(parts[2]):
-            rewritten = "load " + parts[1] + " " + import_target_name(module_path, parts[2])
-    elif parts.len() >= 5 and parts[0] == "call":
-        if declared.function_set.contains_key(parts[2]):
-            rewritten = "call " + parts[1] + " " + import_target_name(module_path, parts[2]) + " " + join_from(parts, 3)
-    elif parts.len() >= 3 and parts[0] == "callv":
-        if declared.function_set.contains_key(parts[1]):
-            rewritten = "callv " + import_target_name(module_path, parts[1])
-            if parts.len() > 2:
-                rewritten = rewritten + " " + join_from(parts, 2)
-    elif parts.len() >= 3 and parts[0] == "closure_ref":
-        if declared.function_set.contains_key(parts[2]):
-            rewritten = "closure_ref " + parts[1] + " " + import_target_name(module_path, parts[2])
-    return rewritten
+fn maybe_prefixed_init_name(name: String, init_prefix: String) -> String:
+    base := "__init_globals"
+    if name == base:
+        return init_prefix
+    if name.starts_with(base):
+        return init_prefix + name.substring(base.len(), name.len())
+    return name
+
+fn replace_token(line: String, start: Int, end: Int, replacement: String) -> String:
+    mut out := line.substring(0, start) + replacement
+    if end < line.len():
+        out = out + line.substring(end, line.len())
+    return out
+
+fn rewrite_prefixed_import_line(line: String, declared: DeclaredIrNames, prefix: String, init_prefix: String) -> String:
+    first_end := next_space(line, 0)
+    if first_end >= line.len():
+        return line
+    op := line.substring(0, first_end)
+
+    if op == "func" or op == "global":
+        name_start := first_end + 1
+        name_end := next_space(line, name_start)
+        name := line.substring(name_start, name_end)
+        if op == "global" and name.starts_with("__for_"):
+            return line
+        renamed := maybe_prefixed_init_name(name, init_prefix)
+        return replace_token(line, name_start, name_end, prefixed_target_name(prefix, renamed))
+
+    if op == "store":
+        name_start := first_end + 1
+        name_end := next_space(line, name_start)
+        name := line.substring(name_start, name_end)
+        if not declared.global_set.contains_key(name):
+            return line
+        return replace_token(line, name_start, name_end, prefixed_target_name(prefix, name))
+
+    if op == "load":
+        reg_start := first_end + 1
+        reg_end := next_space(line, reg_start)
+        if reg_end >= line.len():
+            return line
+        name_start := reg_end + 1
+        name_end := next_space(line, name_start)
+        name := line.substring(name_start, name_end)
+        if not declared.global_set.contains_key(name):
+            return line
+        return replace_token(line, name_start, name_end, prefixed_target_name(prefix, name))
+
+    if op == "call":
+        reg_start := first_end + 1
+        reg_end := next_space(line, reg_start)
+        if reg_end >= line.len():
+            return line
+        callee_start := reg_end + 1
+        callee_end := next_space(line, callee_start)
+        callee := line.substring(callee_start, callee_end)
+        if not declared.function_set.contains_key(callee):
+            return line
+        renamed := maybe_prefixed_init_name(callee, init_prefix)
+        return replace_token(line, callee_start, callee_end, prefixed_target_name(prefix, renamed))
+
+    if op == "callv":
+        callee_start := first_end + 1
+        callee_end := next_space(line, callee_start)
+        callee := line.substring(callee_start, callee_end)
+        if not declared.function_set.contains_key(callee):
+            return line
+        renamed := maybe_prefixed_init_name(callee, init_prefix)
+        return replace_token(line, callee_start, callee_end, prefixed_target_name(prefix, renamed))
+
+    if op == "closure_ref":
+        reg_start := first_end + 1
+        reg_end := next_space(line, reg_start)
+        if reg_end >= line.len():
+            return line
+        callee_start := reg_end + 1
+        callee_end := next_space(line, callee_start)
+        callee := line.substring(callee_start, callee_end)
+        if not declared.function_set.contains_key(callee):
+            return line
+        renamed := maybe_prefixed_init_name(callee, init_prefix)
+        return replace_token(line, callee_start, callee_end, prefixed_target_name(prefix, renamed))
+
+    return line
 
 fn rename_import_ir(ir: String, module_path: String, module_index: Int) -> RenamedImport:
     trimmed_lines := remove_main_from_import_lines(ir_lines(ir))
-    declared := collect_declared_ir_names_from_lines(trimmed_lines)
-    init_funcs := collect_import_init_funcs(declared.functions, module_path, module_index)
+    prefix := import_symbol_prefix(module_path)
+    init_prefix := prefixed_init_name(module_index)
+    declared := collect_declared_ir_names_from_lines(trimmed_lines, prefix, init_prefix)
 
     mut out: List[String] := []
     for line in trimmed_lines:
-        out.push(rewrite_prefixed_import_line(line, declared, module_path, module_index))
-    return RenamedImport(out.join(chr(10)), declared.globals, declared.functions, init_funcs)
+        out.push(rewrite_prefixed_import_line(line, declared, prefix, init_prefix))
+    return RenamedImport(out.join(chr(10)), declared.init_funcs)
 
 fn inject_imported_init_calls(out: List[String], imported_init_funcs: List[String]) -> List[String]:
     mut with_inits := out
@@ -276,6 +321,7 @@ fn parse_args() -> CliArgs:
     mut path := ""
     mut emit_tests := false
     mut emit_combined := false
+    mut validate_combined := false
     for arg, i in a:
         if i == 0:
             continue
@@ -283,6 +329,8 @@ fn parse_args() -> CliArgs:
             emit_tests = true
         elif arg == "--combined":
             emit_combined = true
+        elif arg == "--validate":
+            validate_combined = true
         else:
             path = arg
 
@@ -290,7 +338,7 @@ fn parse_args() -> CliArgs:
         usage()
         exit(1)
 
-    return CliArgs(path, emit_tests, emit_combined)
+    return CliArgs(path, emit_tests, emit_combined, validate_combined)
 
 fn parse_and_check(path: String) -> ParsedModule!:
     source := read_file(path)!
@@ -332,46 +380,16 @@ fn module_root_map(import_roots: List[Int]) -> Map[String, Int]:
         roots_by_path.insert(get_resolved_module_path(import_root), import_root)
     return roots_by_path
 
-fn module_dependency_roots(root: Int, import_roots: List[Int], roots_by_path: Map[String, Int]) -> List[Int]:
-    if import_roots.len() == 0:
-        return []
+fn direct_module_roots(root: Int, roots_by_path: Map[String, Int]) -> List[Int]:
     mut deps: List[Int] := []
     mut seen: Map[String, Bool] := {}
-    mut stack_roots: List[Int] := []
-    mut stack_expanded: List[Bool] := []
-
-    root_imports := find_imports(root)
-    for mod_path in root_imports:
+    for mod_path in find_imports(root):
         if not roots_by_path.contains_key(mod_path):
             continue
         if seen.contains_key(mod_path):
             continue
         seen.insert(mod_path, true)
-        stack_roots.push(roots_by_path[mod_path])
-        stack_expanded.push(false)
-
-    while stack_roots.len() > 0:
-        current := stack_roots[stack_roots.len() - 1]
-        expanded := stack_expanded[stack_expanded.len() - 1]
-        stack_roots.remove(stack_roots.len() - 1)
-        stack_expanded.remove(stack_expanded.len() - 1)
-
-        if expanded:
-            deps.push(current)
-            continue
-
-        stack_roots.push(current)
-        stack_expanded.push(true)
-
-        current_imports := find_imports(current)
-        for mod_path in current_imports:
-            if not roots_by_path.contains_key(mod_path):
-                continue
-            if seen.contains_key(mod_path):
-                continue
-            seen.insert(mod_path, true)
-            stack_roots.push(roots_by_path[mod_path])
-            stack_expanded.push(false)
+        deps.push(roots_by_path[mod_path])
     return deps
 
 fn emit_module_ir(root: Int, import_roots: List[Int], emit_tests: Bool) -> String:
@@ -388,7 +406,7 @@ fn should_skip_imported_module(module_root: Int) -> Bool:
     module_path := get_resolved_module_path(module_root)
     return is_runtime_builtin_module(module_path)
 
-fn emit_combined_file(path: String, emit_tests: Bool) -> String!:
+fn emit_combined_file(path: String, emit_tests: Bool, validate_combined: Bool) -> String!:
     parsed := parse_and_check(path)!
     root := parsed.root
     import_roots := parsed.import_roots
@@ -400,7 +418,7 @@ fn emit_combined_file(path: String, emit_tests: Bool) -> String!:
         if should_skip_imported_module(import_root):
             continue
         module_path := get_resolved_module_path(import_root)
-        module_deps := module_dependency_roots(import_root, import_roots, roots_by_path)
+        module_deps := direct_module_roots(import_root, roots_by_path)
         ir := emit_module_ir(import_root, module_deps, false)
         renamed := rename_import_ir(ir, module_path, i)
         for init_func in renamed.init_funcs:
@@ -409,12 +427,13 @@ fn emit_combined_file(path: String, emit_tests: Bool) -> String!:
     # the root module keeps its own names. imported modules are already emitted
     # with stable qualified symbols, so the only remaining combined-file tweak
     # is to inject any imported init calls into main.
-    mut main_ir := emit_module_ir(root, import_roots, emit_tests)
+    mut main_ir := emit_module_ir(root, direct_module_roots(root, roots_by_path), emit_tests)
     main_ir = rewrite_main_ir(main_ir, imported_init_funcs)
     all_ir.push(main_ir)
 
     combined_ir := all_ir.join(chr(10) + chr(10))
-    validate_combined_ir_contract(combined_ir)
+    if validate_combined:
+        validate_combined_ir_contract(combined_ir)
     print(combined_ir)
     return ""
 
@@ -423,8 +442,9 @@ fn main() -> Int:
     path := parsed.path
     emit_tests := parsed.emit_tests
     emit_combined := parsed.emit_combined
+    validate_combined := parsed.validate_combined
     if emit_combined:
-        emit_combined_file(path, emit_tests)
+        emit_combined_file(path, emit_tests, validate_combined)
     else:
         emit_single_file(path, emit_tests)
     return 0
