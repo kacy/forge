@@ -15,8 +15,10 @@ SLOW_NATIVE_REGRESSIONS := \
 	test_websocket_session \
 	test_websocket_wire
 FAST_REGRESSION_EXPECTED := $(filter-out $(addprefix tests/expected/,$(addsuffix .txt,$(SLOW_NATIVE_REGRESSIONS))),$(REGRESSION_EXPECTED))
-LIVE_WEBSOCKET_EXPECTED := $(wildcard tests/live/expected/*.txt)
-LIVE_WEBSOCKET_CASES := $(basename $(notdir $(LIVE_WEBSOCKET_EXPECTED)))
+LIVE_EXPECTED := $(wildcard tests/live/expected/*.txt)
+LIVE_CASES := $(basename $(notdir $(LIVE_EXPECTED)))
+LIVE_WEBSOCKET_EXPECTED := $(LIVE_EXPECTED)
+LIVE_WEBSOCKET_CASES := $(LIVE_CASES)
 PARSE_INVALID_EXAMPLES := $(wildcard tests/invalid_parse/*.fg)
 INVALID_EXAMPLES := $(wildcard tests/invalid/*.fg)
 PARITY_EXAMPLES := \
@@ -327,7 +329,7 @@ test-fast-self: self-host self-host-ir-driver
 	@$(MAKE) --no-print-directory run-regressions-self-only
 
 run-live-websocket-tests: build
-	@echo "--- live websocket smoke tests (Cranelift backend) ---"
+	@echo "--- live smoke tests (Cranelift backend) ---"
 	@pass=0; fail=0; \
 	for name in $(LIVE_WEBSOCKET_CASES); do \
 		expected_file="tests/live/expected/$$name.txt"; \
@@ -348,10 +350,10 @@ run-live-websocket-tests: build
 	done; \
 	echo "$$pass passed, $$fail failed"; \
 	if [ $$fail -gt 0 ]; then exit 1; fi; \
-	echo "all live websocket smoke tests passed"
+	echo "all live smoke tests passed"
 
 run-live-websocket-tests-self-only:
-	@echo "--- live websocket smoke tests (self-hosted compiler) ---"
+	@echo "--- live smoke tests (self-hosted compiler) ---"
 	@pass=0; fail=0; \
 	for name in $(LIVE_WEBSOCKET_CASES); do \
 		expected_file="tests/live/expected/$$name.txt"; \
@@ -372,7 +374,7 @@ run-live-websocket-tests-self-only:
 	done; \
 	echo "$$pass passed, $$fail failed"; \
 	if [ $$fail -gt 0 ]; then exit 1; fi; \
-	echo "all self-hosted live websocket smoke tests passed"
+	echo "all self-hosted live smoke tests passed"
 
 parity-examples: self-host parity-examples-only
 

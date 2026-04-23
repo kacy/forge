@@ -15,6 +15,7 @@ import std.bytes as bytes
 import std.encoding as encoding
 import std.json as json_mod
 import std.net.url as url_mod
+import std.net.tls as tls
 import std.text.scanner as scanner
 from std.concurrent import Context, BlockingError, blocking_cancelled, blocking_deadline_exceeded, blocking_failed
 from std.io import BufferedBytesReader, BufferedBytesWriter, BufferedStringReader
@@ -1064,6 +1065,18 @@ pub fn put_request(host: String, port: Int, url_path: String) -> ClientRequest:
 pub fn delete_request(host: String, port: Int, url_path: String) -> ClientRequest:
     return request("DELETE", host, port, url_path)
 
+# starts building an outbound https request on port 443.
+pub fn https_request(method: String, host: String, url_path: String) -> ClientRequest:
+    return request(method, host, 443, url_path)
+
+# starts building an outbound https request on an explicit port.
+pub fn https_request_port(method: String, host: String, port: Int, url_path: String) -> ClientRequest:
+    return request(method, host, port, url_path)
+
+# starts a get https request builder.
+pub fn get_https_request(host: String, url_path: String) -> ClientRequest:
+    return https_request("GET", host, url_path)
+
 impl ClientRequest:
     fn header(name: String, value: String) -> ClientRequest:
         return ClientRequest(self.method, self.host, self.port, self.path, header_with(self.headers, name, value), self.body)
@@ -1120,7 +1133,8 @@ impl ClientRequest:
         head := bytes.from_string_utf8(req)
         buf := bytes.buffer_with_capacity(head.len() + self.body.len())
         buf.write(head)!
-        buf.write(self.body)!
+        if not self.body.is_empty():
+            buf.write(self.body)!
         return buf.bytes()
 
     fn send() -> HttpResponse!:
@@ -1132,8 +1146,24 @@ impl ClientRequest:
         conn.close()
         return parse_response_bytes(raw)
 
+    fn send_tls() -> HttpResponse!:
+        return self.send_tls_with_config(self.host, tls.client_config()!)
+
+    fn send_https() -> HttpResponse!:
+        return self.send_tls()
+
+    fn send_tls_with_config(server_name: String, config: tls.Config) -> HttpResponse!:
+        conn := tls.dial_with_config(self.host, self.port, server_name, config)!
+        conn.write_all_bytes(self.to_bytes()!)!
+        raw := conn.read_all_bytes_chunked(4096)!
+        conn.close()
+        return parse_response_bytes(raw)
+
     fn send_bytes() -> Bytes!:
         return self.send()!.body_bytes()
+
+    fn send_tls_bytes() -> Bytes!:
+        return self.send_tls()!.body_bytes()
 
 # extracts one route parameter from a matched path pattern.
 pub fn route_param(req: HttpRequestBytes, pattern: String, name: String) -> String!:
@@ -1197,6 +1227,14 @@ pub fn get_bytes(host: String, port: Int, url_path: String) -> Bytes!:
 # issues a simple get request and returns the response body text.
 pub fn get(host: String, port: Int, url_path: String) -> String!:
     return request("GET", host, port, url_path).send()!.body_text()
+
+# issues a simple https get request and returns the response body bytes.
+pub fn get_https_bytes(host: String, url_path: String) -> Bytes!:
+    return get_https_request(host, url_path).send_tls_bytes()
+
+# issues a simple https get request and returns the response body text.
+pub fn get_https(host: String, url_path: String) -> String!:
+    return get_https_request(host, url_path).send_tls()!.body_text()
 
 # issues a simple post request with a json body.
 pub fn post_json(host: String, port: Int, url_path: String, handle: Int) -> HttpResponse!:

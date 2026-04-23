@@ -1,0 +1,128 @@
+# std.net.tls — tls client and server streams
+#
+# the api borrows the same shape as go's crypto/tls: configs are reusable,
+# conns read and write bytes, and dial/listen are convenience helpers.
+
+import std.bytes as bytes
+from std.io import TcpStream
+
+# reusable tls configuration.
+pub struct Config:
+    pub handle: Int
+
+# a tls connection.
+pub struct Conn:
+    pub handle: Int
+
+# a tls listener.
+pub struct Listener:
+    pub handle: Int
+
+fn tls_fail_if_zero(handle: Int, message: String) -> Int!:
+    if handle <= 0:
+        fail message
+    return handle
+
+# create a client config using system certificate roots.
+pub fn client_config() -> Config!:
+    return Config(tls_fail_if_zero(tls_client_config(), "tls client config failed")!)
+
+# create a client config using a pem ca file.
+pub fn client_config_with_ca_file(path: String) -> Config!:
+    return Config(tls_fail_if_zero(tls_client_config_with_ca_file(path), "tls client config failed")!)
+
+# create a server config from pem certificate and private key files.
+pub fn server_config(cert_path: String, key_path: String) -> Config!:
+    return Config(tls_fail_if_zero(tls_server_config(cert_path, key_path), "tls server config failed")!)
+
+# dial a tls server with system roots and host name verification.
+pub fn dial(host: String, port: Int) -> Conn!:
+    return dial_with_config(host, port, host, client_config()!)
+
+# dial a tls server with an explicit server name and config.
+pub fn dial_with_config(host: String, port: Int, server_name: String, config: Config) -> Conn!:
+    return Conn(tls_fail_if_zero(tls_dial(host, port, server_name, config.handle), "tls dial failed")!)
+
+# wrap an existing tcp stream as a tls client connection.
+pub fn client(stream: TcpStream, server_name: String, config: Config) -> Conn!:
+    return Conn(tls_fail_if_zero(tls_client(stream.fd, server_name, config.handle), "tls client handshake failed")!)
+
+# listen for tls connections.
+pub fn listen(host: String, port: Int, config: Config) -> Listener!:
+    return Listener(tls_fail_if_zero(tls_listen(host, port, config.handle), "tls listen failed")!)
+
+# accept a tls connection.
+pub fn accept(listener: Listener) -> Conn!:
+    return Listener(listener.handle).accept()
+
+impl Config:
+    fn close():
+        tls_config_close(self.handle)
+
+impl Listener:
+    fn accept() -> Conn!:
+        return Conn(tls_fail_if_zero(tls_accept(self.handle), "tls accept failed")!)
+
+    fn close():
+        tls_listener_close(self.handle)
+
+impl Conn:
+    fn read_bytes(max_bytes: Int) -> Bytes!:
+        return tls_read_bytes(self.handle, max_bytes)!
+
+    fn read(max_bytes: Int) -> String!:
+        return self.read_bytes(max_bytes)!.to_string_utf8()!
+
+    fn write_bytes(data: Bytes) -> Int!:
+        return tls_fail_if_zero(tls_write_bytes(self.handle, data), "tls write failed")!
+
+    fn write(data: String) -> Int!:
+        return self.write_bytes(bytes.from_string_utf8(data))!
+
+    fn write_all_bytes(data: Bytes) -> Int!:
+        mut total := 0
+        mut remaining := data
+        while not remaining.is_empty():
+            wrote := self.write_bytes(remaining)!
+            if wrote <= 0:
+                fail "tls write returned 0"
+            total = total + wrote
+            remaining = remaining.slice(wrote, remaining.len())
+        return total
+
+    fn write_all(data: String) -> Int!:
+        return self.write_all_bytes(bytes.from_string_utf8(data))
+
+    fn read_all_bytes_chunked(chunk_size: Int) -> Bytes!:
+        mut size := chunk_size
+        if size <= 0:
+            size = 4096
+        out := bytes.buffer_with_capacity(size)
+        mut chunk := self.read_bytes(size)!
+        while not chunk.is_empty():
+            out.write(chunk)!
+            chunk = self.read_bytes(size)!
+        return out.bytes()
+
+    fn read_all_bytes() -> Bytes!:
+        return self.read_all_bytes_chunked(4096)
+
+    fn read_all() -> String!:
+        return self.read_all_bytes()!.to_string_utf8()!
+
+    fn close():
+        tls_close(self.handle)
+
+test "tls configs reject missing files":
+    assert(client_config_with_ca_file("/path/that/does/not/exist").is_err)
+    assert(server_config("/path/that/does/not/exist.crt", "/path/that/does/not/exist.key").is_err)
+
+test "tls wrappers reject invalid handles":
+    bad_conn := Conn(-1)
+    bad_listener := Listener(-1)
+
+    assert(bad_conn.read_bytes(8).is_err)
+    assert(bad_conn.write_bytes(bytes.from_string_utf8("hello")).is_err)
+    assert(bad_listener.accept().is_err)
+    bad_conn.close()
+    bad_listener.close()
