@@ -22,7 +22,7 @@ import std.text.scanner as scanner
 import std.time as time_mod
 import std.uuid as uuid
 from std.concurrent import Context, BlockingError, blocking_cancelled, blocking_deadline_exceeded, blocking_failed
-from std.io import BufferedBytesReader, BufferedBytesWriter, BufferedStringReader
+from std.io import BufferedBytesReader, BufferedBytesWriter, BufferedStringReader, TcpStream
 import std.io as io
 # ===============================================================
 # MIME Types
@@ -64,6 +64,16 @@ pub struct ClientRequest:
     pub use_tls: Bool
     pub timeout_ms: Int
     pub redirect_limit: Int
+
+# a reusable plain http client connection.
+pub struct ClientConn:
+    pub stream: TcpStream
+    pub reader: BufferedBytesReader
+    pub writer: BufferedBytesWriter
+
+# a reusable tls http client connection.
+pub struct TlsClientConn:
+    pub conn: tls.Conn
 
 # cookie builder used by request and response helpers.
 pub struct Cookie:
@@ -960,6 +970,119 @@ fn read_chunked_body(reader: BufferedBytesReader) -> Bytes!:
 fn decode_chunked_body(raw: Bytes) -> Bytes!:
     return read_chunked_body(io.bytes_reader(raw).buffered_chunked(64))!
 
+fn read_exact_from_tls(conn: tls.Conn, count: Int) -> Bytes!:
+    if count <= 0:
+        return bytes.empty()
+    out := bytes.buffer_with_capacity(count)
+    while out.bytes().len() < count:
+        chunk := conn.read_bytes(count - out.bytes().len())!
+        if chunk.is_empty():
+            fail "unexpected eof"
+        out.write(chunk)!
+    return out.bytes()
+
+fn read_until_including_from_tls(conn: tls.Conn, sep: Bytes) -> Bytes!:
+    if sep.is_empty():
+        fail "empty separator"
+    out := bytes.buffer()
+    mut window := bytes.empty()
+    while true:
+        chunk := conn.read_bytes(1)!
+        if chunk.is_empty():
+            return out.bytes()
+        out.write(chunk)!
+        if window.len() >= sep.len():
+            window = window.slice(1, window.len())
+        window = window.concat(chunk)
+        if window == sep:
+            return out.bytes()
+
+fn consume_chunk_line_ending_tls(conn: tls.Conn):
+    ending := read_exact_from_tls(conn, 1) catch bytes.empty()
+    if ending.is_empty():
+        return
+    if ending[0] == 13:
+        read_exact_from_tls(conn, 1) catch bytes.empty()
+
+fn read_chunked_body_tls(conn: tls.Conn) -> Bytes!:
+    nl := bytes.from_string_utf8(chr(10))
+    out := bytes.buffer()
+    while true:
+        line := read_until_including_from_tls(conn, nl)!
+        if line.is_empty():
+            fail "incomplete chunk size"
+        chunk_size := parse_hex_bytes(chunk_size_line_bytes(line))!
+        if chunk_size == 0:
+            while true:
+                trailer := read_until_including_from_tls(conn, nl)!
+                if trailer.is_empty() or chunk_line_is_blank(trailer):
+                    return out.bytes()
+        out.write(read_exact_from_tls(conn, chunk_size)!)!
+        consume_chunk_line_ending_tls(conn)
+
+fn read_response_head_buffered(reader: BufferedBytesReader) -> Bytes!:
+    buf := bytes.buffer_with_capacity(1024)
+    mut head_end := -1
+    mut scan_start := 0
+    while head_end < 0:
+        chunk := reader.read_bytes(1)!
+        if chunk.is_empty():
+            if buf.bytes().is_empty():
+                fail "empty http response"
+            break
+        buf.write(chunk)!
+        head_end = find_request_head_end_from(buf.bytes(), scan_start)
+        scan_start = buf.bytes().len() - 3
+        if scan_start < 0:
+            scan_start = 0
+    if head_end < 0:
+        fail "invalid http response"
+    return buf.bytes()
+
+fn read_response_head_tls(conn: tls.Conn) -> Bytes!:
+    buf := bytes.buffer_with_capacity(1024)
+    mut head_end := -1
+    mut scan_start := 0
+    while head_end < 0:
+        chunk := conn.read_bytes(1)!
+        if chunk.is_empty():
+            if buf.bytes().is_empty():
+                fail "empty http response"
+            break
+        buf.write(chunk)!
+        head_end = find_request_head_end_from(buf.bytes(), scan_start)
+        scan_start = buf.bytes().len() - 3
+        if scan_start < 0:
+            scan_start = 0
+    if head_end < 0:
+        fail "invalid http response"
+    return buf.bytes()
+
+fn response_status_has_no_body(status: Int) -> Bool:
+    return status == 204 or status == 304 or (status >= 100 and status < 200)
+
+fn read_response_body_buffered(head: Bytes, reader: BufferedBytesReader) -> Bytes!:
+    if uses_chunked_transfer_encoding(head):
+        return read_chunked_body(reader)!
+    content_length := content_length_from_head_bytes(head) catch - 1
+    if content_length >= 0:
+        return reader.read_exact_bytes(content_length)!
+    status := parse_decimal_bytes(request_line_field_bytes(head, 1))!
+    if response_status_has_no_body(status):
+        return bytes.empty()
+    return bytes.empty()
+
+fn read_response_body_tls(head: Bytes, conn: tls.Conn) -> Bytes!:
+    if uses_chunked_transfer_encoding(head):
+        return read_chunked_body_tls(conn)!
+    content_length := content_length_from_head_bytes(head) catch - 1
+    if content_length >= 0:
+        return read_exact_from_tls(conn, content_length)!
+    status := parse_decimal_bytes(request_line_field_bytes(head, 1))!
+    if response_status_has_no_body(status):
+        return bytes.empty()
+    return bytes.empty()
+
 fn content_length_from_head_bytes(raw_head: Bytes) -> Int!:
     length_text := header_value_bytes(raw_head, "Content-Length")
     if length_text.is_empty():
@@ -1518,6 +1641,30 @@ pub fn parse_response_bytes(raw: Bytes) -> HttpResponse!:
 # parses a raw http response string into a structured response.
 pub fn parse_response(raw: String) -> HttpResponse!:
     return parse_response_bytes(bytes.from_string_utf8(raw))
+
+# reads one http response from a buffered bytes reader without waiting for connection close.
+pub fn read_response_buffered_bytes(reader: BufferedBytesReader) -> HttpResponse!:
+    head := read_response_head_buffered(reader)!
+    status := parse_decimal_bytes(request_line_field_bytes(head, 1))!
+    headers := response_headers_map(head)
+    content_type := header_lookup(headers, "Content-Type")
+    set_cookie_headers := response_set_cookie_headers(head)
+    body := read_response_body_buffered(head, reader)!
+    return HttpResponse(status, content_type, header_without(headers, "Content-Type"), body, set_cookie_headers)
+
+# reads one http response from a tcp stream.
+pub fn read_response_stream(stream: TcpStream) -> HttpResponse!:
+    return read_response_buffered_bytes(stream.buffered_bytes_reader_chunked(512))
+
+# reads one http response from a tls connection.
+pub fn read_response_tls(conn: tls.Conn) -> HttpResponse!:
+    head := read_response_head_tls(conn)!
+    status := parse_decimal_bytes(request_line_field_bytes(head, 1))!
+    headers := response_headers_map(head)
+    content_type := header_lookup(headers, "Content-Type")
+    set_cookie_headers := response_set_cookie_headers(head)
+    body := read_response_body_tls(head, conn)!
+    return HttpResponse(status, content_type, header_without(headers, "Content-Type"), body, set_cookie_headers)
 # ===============================================================
 # HTTP Client
 # ===============================================================
@@ -1554,6 +1701,30 @@ pub fn https_request_port(method: String, host: String, port: Int, url_path: Str
 # starts a get https request builder.
 pub fn get_https_request(host: String, url_path: String) -> ClientRequest:
     return https_request("GET", host, url_path)
+
+pub fn connect_client(host: String, port: Int) -> ClientConn!:
+    stream := io.connect(host, port)!
+    return ClientConn(stream, stream.buffered_bytes_reader_chunked(512), stream.buffered_bytes_writer())
+
+pub fn connect_client_with_timeout(host: String, port: Int, timeout_ms: Int) -> ClientConn!:
+    conn := connect_client(host, port)!
+    conn.stream.set_timeout(timeout_ms)
+    return conn
+
+pub fn connect_tls_client(host: String, port: Int, server_name: String) -> TlsClientConn!:
+    return connect_tls_client_with_config(host, port, server_name, tls.client_config()!)
+
+pub fn connect_tls_client_with_config(host: String, port: Int, server_name: String, config: tls.Config) -> TlsClientConn!:
+    stream := io.connect(host, port)!
+    return TlsClientConn(tls.client(stream, server_name, config)!)
+
+pub fn connect_tls_client_with_timeout(host: String, port: Int, server_name: String, timeout_ms: Int) -> TlsClientConn!:
+    return connect_tls_client_with_timeout_and_config(host, port, server_name, timeout_ms, tls.client_config()!)
+
+pub fn connect_tls_client_with_timeout_and_config(host: String, port: Int, server_name: String, timeout_ms: Int, config: tls.Config) -> TlsClientConn!:
+    stream := io.connect(host, port)!
+    stream.set_timeout(timeout_ms)
+    return TlsClientConn(tls.client(stream, server_name, config)!)
 
 pub fn multipart_field(name: String, value: String) -> MultipartPart:
     return MultipartPart(name, "", "", {}, bytes.from_string_utf8(value))
@@ -1804,6 +1975,25 @@ impl ClientRequest:
 
     fn send_tls_bytes() -> Bytes!:
         return self.send_tls()!.body_bytes()
+
+impl ClientConn:
+    fn send(req: ClientRequest) -> HttpResponse!:
+        if req.timeout_ms >= 0:
+            self.stream.set_timeout(req.timeout_ms)
+        self.writer.write_all_bytes(req.to_bytes()!)!
+        self.writer.flush()!
+        return read_response_buffered_bytes(self.reader)
+
+    fn close():
+        self.stream.close()
+
+impl TlsClientConn:
+    fn send(req: ClientRequest) -> HttpResponse!:
+        self.conn.write_all_bytes(req.to_bytes()!)!
+        return read_response_tls(self.conn)
+
+    fn close():
+        self.conn.close()
 
 # extracts one route parameter from a matched path pattern.
 pub fn route_param(req: HttpRequestBytes, pattern: String, name: String) -> String!:
@@ -2073,6 +2263,22 @@ test "http serves keep-alive connections":
     assert(payload.contains("Connection: close"))
     assert(payload.contains(chr(13) + chr(10) + chr(13) + chr(10) + "/one"))
     assert(payload.contains(chr(13) + chr(10) + chr(13) + chr(10) + "/two"))
+
+test "http reads sequential responses from one reader":
+    first := text(200, "one").keep_alive().to_bytes()!
+    second := text(200, "two").close_connection().to_bytes()!
+    input := bytes.buffer()
+    input.write(first)!
+    input.write(second)!
+    reader := io.bytes_reader(input.bytes()).buffered_chunked(4)
+
+    resp1 := read_response_buffered_bytes(reader)!
+    resp2 := read_response_buffered_bytes(reader)!
+
+    assert_eq(resp1.body_text()!, "one")
+    assert_eq(resp1.header_value("Connection"), "keep-alive")
+    assert_eq(resp2.body_text()!, "two")
+    assert_eq(resp2.header_value("Connection"), "close")
 
 test "http multipart helpers keep binary bodies raw":
     file_buf := bytes.buffer()

@@ -1,0 +1,38 @@
+import std.net.http as http
+from std.net.http import HttpRequestBytes, HttpResponse
+
+fn choose_port(start: Int) -> Int!:
+    mut port := start
+    while port < start + 200:
+        probe := tcp_listen("127.0.0.1", port)
+        if probe.is_ok:
+            tcp_close(probe.ok)
+            return port
+        port = port + 1
+    fail "no free tcp port"
+
+fn app(req: HttpRequestBytes) -> HttpResponse:
+    return http.text(200, req.path_text)
+
+fn run_server(port: Int) -> Int!:
+    server_fd := tcp_listen("127.0.0.1", port)!
+    http.serve_connection_fd(tcp_accept(server_fd)!, app)!
+    tcp_close(server_fd)
+    return 0
+
+fn main() -> String!:
+    port := choose_port(18940)!
+    server_task := spawn run_server(port)
+    sleep(200)
+
+    conn := http.connect_client_with_timeout("127.0.0.1", port, 1500)!
+    first := conn.send(http.get_request("127.0.0.1", port, "/one").keep_alive())!
+    second := conn.send(http.get_request("127.0.0.1", port, "/two").close_connection())!
+    conn.close()
+
+    print("first:" + first.body_text()!)
+    print("first-connection:" + first.header_value("Connection"))
+    print("second:" + second.body_text()!)
+    print("second-connection:" + second.header_value("Connection"))
+    await server_task
+    return ""

@@ -254,6 +254,21 @@ resp := http.get_https_request("example.com", "/docs")
 - method rewrite to `GET` for `301` / `302` / `303` when needed
 - auth and cookie header stripping when the redirect changes origin
 
+for client-side keep-alive, send requests on an already-open connection:
+
+```fg
+conn := http.connect_client_with_timeout("127.0.0.1", 8080, 1500)!
+
+req1 := http.get_request("127.0.0.1", 8080, "/one").keep_alive()
+resp1 := conn.send(req1)!
+
+req2 := http.get_request("127.0.0.1", 8080, "/two").close_connection()
+resp2 := conn.send(req2)!
+conn.close()
+```
+
+the same shape works for tls with `connect_tls_client(...)`.
+
 that keeps request construction, response parsing, and body decoding in one
 module instead of splitting the work across app code.
 

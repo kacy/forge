@@ -573,7 +573,6 @@ impl Conn:
         if is_native_conn(self.handle):
             native_conn_close(self.handle)
             return
-        return
 
 test "tls configs reject missing files":
     assert(client_config_with_ca_file("/path/that/does/not/exist").is_err)

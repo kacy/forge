@@ -1,0 +1,4 @@
+first:/one
+first-connection:keep-alive
+second:/two
+second-connection:close
