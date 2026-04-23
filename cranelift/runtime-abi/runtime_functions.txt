@@ -96,6 +96,7 @@ crypto_verify_ed25519|forge_crypto_verify_ed25519|I64,I64,I64|I64
 crypto_verify_ecdsa_p256_sha256_asn1|forge_crypto_verify_ecdsa_p256_sha256_asn1|I64,I64,I64|I64
 crypto_verify_rsa_pkcs1_sha256|forge_crypto_verify_rsa_pkcs1_sha256|I64,I64,I64|I64
 crypto_verify_rsa_pss_sha256|forge_crypto_verify_rsa_pss_sha256|I64,I64,I64|I64
+crypto_sign_rsa_pss_sha256_pkcs8|forge_crypto_sign_rsa_pss_sha256_pkcs8|I64,I64|I64
 json_decode_flat6|forge_json_decode_flat6|I64,I64,I64,I64,I64,I64,I64,I64,I64,I64,I64,I64,I64|I64
 byte_buffer_new|forge_byte_buffer_new||I64
 byte_buffer_with_capacity|forge_byte_buffer_with_capacity|I64|I64

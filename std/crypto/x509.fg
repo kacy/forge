@@ -552,3 +552,11 @@ test "x509 verifies server chains against trusted roots":
     assert(not bad_host.ok)
     assert(not bad_host.hostname_ok)
     assert(not bad_roots.ok)
+
+test "x509 fixture key signs rsa pss messages":
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
+    key := encoding.pem_decode(read_file("tests/live/fixtures/localhost.key")!)!
+    message := bytes.from_string_utf8("forge signature")
+    sig := signature.sign_rsa_pss_sha256_pkcs8(key.body, message)!
+
+    assert(signature.verify_rsa_pss_sha256(cert.subject_public_key, message, sig))
