@@ -2,7 +2,8 @@
 #
 # most code should use the submodules directly:
 # `std.crypto.random`, `std.crypto.hmac`, `std.crypto.kdf`,
-# `std.crypto.subtle`, and `std.crypto.x509`.
+# `std.crypto.subtle`, `std.crypto.aead`, `std.crypto.ecdh`,
+# `std.crypto.signature`, and `std.crypto.x509`.
 
 test "crypto root module loads":
     assert(true)
