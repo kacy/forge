@@ -283,6 +283,7 @@ on the client side, you can parse an event-stream body back into frames:
 
 ```fg
 items := sse.parse_all(resp.body_text()!)!
+payload := items[0].json_data()!
 ```
 
 on the request side, `std.net.sse` also gives you the small header helpers:

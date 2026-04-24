@@ -56,6 +56,12 @@ impl Event:
     fn with_retry(ms: Int) -> Event:
         return Event(self.event, self.data, self.id, ms)
 
+    fn json_data() -> Int!:
+        return json.parse(self.data)
+
+    fn json_data_or(fallback: Int) -> Int:
+        return self.json_data() catch fallback
+
 fn encode_comment(text: String) -> String:
     if text == "":
         return ":" + chr(10) + chr(10)
@@ -212,6 +218,19 @@ test "sse parses event streams and skips comments":
     assert_eq(items[1].event, "tick")
     assert_eq(items[1].id, "evt-2")
     assert_eq(items[1].data, "hello")
+
+test "sse json helpers round-trip through parsed events":
+    payload := json.make_object()
+    json.object_set(payload, "ok", json.make_bool(true))
+    json.object_set(payload, "count", json.make_int(7))
+
+    item := parse(encode(named_json_event("tick", payload).with_id("evt-json")))!
+    decoded := item.json_data()!
+
+    assert_eq(item.event, "tick")
+    assert_eq(item.id, "evt-json")
+    assert(json.object_get_bool(decoded, "ok"))
+    assert_eq(json.object_get_int(decoded, "count"), 7)
 
 test "sse streams over chunked http":
     output := bytes.buffer()
