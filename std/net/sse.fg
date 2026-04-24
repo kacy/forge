@@ -1,0 +1,108 @@
+# std.net.sse — server-sent events on top of std.net.http streaming helpers
+
+import std.bytes as bytes
+import std.net.http as http
+import std.strings as strings
+import std.io as io
+from std.io import BufferedBytesWriter
+
+pub MIME_EVENT_STREAM := "text/event-stream"
+
+pub struct Event:
+    pub event: String
+    pub data: String
+    pub id: String
+    pub retry_ms: Int
+
+# returns the default response for an sse stream.
+pub fn response() -> http.HttpResponse:
+    mut resp := http.response(200).content_type(MIME_EVENT_STREAM)
+    resp = resp.header("Cache-Control", "no-cache")
+    resp = resp.header("Connection", "keep-alive")
+    return resp.header("X-Accel-Buffering", "no")
+
+# builds a plain message event.
+pub fn event(data: String) -> Event:
+    return Event("", data, "", -1)
+
+# builds a named event.
+pub fn named_event(name: String, data: String) -> Event:
+    return Event(name, data, "", -1)
+
+impl Event:
+    fn named(name: String) -> Event:
+        return Event(name, self.data, self.id, self.retry_ms)
+
+    fn with_id(value: String) -> Event:
+        return Event(self.event, self.data, value, self.retry_ms)
+
+    fn with_retry(ms: Int) -> Event:
+        return Event(self.event, self.data, self.id, ms)
+
+fn encode_comment(text: String) -> String:
+    if text == "":
+        return ":" + chr(10) + chr(10)
+    return ": " + text + chr(10) + chr(10)
+
+# encodes one event into the wire format.
+pub fn encode(item: Event) -> String:
+    mut lines: List[String] := []
+    if item.id != "":
+        lines.push("id: " + item.id)
+    if item.event != "":
+        lines.push("event: " + item.event)
+    if item.retry_ms >= 0:
+        lines.push("retry: " + item.retry_ms.to_string())
+    data_lines := strings.split_lines(item.data)
+    if data_lines.len() == 0:
+        lines.push("data:")
+    else:
+        for line in data_lines:
+            lines.push("data: " + line)
+    return strings.join_lines(lines) + chr(10) + chr(10)
+
+# sends the default sse response head.
+pub fn start(writer: BufferedBytesWriter) -> Int!:
+    return start_with_response(writer, response())
+
+# sends an sse response head with custom status or extra headers.
+pub fn start_with_response(writer: BufferedBytesWriter, resp: http.HttpResponse) -> Int!:
+    return http.send_chunked_response_head(writer, resp)
+
+# sends one encoded event.
+pub fn send(writer: BufferedBytesWriter, item: Event) -> Int!:
+    return http.send_chunked_response_text(writer, encode(item))
+
+# sends one sse comment frame.
+pub fn send_comment(writer: BufferedBytesWriter, text: String) -> Int!:
+    return http.send_chunked_response_text(writer, encode_comment(text))
+
+# sends an empty keep-alive comment.
+pub fn keep_alive(writer: BufferedBytesWriter) -> Int!:
+    return send_comment(writer, "")
+
+# finishes the stream.
+pub fn close(writer: BufferedBytesWriter) -> Int!:
+    return http.finish_chunked_response(writer)
+
+test "sse encodes multiline events":
+    payload := encode(named_event("tick", "one" + chr(10) + "two").with_id("evt-1").with_retry(1500))
+
+    assert_eq(payload, "id: evt-1" + chr(10) + "event: tick" + chr(10) + "retry: 1500" + chr(10) + "data: one" + chr(10) + "data: two" + chr(10) + chr(10))
+
+test "sse streams over chunked http":
+    output := bytes.buffer()
+    writer := output.buffered_chunked(6)
+
+    start(writer)!
+    send(writer, named_event("tick", "hello"))!
+    keep_alive(writer)!
+    close(writer)!
+
+    resp := http.read_response_buffered_bytes(io.bytes_reader(output.bytes()).buffered_chunked(5))!
+
+    assert_eq(resp.status, 200)
+    assert_eq(resp.header_value("Content-Type"), MIME_EVENT_STREAM)
+    assert_eq(resp.header_value("Cache-Control"), "no-cache")
+    assert_eq(resp.header_value("Connection"), "keep-alive")
+    assert_eq(resp.body_text()!, "event: tick" + chr(10) + "data: hello" + chr(10) + chr(10) + ":" + chr(10) + chr(10))

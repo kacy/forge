@@ -259,6 +259,19 @@ http.finish_chunked_response(writer)!
 that gives you a small first-party path for file sends, generated exports, and
 event-style responses without buffering the whole payload in memory.
 
+for server-sent events, use `std.net.sse` on top of that same chunked path:
+
+```fg
+import std.net.sse as sse
+
+sse.start(writer)!
+sse.send(writer, sse.named_event("tick", "hello"))!
+sse.keep_alive(writer)!
+```
+
+that sets the usual `text/event-stream` headers and writes correctly framed sse
+events instead of making each handler rebuild the wire format.
+
 on the client side, you can also stream the decoded response body into a
 writer:
 
