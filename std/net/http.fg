@@ -361,7 +361,7 @@ fn append_query_param_to_path(path: String, name: String, value: String) -> Stri
     encoded_name := url_mod.encode(name)
     encoded_value := url_mod.encode(value)
     mut separator := "?"
-    if path.contains("?"):
+    if path.index_of("?") >= 0:
         separator = "&"
     return normalize_path(path) + separator + encoded_name + "=" + encoded_value
 
@@ -1939,6 +1939,7 @@ pub fn read_response_tls_into(conn: tls.Conn, writer: BufferedBytesWriter) -> St
     head := read_response_head_tls(conn)!
     body_size := stream_response_body_tls(head, conn, writer)!
     return streamed_response_from_head(head, body_size)
+
 # ===============================================================
 # HTTP Client
 # ===============================================================
