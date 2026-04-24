@@ -84,6 +84,7 @@ mut files_being_checked: Map[String, Bool] := {}
 mut stdlib_root_directory: String := ""
 mut driver_parse_diagnostics: List[Diagnostic] := []
 mut resolved_module_paths: Map[Int, String] := {}
+mut resolved_module_files: Map[Int, String] := {}
 
 # convert a dotted module path to a file path segment.
 # "std.math" -> "std/math", "foo" -> "foo"
@@ -162,6 +163,7 @@ pub fn resolve_imports(root_idx: Int, source_path: String) -> List[Int]!:
             driver_parse_diagnostics = parser_diagnostics()
             return roots
         resolved_module_paths.insert(mod_root, mod_path)
+        resolved_module_files.insert(mod_root, file_path)
         sub_roots := resolve_imports(mod_root, file_path)!
         if driver_parse_diagnostics.len() > 0:
             return roots
@@ -183,6 +185,7 @@ pub fn init_driver(source_path: String):
     files_being_checked = {}
     driver_parse_diagnostics = []
     resolved_module_paths = {}
+    resolved_module_files = {}
     mark_visited(source_path)
 
 pub fn get_driver_parse_diagnostics() -> List[Diagnostic]:
@@ -194,6 +197,11 @@ pub fn driver_has_parse_errors() -> Bool:
 pub fn get_resolved_module_path(root_idx: Int) -> String:
     if resolved_module_paths.contains_key(root_idx):
         return resolved_module_paths[root_idx]
+    return ""
+
+pub fn get_resolved_module_file(root_idx: Int) -> String:
+    if resolved_module_files.contains_key(root_idx):
+        return resolved_module_files[root_idx]
     return ""
 
 # run the full compile pipeline: lex, parse, resolve imports, check, codegen.

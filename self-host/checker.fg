@@ -36,6 +36,12 @@ mut generic_wildcard_import_entries: List[String] := []
 mut current_checker_module_path: String := ""
 mut generic_inference_subst: Map[String, Int] := {}
 
+fn copy_string_map(src: Map[String, String]) -> Map[String, String]:
+    mut dst: Map[String, String] := {}
+    for key in src.keys():
+        dst.insert(key, src[key])
+    return dst
+
 # Get position from AST node
 fn get_node_position(node_idx: Int) -> (Int, Int):
     if node_idx < 0:
@@ -115,6 +121,9 @@ pub fn initialize_checker(file_path: String):
 
 pub fn set_checker_module_path(module_path: String):
     current_checker_module_path = module_path
+
+pub fn set_checker_file_path(file_path: String):
+    current_file_path = file_path
 
 # Register an import alias for module namespace resolution
 pub fn register_import_alias(alias: String, module_path: String):
@@ -4320,9 +4329,11 @@ pub fn c_run(root_idx: Int, file_path: String) -> List[Diagnostic]:
 # run checker passes on a single module without re-initializing.
 # call initialize_checker() once, then c_run_module() for each module in order.
 pub fn c_run_module(root_idx: Int) -> List[Diagnostic]:
+    saved_aliases := copy_string_map(module_aliases)
     process_import_aliases(root_idx)
     c_register_all(root_idx)
     c_check_all(root_idx)
+    module_aliases = saved_aliases
     return checker_diagnostics
 
 pub fn c_diagnostics_to_json(diags: List[Diagnostic]) -> String:
