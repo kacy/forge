@@ -1377,21 +1377,7 @@ impl HttpResponse:
         return parse_json_or_fail(self.body_text()!)
 
     fn to_bytes() -> Bytes!:
-        crlf := chr(13) + chr(10)
-        mut header := status_line(self.status)
-        if self.content_type != "":
-            header = header + ct_header(self.content_type)
-        for key in self.headers:
-            if header_key_matches(key, "Content-Type") or header_key_matches(key, "Content-Length") or header_key_matches(key, "Set-Cookie"):
-                continue
-            header = header + key + ": " + self.headers[key] + crlf
-        for line in self.set_cookie_headers:
-            header = header + "Set-Cookie: " + line + crlf
-        header = header + "Content-Length: " + self.body.len().to_string() + crlf
-        if header_lookup(self.headers, "Connection") == "":
-            header = header + "Connection: close" + crlf
-        header = header + crlf
-        header_bytes := bytes.from_string_utf8(header)
+        header_bytes := response_head_bytes(self, self.body.len(), false)!
         buf := bytes.buffer_with_capacity(header_bytes.len() + self.body.len())
         buf.write(header_bytes)!
         if self.body.len() > 0:
@@ -1400,6 +1386,25 @@ impl HttpResponse:
 
     fn to_string() -> String!:
         return self.to_bytes()!.to_string_utf8()
+
+fn response_head_bytes(response: HttpResponse, content_length: Int, use_chunked: Bool) -> Bytes!:
+    crlf := chr(13) + chr(10)
+    mut head := status_line(response.status)
+    if response.content_type != "":
+        head = head + ct_header(response.content_type)
+    for key in response.headers:
+        if header_key_matches(key, "Content-Type") or header_key_matches(key, "Content-Length") or header_key_matches(key, "Set-Cookie") or header_key_matches(key, "Transfer-Encoding"):
+            continue
+        head = head + key + ": " + response.headers[key] + crlf
+    for line in response.set_cookie_headers:
+        head = head + "Set-Cookie: " + line + crlf
+    if use_chunked:
+        head = head + "Transfer-Encoding: chunked" + crlf
+    else:
+        head = head + "Content-Length: " + content_length.to_string() + crlf
+    if header_lookup(response.headers, "Connection") == "":
+        head = head + "Connection: close" + crlf
+    return bytes.from_string_utf8(head + crlf)
 
 fn response_to_string_or_empty(resp: HttpResponse) -> String:
     text := resp.to_string()
@@ -1559,6 +1564,58 @@ pub fn read_request_bytes(fd: Int) -> HttpRequestBytes!:
 pub fn send_buffered(writer: BufferedBytesWriter, response: HttpResponse) -> Int!:
     payload := response.to_bytes()!
     written := writer.write_all_bytes(payload)!
+    writer.flush()!
+    return written
+
+# sends a response head with a fixed body size so callers can stream the body afterwards.
+pub fn send_sized_response_head(writer: BufferedBytesWriter, response: HttpResponse, content_length: Int) -> Int!:
+    if content_length < 0:
+        fail "http response content length must be non-negative"
+    if not response.body.is_empty():
+        fail "streamed http responses must start with an empty buffered body"
+    mut written := writer.write_all_bytes(response_head_bytes(response, content_length, false)!)!
+    writer.flush()!
+    return written
+
+# writes body bytes for a streaming response and flushes them.
+pub fn send_stream_bytes(writer: BufferedBytesWriter, data: Bytes) -> Int!:
+    mut written := writer.write_all_bytes(data)!
+    writer.flush()!
+    return written
+
+# writes body text for a streaming response and flushes it.
+pub fn send_stream_text(writer: BufferedBytesWriter, data: String) -> Int!:
+    return send_stream_bytes(writer, bytes.from_string_utf8(data))
+
+# sends a chunked response head so callers can stream chunks without buffering the whole body.
+pub fn send_chunked_response_head(writer: BufferedBytesWriter, response: HttpResponse) -> Int!:
+    if not response.body.is_empty():
+        fail "chunked http responses must start with an empty buffered body"
+    mut written := writer.write_all_bytes(response_head_bytes(response, 0, true)!)!
+    writer.flush()!
+    return written
+
+# writes one chunked response body chunk and flushes it.
+pub fn send_chunked_response_bytes(writer: BufferedBytesWriter, data: Bytes) -> Int!:
+    if data.is_empty():
+        return 0
+    crlf := bytes.from_string_utf8(chr(13) + chr(10))
+    chunk_size := bytes.from_string_utf8(lower_hex_int(data.len()))
+    mut written := 0
+    written = written + writer.write_all_bytes(chunk_size.concat(crlf))!
+    written = written + writer.write_all_bytes(data)!
+    written = written + writer.write_all_bytes(crlf)!
+    writer.flush()!
+    return written
+
+# writes one text chunk in a chunked response and flushes it.
+pub fn send_chunked_response_text(writer: BufferedBytesWriter, data: String) -> Int!:
+    return send_chunked_response_bytes(writer, bytes.from_string_utf8(data))
+
+# finishes a chunked response body.
+pub fn finish_chunked_response(writer: BufferedBytesWriter) -> Int!:
+    tail := bytes.from_string_utf8("0" + chr(13) + chr(10) + chr(13) + chr(10))
+    mut written := writer.write_all_bytes(tail)!
     writer.flush()!
     return written
 
@@ -1744,6 +1801,20 @@ fn request_default_port(use_tls: Bool) -> Int:
     if use_tls:
         return 443
     return 80
+
+fn lower_hex_digit(value: Int) -> String:
+    digits := "0123456789abcdef"
+    return digits[value]
+
+fn lower_hex_int(value: Int) -> String:
+    if value == 0:
+        return "0"
+    mut n := value
+    mut out := ""
+    while n > 0:
+        out = lower_hex_digit(n % 16) + out
+        n = n / 16
+    return out
 
 fn client_conn_from_stream(stream: TcpStream) -> ClientConn:
     return ClientConn(stream, stream.buffered_bytes_reader_chunked(512), stream.buffered_bytes_writer())
@@ -2297,6 +2368,32 @@ test "http reads close-delimited responses from a reader":
     resp := read_response_buffered_bytes(io.bytes_reader(bytes.from_string_utf8(raw)).buffered_chunked(4))!
     assert_eq(resp.body_text()!, "legacy body")
     assert_eq(resp.header_value("Connection"), "close")
+
+test "http streams sized responses over a buffered writer":
+    output := bytes.buffer()
+    writer := output.buffered_chunked(6)
+
+    send_sized_response_head(writer, text(200, "").keep_alive(), 11)!
+    send_stream_text(writer, "hello ")!
+    send_stream_text(writer, "world")!
+
+    resp := read_response_buffered_bytes(io.bytes_reader(output.bytes()).buffered_chunked(4))!
+    assert_eq(resp.body_text()!, "hello world")
+    assert_eq(resp.header_value("Connection"), "keep-alive")
+
+test "http streams chunked responses over a buffered writer":
+    output := bytes.buffer()
+    writer := output.buffered_chunked(5)
+
+    send_chunked_response_head(writer, text(200, "").keep_alive())!
+    send_chunked_response_text(writer, "hello ")!
+    send_chunked_response_bytes(writer, bytes.from_string_utf8("world"))!
+    finish_chunked_response(writer)!
+
+    resp := read_response_buffered_bytes(io.bytes_reader(output.bytes()).buffered_chunked(4))!
+    assert_eq(resp.body_text()!, "hello world")
+    assert_eq(resp.header_value("Transfer-Encoding"), "chunked")
+    assert_eq(resp.header_value("Connection"), "keep-alive")
 
 test "http multipart helpers keep binary bodies raw":
     file_buf := bytes.buffer()

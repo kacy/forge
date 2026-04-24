@@ -220,6 +220,31 @@ if payload < 0:
     return http.server_error_response()
 ```
 
+## streaming responses
+
+for larger bodies, you can stream the response instead of building one big
+buffer first.
+
+for known sizes, send the head once and then stream the body bytes:
+
+```fg
+http.send_sized_response_head(writer, http.response(200).content_type("text/plain"), size)!
+http.send_stream_bytes(writer, chunk1)!
+http.send_stream_bytes(writer, chunk2)!
+```
+
+for open-ended bodies, use chunked transfer encoding:
+
+```fg
+http.send_chunked_response_head(writer, http.response(200).content_type("text/plain").keep_alive())!
+http.send_chunked_response_text(writer, "hello ")!
+http.send_chunked_response_text(writer, "world")!
+http.finish_chunked_response(writer)!
+```
+
+that gives you a small first-party path for file sends, generated exports, and
+event-style responses without buffering the whole payload in memory.
+
 ## client helpers
 
 the client side now uses the same explicit shape:
