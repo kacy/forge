@@ -45,6 +45,11 @@ pub struct HttpRequestBytes:
     pub query_map: Map[String, String]
     pub path_parts_cache: List[String]
 
+# request metadata returned when a body is streamed into a writer.
+pub struct StreamedHttpRequest:
+    pub req: HttpRequestBytes
+    pub body_size: Int
+
 # structured response data used by the bytes-first server helpers.
 pub struct HttpResponse:
     pub status: Int
@@ -873,6 +878,40 @@ impl HttpRequestBytes:
             return fallback
         return value
 
+impl StreamedHttpRequest:
+    fn method() -> String!:
+        return self.req.method()
+
+    fn path() -> String!:
+        return self.req.path()
+
+    fn query() -> String!:
+        return self.req.query()
+
+    fn version() -> String!:
+        return self.req.version()
+
+    fn header(name: String) -> String!:
+        return self.req.header(name)
+
+    fn header_or(name: String, fallback: String) -> String:
+        return self.req.header_or(name, fallback)
+
+    fn query_param(name: String) -> String!:
+        return self.req.query_param(name)
+
+    fn query_param_or(name: String, fallback: String) -> String:
+        return self.req.query_param_or(name, fallback)
+
+    fn matches_path(pattern: String) -> Bool!:
+        return self.req.matches_path(pattern)
+
+    fn path_param(pattern: String, name: String) -> String!:
+        return self.req.path_param(pattern, name)
+
+    fn path_param_or(pattern: String, name: String, fallback: String) -> String:
+        return self.req.path_param_or(pattern, name, fallback)
+
 impl MultipartPart:
     fn header(name: String) -> String:
         return header_lookup(self.headers, name)
@@ -1628,31 +1667,39 @@ fn find_request_head_end_from(raw: Bytes, start: Int) -> Int:
 fn find_request_head_end(raw: Bytes) -> Int:
     return find_request_head_end_from(raw, 0)
 
-fn read_request_from_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestBytes!:
+fn read_request_head_buffered_bytes(reader: BufferedBytesReader) -> Bytes!:
     buf := bytes.buffer_with_capacity(1024)
-    mut body_start := -1
+    mut head_end := -1
     mut scan_start := 0
-    while body_start < 0:
+    while head_end < 0:
         chunk := reader.read_bytes(1)!
         if chunk.is_empty():
             if buf.bytes().is_empty():
-                return build_http_request(bytes.empty(), bytes.empty())
+                return bytes.empty()
             break
         buf.write(chunk)!
-        body_start = find_request_head_end_from(buf.bytes(), scan_start)
+        head_end = find_request_head_end_from(buf.bytes(), scan_start)
         scan_start = buf.bytes().len() - 3
         if scan_start < 0:
             scan_start = 0
-    if body_start < 0:
-        return build_http_request(buf.bytes(), bytes.empty())
-    raw := buf.bytes()
-    head_bytes := raw.slice(0, body_start)
+    if head_end < 0:
+        return buf.bytes()
+    return buf.bytes().slice(0, head_end)
+
+fn stream_request_body_buffered(head_bytes: Bytes, reader: BufferedBytesReader, writer: BufferedBytesWriter) -> Int!:
+    if uses_chunked_transfer_encoding(head_bytes):
+        return stream_chunked_body_from_reader(reader, writer)
+    content_length := content_length_from_head_bytes(head_bytes)!
+    return stream_exact_bytes_from_reader(reader, writer, content_length)
+
+fn read_request_from_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestBytes!:
+    head_bytes := read_request_head_buffered_bytes(reader)!
+    if head_bytes.is_empty():
+        return build_http_request(bytes.empty(), bytes.empty())
     if uses_chunked_transfer_encoding(head_bytes):
         return build_http_request(head_bytes, read_chunked_body(reader)!)
     content_length := content_length_from_head_bytes(head_bytes)!
     body_buf := bytes.buffer_with_capacity(content_length)
-    if body_start < raw.len():
-        body_buf.write(raw.slice(body_start, raw.len()))!
     while body_buf.bytes().len() < content_length:
         remaining := content_length - body_buf.bytes().len()
         chunk := reader.read_bytes(remaining)!
@@ -1688,11 +1735,26 @@ pub fn read_request(fd: Int) -> String!:
 # reads one request from a buffered bytes reader.
 pub fn read_request_buffered_bytes(reader: BufferedBytesReader) -> HttpRequestBytes!:
     return read_request_from_buffered_bytes(reader)
+
+# reads one request and streams the body into a writer.
+pub fn read_request_buffered_bytes_into(reader: BufferedBytesReader, writer: BufferedBytesWriter) -> StreamedHttpRequest!:
+    head_bytes := read_request_head_buffered_bytes(reader)!
+    if head_bytes.is_empty():
+        return StreamedHttpRequest(build_http_request(bytes.empty(), bytes.empty())!, 0)
+    body_size := stream_request_body_buffered(head_bytes, reader, writer)!
+    return StreamedHttpRequest(build_http_request(head_bytes, bytes.empty())!, body_size)
+
 # reads one request from a file descriptor using the bytes-first path.
 pub fn read_request_bytes(fd: Int) -> HttpRequestBytes!:
     stream := io.from_fd(fd)
     reader := stream.buffered_bytes_reader_chunked(512)
     return read_request_from_buffered_bytes(reader)
+
+# reads one request from a file descriptor and streams the body into a writer.
+pub fn read_request_bytes_into(fd: Int, writer: BufferedBytesWriter) -> StreamedHttpRequest!:
+    stream := io.from_fd(fd)
+    reader := stream.buffered_bytes_reader_chunked(512)
+    return read_request_buffered_bytes_into(reader, writer)
 
 # sends one structured response through a buffered writer.
 pub fn send_buffered(writer: BufferedBytesWriter, response: HttpResponse) -> Int!:
@@ -2466,6 +2528,19 @@ test "http accepts zero content length":
     assert_eq(req.method()!, "GET")
     assert_eq(req.body_bytes().len(), 0)
 
+test "http streams request bodies into writers":
+    crlf := chr(13) + chr(10)
+    raw := "POST /upload?draft=1 HTTP/1.1" + crlf + "Host: example.test" + crlf + "Content-Length: 11" + crlf + crlf + "hello world"
+    output := bytes.buffer()
+
+    streamed := read_request_buffered_bytes_into(io.bytes_reader(bytes.from_string_utf8(raw)).buffered_chunked(4), output.buffered_chunked(5))!
+
+    assert_eq(streamed.method()!, "POST")
+    assert_eq(streamed.path()!, "/upload")
+    assert_eq(streamed.query_param("draft")!, "1")
+    assert_eq(streamed.body_size, 11)
+    assert_eq(output.bytes().to_string_utf8()!, "hello world")
+
 test "http decodes chunked request and response bodies":
     crlf := chr(13) + chr(10)
     raw_req := "POST /chunked HTTP/1.1" + crlf + "Host: example.test" + crlf + "Transfer-Encoding: chunked" + crlf + crlf + "4" + crlf + "wiki" + crlf + "5" + crlf + "pedia" + crlf + "0" + crlf + crlf
@@ -2475,6 +2550,17 @@ test "http decodes chunked request and response bodies":
     raw_resp := "HTTP/1.1 200 OK" + crlf + "Transfer-Encoding: chunked" + crlf + crlf + "4" + crlf + "pong" + crlf + "0" + crlf + crlf
     resp := parse_response(raw_resp)!
     assert_eq(resp.body_text()!, "pong")
+
+test "http streams chunked request bodies into writers":
+    crlf := chr(13) + chr(10)
+    raw := "POST /chunked HTTP/1.1" + crlf + "Host: example.test" + crlf + "Transfer-Encoding: chunked" + crlf + crlf + "6" + crlf + "hello " + crlf + "5" + crlf + "world" + crlf + "0" + crlf + crlf
+    output := bytes.buffer()
+
+    streamed := read_request_buffered_bytes_into(io.bytes_reader(bytes.from_string_utf8(raw)).buffered_chunked(4), output.buffered_chunked(5))!
+
+    assert_eq(streamed.path()!, "/chunked")
+    assert_eq(streamed.body_size, 11)
+    assert_eq(output.bytes().to_string_utf8()!, "hello world")
 
 test "http cookies work across request and response helpers":
     req_bytes := get_request("example.test", 80, "/").cookie("session", "abc123").cookie("theme", "dark").to_bytes()!

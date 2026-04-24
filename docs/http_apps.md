@@ -45,6 +45,20 @@ for common verb checks, prefer the small route wrappers:
 - `http.delete_route(...)`
 - `http.patch_route(...)`
 
+if an upload should go straight to a writer instead of into memory, stream the
+body and keep the request metadata:
+
+```fg
+out := bytes.buffer()
+streamed := http.read_request_buffered_bytes_into(reader, out.buffered_chunked(4096))!
+
+if streamed.matches_path("/upload")!:
+    print(streamed.body_size.to_string())
+```
+
+`read_request_*_into(...)` gives you the parsed request metadata plus the
+decoded body size. the request body itself goes straight into the writer.
+
 ## response helpers
 
 `HttpResponse` is a plain value with a small builder surface:
