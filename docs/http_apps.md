@@ -278,6 +278,10 @@ if your payload is already a forge json value, use the json helpers:
 sse.send_named_json(writer, "tick", payload)!
 ```
 
+on the request side, `std.net.sse` also gives you the small header helpers:
+- `sse.accepts_stream(req)`
+- `sse.last_event_id(req)`
+
 on the client side, you can also stream the decoded response body into a
 writer:
 

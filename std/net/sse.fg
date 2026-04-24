@@ -15,6 +15,14 @@ pub struct Event:
     pub id: String
     pub retry_ms: Int
 
+# returns true when the request accepts an event stream response.
+pub fn accepts_stream(req: http.HttpRequestBytes) -> Bool:
+    return req.header_or("Accept", "").contains(MIME_EVENT_STREAM)
+
+# returns the last event id sent by the client, if any.
+pub fn last_event_id(req: http.HttpRequestBytes) -> String:
+    return req.header_or("Last-Event-ID", "")
+
 # returns the default response for an sse stream.
 pub fn response() -> http.HttpResponse:
     mut resp := http.response(200).content_type(MIME_EVENT_STREAM)
@@ -110,6 +118,14 @@ test "sse encodes multiline events":
     assert(payload.contains("retry: 1500"))
     assert(payload.contains("data: one"))
     assert(payload.contains("data: two"))
+
+test "sse request helpers read stream headers":
+    crlf := chr(13) + chr(10)
+    raw := "GET /events HTTP/1.1" + crlf + "Host: example.test" + crlf + "Accept: text/event-stream" + crlf + "Last-Event-ID: evt-42" + crlf + crlf
+    req := http.read_request_buffered_bytes(io.bytes_reader(bytes.from_string_utf8(raw)).buffered_chunked(4))!
+
+    assert(accepts_stream(req))
+    assert(last_event_id(req).contains("evt-42"))
 
 test "sse streams over chunked http":
     output := bytes.buffer()
