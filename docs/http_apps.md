@@ -273,8 +273,7 @@ print(out.bytes().len().to_string())
 `send_into(...)` and `read_response_*_into(...)` return response metadata plus
 the streamed body size. the body itself goes straight into the writer.
 
-right now the streaming client path does not follow redirects for you, so use
-`no_redirects()` or handle the `Location` response yourself.
+`send_into(...)` follows redirects the same way `send()` does.
 
 ## client helpers
 

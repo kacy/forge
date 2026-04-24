@@ -2151,6 +2151,43 @@ fn send_request_tls_into(req: ClientRequest, server_name: String, config: tls.Co
     conn.close()
     return streamed
 
+fn discard_response_writer() -> BufferedBytesWriter:
+    return bytes.buffer().buffered_chunked(512)
+
+fn send_request_plain_into_with_redirects(req: ClientRequest, writer: BufferedBytesWriter) -> StreamedHttpResponse!:
+    stream := io.connect(req.host, req.port)!
+    if req.timeout_ms >= 0:
+        stream.set_timeout(req.timeout_ms)
+    req_writer := stream.buffered_bytes_writer()
+    req_writer.write_all_bytes(req.to_bytes()!)!
+    req_writer.flush()!
+    reader := stream.buffered_bytes_reader_chunked(512)
+    head := read_response_head_buffered(reader)!
+    resp := response_from_head_and_body(head, bytes.empty())!
+    if req.redirect_limit > 0 and redirect_status(resp.status):
+        stream_response_body_buffered(head, reader, discard_response_writer())!
+        stream.close()
+        return StreamedHttpResponse(resp.status, resp.content_type, copy_headers_map(resp.headers), copy_string_list(resp.set_cookie_headers), 0)
+    body_size := stream_response_body_buffered(head, reader, writer)!
+    stream.close()
+    return streamed_response_from_head(head, body_size)
+
+fn send_request_tls_into_with_redirects(req: ClientRequest, server_name: String, config: tls.Config, writer: BufferedBytesWriter) -> StreamedHttpResponse!:
+    stream := io.connect(req.host, req.port)!
+    if req.timeout_ms >= 0:
+        stream.set_timeout(req.timeout_ms)
+    conn := tls.client(stream, server_name, config)!
+    conn.write_all_bytes(req.to_bytes()!)!
+    head := read_response_head_tls(conn)!
+    resp := response_from_head_and_body(head, bytes.empty())!
+    if req.redirect_limit > 0 and redirect_status(resp.status):
+        stream_response_body_tls(head, conn, discard_response_writer())!
+        conn.close()
+        return StreamedHttpResponse(resp.status, resp.content_type, copy_headers_map(resp.headers), copy_string_list(resp.set_cookie_headers), 0)
+    body_size := stream_response_body_tls(head, conn, writer)!
+    conn.close()
+    return streamed_response_from_head(head, body_size)
+
 fn send_request_once(req: ClientRequest) -> HttpResponse!:
     if req.use_tls:
         return send_request_tls(req, req.host, tls.client_config()!)
@@ -2180,6 +2217,40 @@ fn send_request_following_redirects_with_tls_config(req: ClientRequest, tls_conf
             return resp
         current = redirect_request(current, resp)!
         redirects_left = redirects_left - 1
+
+fn send_request_following_redirects_into(req: ClientRequest, writer: BufferedBytesWriter) -> StreamedHttpResponse!:
+    mut current := req
+    mut redirects_left := req.redirect_limit
+    while true:
+        mut resp := StreamedHttpResponse(0, "", {}, [], 0)
+        if current.use_tls:
+            resp = send_request_tls_into_with_redirects(current, current.host, tls.client_config()!, writer)!
+        else:
+            resp = send_request_plain_into_with_redirects(current, writer)!
+        if redirects_left <= 0 or not redirect_status(resp.status):
+            return resp
+        current = redirect_request(current, HttpResponse(resp.status, resp.content_type, copy_headers_map(resp.headers), bytes.empty(), copy_string_list(resp.set_cookie_headers)))!
+        redirects_left = redirects_left - 1
+        current = ClientRequest(current.method, current.host, current.port, current.path, copy_headers_map(current.headers), current.body, current.use_tls, current.timeout_ms, redirects_left)
+
+fn send_request_following_redirects_into_with_tls_config(req: ClientRequest, tls_config: tls.Config, writer: BufferedBytesWriter) -> StreamedHttpResponse!:
+    mut current := req
+    mut redirects_left := req.redirect_limit
+    while true:
+        if current.use_tls:
+            resp := send_request_tls_into_with_redirects(current, current.host, tls_config, writer)!
+            if redirects_left <= 0 or not redirect_status(resp.status):
+                return resp
+            current = redirect_request(current, HttpResponse(resp.status, resp.content_type, copy_headers_map(resp.headers), bytes.empty(), copy_string_list(resp.set_cookie_headers)))!
+            redirects_left = redirects_left - 1
+            current = ClientRequest(current.method, current.host, current.port, current.path, copy_headers_map(current.headers), current.body, current.use_tls, current.timeout_ms, redirects_left)
+            continue
+        resp := send_request_plain_into_with_redirects(current, writer)!
+        if redirects_left <= 0 or not redirect_status(resp.status):
+            return resp
+        current = redirect_request(current, HttpResponse(resp.status, resp.content_type, copy_headers_map(resp.headers), bytes.empty(), copy_string_list(resp.set_cookie_headers)))!
+        redirects_left = redirects_left - 1
+        current = ClientRequest(current.method, current.host, current.port, current.path, copy_headers_map(current.headers), current.body, current.use_tls, current.timeout_ms, redirects_left)
 
 impl ClientRequest:
     fn header(name: String, value: String) -> ClientRequest:
@@ -2286,19 +2357,15 @@ impl ClientRequest:
         return send_request_following_redirects_with_tls_config(current, config)
 
     fn send_into(writer: BufferedBytesWriter) -> StreamedHttpResponse!:
-        if self.redirect_limit > 0:
-            fail "send_into does not follow redirects yet"
-        if self.use_tls:
-            return send_request_tls_into(self, self.host, tls.client_config()!, writer)
-        return send_request_plain_into(self, writer)
+        return send_request_following_redirects_into(self, writer)
 
     fn send_tls_into(writer: BufferedBytesWriter) -> StreamedHttpResponse!:
         return self.send_tls_into_with_config(self.host, tls.client_config()!, writer)
 
     fn send_tls_into_with_config(server_name: String, config: tls.Config, writer: BufferedBytesWriter) -> StreamedHttpResponse!:
-        if self.redirect_limit > 0 and server_name == self.host:
-            fail "send_tls_into does not follow redirects yet"
         current := ClientRequest(self.method, self.host, self.port, self.path, copy_headers_map(self.headers), self.body, true, self.timeout_ms, self.redirect_limit)
+        if server_name == self.host:
+            return send_request_following_redirects_into_with_tls_config(current, config, writer)
         return send_request_tls_into(current, server_name, config, writer)
 
     fn send_bytes() -> Bytes!:
