@@ -485,6 +485,43 @@ pub fn verify_server_chain(chain: List[Certificate], trusted_roots: List[Certifi
         depth = depth + 1
     return VerificationResult(false, hostname_ok, issuer_ok, root_ca_ok, signature_verified, "certificate chain is too deep")
 
+# verify a client certificate chain against trusted roots.
+pub fn verify_client_chain(chain: List[Certificate], trusted_roots: List[Certificate]) -> VerificationResult:
+    if chain.len() == 0:
+        return VerificationResult(false, true, false, false, false, "certificate chain is empty")
+    if trusted_roots.len() == 0:
+        return VerificationResult(false, true, false, false, false, "trusted roots are empty")
+
+    mut current := chain[0]
+    mut next_chain_index := 1
+    mut issuer_ok := false
+    mut root_ca_ok := false
+    mut signature_verified := false
+    mut depth := 0
+    while depth < chain.len() + trusted_roots.len() + 1:
+        issuer_from_chain := find_issuer_in_chain(current, chain, next_chain_index)
+        if issuer_from_chain.is_ok:
+            issuer := issuer_from_chain.ok
+            issuer_ok = true
+            root_ca_ok = issuer.is_ca
+            signature_verified = verify_signature(current, issuer)
+            if not root_ca_ok or not signature_verified:
+                return VerificationResult(false, true, issuer_ok, root_ca_ok, signature_verified, verification_reason(true, issuer_ok, root_ca_ok, signature_verified))
+            current = issuer
+            next_chain_index = next_chain_index + 1
+        else:
+            root_result := find_issuer_in_roots(current, trusted_roots)
+            if root_result.is_err:
+                return VerificationResult(false, true, false, false, false, "certificate issuer is not trusted")
+            root := root_result.ok
+            issuer_ok = true
+            root_ca_ok = root.is_ca
+            signature_verified = verify_signature(current, root)
+            ok := issuer_ok and root_ca_ok and signature_verified
+            return VerificationResult(ok, true, issuer_ok, root_ca_ok, signature_verified, verification_reason(true, issuer_ok, root_ca_ok, signature_verified))
+        depth = depth + 1
+    return VerificationResult(false, true, issuer_ok, root_ca_ok, signature_verified, "certificate chain is too deep")
+
 test "der oid decoder reads common object ids":
     data := encoding.from_hex("0603551D11")!
     assert_eq(read_oid(data, 0)!, OID_SUBJECT_ALT_NAME)
@@ -551,6 +588,18 @@ test "x509 verifies server chains against trusted roots":
     assert(good.signature_verified)
     assert(not bad_host.ok)
     assert(not bad_host.hostname_ok)
+    assert(not bad_roots.ok)
+
+test "x509 verifies client chains against trusted roots":
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
+    ca := parse_pem(read_file("tests/live/fixtures/localhost-ca.crt")!)!
+    good := verify_client_chain([cert], [ca])
+    bad_roots := verify_client_chain([cert], [])
+
+    assert(good.ok)
+    assert(good.issuer_ok)
+    assert(good.root_ca_ok)
+    assert(good.signature_verified)
     assert(not bad_roots.ok)
 
 test "x509 fixture key signs rsa pss messages":

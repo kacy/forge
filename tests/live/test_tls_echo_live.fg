@@ -15,14 +15,27 @@ fn choose_port(start: Int) -> Int!:
         port = port + 1
     fail "no free tcp port"
 
+fn alpn_server_config() -> tls.Config!:
+    cfg := tls.server_config(CERT_PATH, KEY_PATH)!
+    return cfg.with_alpn(["forge.echo", "http/1.1"]).enable_session_resumption()
+
+fn alpn_client_config() -> tls.Config!:
+    cfg := tls.client_config_with_ca_file(CA_PATH)!
+    return cfg.with_alpn(["forge.echo", "http/1.1"]).enable_session_resumption()
+
 fn run_server(port: Int) -> Int!:
-    server_cfg := tls.server_config(CERT_PATH, KEY_PATH)!
+    server_cfg := alpn_server_config()!
     listener := tls.listen("127.0.0.1", port, server_cfg)!
 
     echo_conn := listener.accept()!
     msg := echo_conn.read(64)!
     echo_conn.write_all("echo:" + msg)!
     echo_conn.close()
+
+    resumed_conn := listener.accept()!
+    resumed_msg := resumed_conn.read(64)!
+    resumed_conn.write_all("echo:" + resumed_msg)!
+    resumed_conn.close()
 
     http_conn := listener.accept()!
     req := http_conn.read(2048)!
@@ -36,21 +49,55 @@ fn run_server(port: Int) -> Int!:
     server_cfg.close()
     return 0
 
+fn run_mtls_server(port: Int) -> Int!:
+    server_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["forge.mtls"]).require_client_ca_file(CA_PATH)!
+    listener := tls.listen("127.0.0.1", port, server_cfg)!
+    conn := listener.accept()!
+    msg := conn.read(64)!
+    conn.write_all("mtls:" + msg)!
+    conn.close()
+    listener.close()
+    server_cfg.close()
+    return 0
+
 fn main() -> Int!:
     port := choose_port(18942)!
     server_task := spawn run_server(port)
     sleep(200)
 
-    client_cfg := tls.client_config_with_ca_file(CA_PATH)!
+    client_cfg := alpn_client_config()!
     conn := tls.dial_with_config("127.0.0.1", port, "localhost", client_cfg)!
     conn.write_all("forge")!
-    print(conn.read(64)!)
+    assert(conn.read(64)! == "echo:forge")
+    assert(conn.negotiated_protocol() == "forge.echo")
     conn.close()
 
-    res := http.https_request_port("GET", "127.0.0.1", port, "/secure").send_tls_with_config("localhost", client_cfg)!
-    print(res.status.to_string())
-    print(res.body_text()!)
+    resumed_conn := tls.dial_with_config("127.0.0.1", port, "localhost", client_cfg)!
+    resumed_conn.write_all("again")!
+    assert(resumed_conn.read(64)! == "echo:again")
+    assert(resumed_conn.did_resume())
+    resumed_conn.close()
+
+    http_cfg := tls.client_config_with_ca_file(CA_PATH)!.with_alpn(["http/1.1"])
+    res := http.https_request_port("GET", "127.0.0.1", port, "/secure").send_tls_with_config("localhost", http_cfg)!
+    assert(res.status == 200)
+    assert(res.body_text()! == "hello secure")
+    http_cfg.close()
     client_cfg.close()
 
     await server_task
+
+    mtls_port := choose_port(19142)!
+    mtls_task := spawn run_mtls_server(mtls_port)
+    sleep(200)
+
+    mtls_cfg := tls.client_config_with_ca_file(CA_PATH)!.with_alpn(["forge.mtls"]).with_client_certificate(CERT_PATH, KEY_PATH)!
+    mtls_conn := tls.dial_with_config("127.0.0.1", mtls_port, "localhost", mtls_cfg)!
+    mtls_conn.write_all("client")!
+    assert(mtls_conn.read(64)! == "mtls:client")
+    assert(mtls_conn.negotiated_protocol() == "forge.mtls")
+    mtls_conn.close()
+    mtls_cfg.close()
+
+    await mtls_task
     return 0
