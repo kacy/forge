@@ -2125,6 +2125,40 @@ fn check_config_decode_callee(index_node: Node, member_name: String) -> Bool:
             return true
     return recv_node.value == "config" or recv_node.value == "config_mod"
 
+fn check_toml_decode_callee(index_node: Node, member_name: String) -> Bool:
+    if index_node.kind != "index" or index_node.children.len() < 2:
+        return false
+    base_node := get_node(index_node.children[0])
+    if base_node.kind != "field_access" or base_node.value != member_name:
+        return false
+    if base_node.children.len() < 1:
+        return false
+    recv_node := get_node(base_node.children[0])
+    if recv_node.kind != "ident":
+        return false
+    if module_aliases.contains_key(recv_node.value):
+        if module_aliases[recv_node.value] == "std.toml":
+            return true
+    return recv_node.value == "toml" or recv_node.value == "toml_mod"
+
+fn check_config_file_decode_callee(index_node: Node, member_name: String) -> Bool:
+    if index_node.kind != "index" or index_node.children.len() < 2:
+        return false
+    base_node := get_node(index_node.children[0])
+    if base_node.kind == "ident":
+        return base_node.value == member_name
+    if base_node.kind != "field_access" or base_node.value != member_name:
+        return false
+    if base_node.children.len() < 1:
+        return false
+    recv_node := get_node(base_node.children[0])
+    if recv_node.kind != "ident":
+        return false
+    if module_aliases.contains_key(recv_node.value):
+        if module_aliases[recv_node.value] == "std.config":
+            return true
+    return recv_node.value == "config" or recv_node.value == "config_mod"
+
 fn resolve_json_decode_type_arg(type_arg_idx: Int) -> Int:
     type_arg := get_node(type_arg_idx)
     if type_arg.kind == "ident":
@@ -2232,6 +2266,191 @@ fn check_json_decode_call(index_node: Node, arg_indices: List[Int], scope_id: In
         return TID_ERR
     return add_type_info(ti_result(target_tid, err_tid))
 
+fn check_toml_decode_call(index_node: Node, arg_indices: List[Int], scope_id: Int, text_input: Bool) -> Int:
+    if index_node.children.len() < 2:
+        report_error("E222", "toml.decode requires an explicit struct type")
+        return TID_ERR
+    if arg_indices.len() != 1:
+        report_error("E207", "toml.decode expects 1 argument, got " + arg_indices.len().to_string())
+        return TID_ERR
+
+    target_tid := resolve_json_decode_type_arg(index_node.children[1])
+    if is_error_type(target_tid):
+        return TID_ERR
+    target_info := get_type_info(target_tid)
+    if target_info.kind != "struct":
+        report_error("E219", "toml.decode target must be a struct, got " + get_type_name(target_tid))
+        return TID_ERR
+
+    arg_node := get_node(arg_indices[0])
+    mut arg_expr_idx := arg_indices[0]
+    if arg_node.kind == "arg" and arg_node.children.len() > 0:
+        arg_expr_idx = arg_node.children[0]
+    arg_tid := c_check_expr(arg_expr_idx, scope_id)
+    mut expected_tid := lookup_type_id("Int")
+    if text_input:
+        expected_tid = lookup_type_id("String")
+    if is_error_type(arg_tid) == false and arg_tid != expected_tid:
+        report_error("E219", "toml.decode argument type mismatch: expected " + get_type_name(expected_tid) + ", got " + get_type_name(arg_tid))
+        return TID_ERR
+
+    for field_name, i in target_info.fields:
+        if i < target_info.field_pub.len() and not target_info.field_pub[i]:
+            report_error("E219", "toml.decode target field must be public: " + field_name)
+            return TID_ERR
+        if i < target_info.field_types.len():
+            field_tid := target_info.field_types[i]
+            if not json_decode_field_supported(field_tid):
+                report_error("E219", "toml.decode does not support field '" + field_name + "' of type " + get_type_name(field_tid))
+                return TID_ERR
+    err_tid := lookup_type_id("TomlDecodeError")
+    if err_tid < 0:
+        report_error("E202", "unknown type: TomlDecodeError")
+        return TID_ERR
+    return add_type_info(ti_result(target_tid, err_tid))
+
+fn check_config_file_decode_call(index_node: Node, arg_indices: List[Int], scope_id: Int) -> Int:
+    if index_node.children.len() < 2:
+        report_error("E222", "config typed file decode requires an explicit struct type")
+        return TID_ERR
+    if arg_indices.len() != 1:
+        report_error("E207", "config typed file decode expects 1 argument, got " + arg_indices.len().to_string())
+        return TID_ERR
+
+    target_tid := resolve_json_decode_type_arg(index_node.children[1])
+    if is_error_type(target_tid):
+        return TID_ERR
+    target_info := get_type_info(target_tid)
+    if target_info.kind != "struct":
+        report_error("E219", "config typed file decode target must be a struct, got " + get_type_name(target_tid))
+        return TID_ERR
+
+    arg_node := get_node(arg_indices[0])
+    mut arg_expr_idx := arg_indices[0]
+    if arg_node.kind == "arg" and arg_node.children.len() > 0:
+        arg_expr_idx = arg_node.children[0]
+    arg_tid := c_check_expr(arg_expr_idx, scope_id)
+    expected_tid := lookup_type_id("String")
+    if is_error_type(arg_tid) == false and arg_tid != expected_tid:
+        report_error("E219", "config typed file decode argument type mismatch: expected " + get_type_name(expected_tid) + ", got " + get_type_name(arg_tid))
+        return TID_ERR
+
+    for field_name, i in target_info.fields:
+        if i < target_info.field_pub.len() and not target_info.field_pub[i]:
+            report_error("E219", "config typed file decode target field must be public: " + field_name)
+            return TID_ERR
+        if i < target_info.field_types.len():
+            field_tid := target_info.field_types[i]
+            if not json_decode_field_supported(field_tid):
+                report_error("E219", "config typed file decode does not support field '" + field_name + "' of type " + get_type_name(field_tid))
+                return TID_ERR
+    err_tid := lookup_type_id("ConfigError")
+    if err_tid < 0:
+        report_error("E202", "unknown type: ConfigError")
+        return TID_ERR
+    return add_type_info(ti_result(target_tid, err_tid))
+
+fn check_explicit_generic_callee_name(index_node: Node) -> String:
+    if index_node.kind != "index" or index_node.children.len() < 1:
+        return ""
+    base_node := get_node(index_node.children[0])
+    if base_node.kind == "ident":
+        return base_node.value
+    if base_node.kind == "field_access" and base_node.children.len() > 0:
+        recv_node := get_node(base_node.children[0])
+        if recv_node.kind == "ident" and module_aliases.contains_key(recv_node.value):
+            return module_generic_target_name(module_aliases[recv_node.value], base_node.value)
+    return ""
+
+fn resolve_explicit_type_arg(type_arg_idx: Int) -> Int:
+    type_arg := get_node(type_arg_idx)
+    if type_arg.kind == "ident":
+        return resolve_named_type(type_arg.value)
+    return resolve_type_implementation(type_arg_idx)
+
+fn check_generic_struct_call_explicit(name: String, index_node: Node, arg_indices: List[Int], scope_id: Int) -> Int:
+    decl_idx := get_generic_declaration_index(name)
+    if decl_idx < 0:
+        return TID_ERR
+    decl_node := get_node(decl_idx)
+    generic_params := collect_generic_parameter_names(decl_node)
+    mut type_args: List[Int] := []
+    mut i := 1
+    while i < index_node.children.len():
+        type_args.push(resolve_explicit_type_arg(index_node.children[i]))
+        i = i + 1
+    if type_args.len() != generic_params.len():
+        report_error("E221", name + " expects " + generic_params.len().to_string() + " type arguments, got " + type_args.len().to_string())
+        return TID_ERR
+    mut subst_map: Map[String, Int] := {}
+    for gp, gp_i in generic_params:
+        if gp_i < type_args.len():
+            subst_map.insert(gp, type_args[gp_i])
+    if check_type_parameter_bounds(decl_idx, subst_map) == false:
+        return TID_ERR
+    struct_tid := instantiate_generic_struct_type(decl_node, type_args)
+    if struct_tid < 0:
+        return TID_ERR
+    return check_struct_constructor(get_type_name(struct_tid), struct_tid, get_type_info(struct_tid), arg_indices, scope_id)
+
+fn check_generic_function_call_explicit(name: String, index_node: Node, arg_indices: List[Int], scope_id: Int) -> Int:
+    decl_idx := get_generic_declaration_index(name)
+    if decl_idx < 0:
+        return TID_ERR
+    decl_node := get_node(decl_idx)
+    generic_params := collect_generic_parameter_names(decl_node)
+    mut subst_args: List[Int] := []
+    mut i := 1
+    while i < index_node.children.len():
+        subst_args.push(resolve_explicit_type_arg(index_node.children[i]))
+        i = i + 1
+    if subst_args.len() != generic_params.len():
+        report_error("E221", name + " expects " + generic_params.len().to_string() + " type arguments, got " + subst_args.len().to_string())
+        return TID_ERR
+    mut subst_map: Map[String, Int] := {}
+    for gp, gp_i in generic_params:
+        if gp_i < subst_args.len():
+            subst_map.insert(gp, subst_args[gp_i])
+    if check_type_parameter_bounds(decl_idx, subst_map) == false:
+        return TID_ERR
+
+    mut arg_types: List[Int] := []
+    for ai in arg_indices:
+        arg_node := get_node(ai)
+        mut arg_expr := ai
+        if arg_node.kind == "arg" and arg_node.children.len() > 0:
+            arg_expr = arg_node.children[0]
+        arg_types.push(c_check_expr(arg_expr, scope_id))
+
+    mut param_type_nodes: List[Int] := []
+    for child in decl_node.children:
+        cn := get_node(child)
+        if cn.kind == "param":
+            if cn.children.len() > 0:
+                param_type_nodes.push(cn.children[0])
+            else:
+                param_type_nodes.push(-1)
+    if arg_types.len() != param_type_nodes.len():
+        report_error("E207", "expected " + param_type_nodes.len().to_string() + " arguments, got " + arg_types.len().to_string())
+        return TID_ERR
+
+    mut ret_type := TID_VOID
+    for child in decl_node.children:
+        cn := get_node(child)
+        if cn.kind == "returns":
+            ret_type = resolve_type_with_substitution_map(cn.children[0], generic_params, subst_args)
+
+    mut vidx := 0
+    for ptn in param_type_nodes:
+        if ptn >= 0 and vidx < arg_types.len():
+            concrete := resolve_type_with_substitution_map(ptn, generic_params, subst_args)
+            if is_error_type(concrete) == false and is_error_type(arg_types[vidx]) == false:
+                if arg_types[vidx] != concrete:
+                    if types_structurally_equal(arg_types[vidx], concrete) == false:
+                        report_error("E219", "argument type mismatch: expected " + get_type_name(concrete) + ", got " + get_type_name(arg_types[vidx]))
+        vidx = vidx + 1
+    return ret_type
+
 fn check_function_call(node: Node, scope_id: Int) -> Int:
     if node.children.len() < 1:
         return TID_ERR
@@ -2257,11 +2476,25 @@ fn check_function_call(node: Node, scope_id: Int) -> Int:
             return check_config_decode_call(callee_node, arg_indices, scope_id, false)
         if check_config_decode_callee(callee_node, "decode_prefix"):
             return check_config_decode_call(callee_node, arg_indices, scope_id, true)
+        if check_toml_decode_callee(callee_node, "decode"):
+            return check_toml_decode_call(callee_node, arg_indices, scope_id, false)
+        if check_toml_decode_callee(callee_node, "decode_text"):
+            return check_toml_decode_call(callee_node, arg_indices, scope_id, true)
+        if check_config_file_decode_callee(callee_node, "from_toml_file_typed"):
+            return check_config_file_decode_call(callee_node, arg_indices, scope_id)
+        if check_config_file_decode_callee(callee_node, "from_json_file_typed"):
+            return check_config_file_decode_call(callee_node, arg_indices, scope_id)
         if callee_node.children.len() >= 2:
             obj_node := get_node(callee_node.children[0])
             if obj_node.kind == "ident":
                 if obj_node.value == "Channel":
                     return check_channel_constructor(callee_node, arg_indices, scope_id)
+        explicit_name := check_explicit_generic_callee_name(callee_node)
+        if explicit_name.len() > 0 and has_generic_declaration(explicit_name):
+            gdecl := get_node(get_generic_declaration_index(explicit_name))
+            if gdecl.kind == "struct_decl":
+                return check_generic_struct_call_explicit(explicit_name, callee_node, arg_indices, scope_id)
+            return check_generic_function_call_explicit(explicit_name, callee_node, arg_indices, scope_id)
         return check_function_call_expression(callee_idx, arg_indices, scope_id)
 
     if callee_node.kind == "ident":

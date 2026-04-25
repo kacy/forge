@@ -784,6 +784,12 @@ fn ir_resolve_static_callee(idx: Int) -> ResolvedCallee:
         base_node := get_node(node.children[0])
         if base_node.kind == "ident" and base_node.value == "Channel":
             return ResolvedCallee("Channel", false)
+        if base_node.kind == "ident":
+            return ir_ident_callee(base_node.value)
+        if base_node.kind == "field_access":
+            alias_name := ir_resolve_module_alias_call_name(node.children[0])
+            if alias_name.len() > 0:
+                return ResolvedCallee(alias_name, true)
     if node.kind == "field_access":
         alias_name := ir_resolve_module_alias_call_name(idx)
         if alias_name.len() > 0:
@@ -812,6 +818,42 @@ fn ir_is_config_decode_callee(index_idx: Int, member_name: String) -> Bool:
     if index_node.kind != "index" or index_node.children.len() < 2:
         return false
     base_node := get_node(index_node.children[0])
+    if base_node.kind != "field_access" or base_node.value != member_name:
+        return false
+    if base_node.children.len() < 1:
+        return false
+    recv := get_node(base_node.children[0])
+    if recv.kind != "ident":
+        return false
+    if ir_module_aliases.contains_key(recv.value):
+        if ir_module_aliases[recv.value] == "std.config":
+            return true
+    return recv.value == "config" or recv.value == "config_mod"
+
+fn ir_is_toml_decode_callee(index_idx: Int, member_name: String) -> Bool:
+    index_node := get_node(index_idx)
+    if index_node.kind != "index" or index_node.children.len() < 2:
+        return false
+    base_node := get_node(index_node.children[0])
+    if base_node.kind != "field_access" or base_node.value != member_name:
+        return false
+    if base_node.children.len() < 1:
+        return false
+    recv := get_node(base_node.children[0])
+    if recv.kind != "ident":
+        return false
+    if ir_module_aliases.contains_key(recv.value):
+        if ir_module_aliases[recv.value] == "std.toml":
+            return true
+    return recv.value == "toml" or recv.value == "toml_mod"
+
+fn ir_is_config_file_decode_callee(index_idx: Int, member_name: String) -> Bool:
+    index_node := get_node(index_idx)
+    if index_node.kind != "index" or index_node.children.len() < 2:
+        return false
+    base_node := get_node(index_node.children[0])
+    if base_node.kind == "ident":
+        return base_node.value == member_name
     if base_node.kind != "field_access" or base_node.value != member_name:
         return false
     if base_node.children.len() < 1:
@@ -1954,11 +1996,22 @@ fn ir_config_require_helper_name(field_tid: Int) -> String:
     info := get_type_info(field_tid)
     if info.kind == "primitive":
         if info.name == "String":
-            return "std_config_require"
+            return "require"
         if info.name == "Int":
-            return "std_config_require_int"
+            return "require_int"
         if info.name == "Bool":
-            return "std_config_require_bool"
+            return "require_bool"
+    return ""
+
+fn ir_toml_require_helper_name(field_tid: Int) -> String:
+    info := get_type_info(field_tid)
+    if info.kind == "primitive":
+        if info.name == "String":
+            return "std_toml_require_string"
+        if info.name == "Int":
+            return "std_toml_require_int"
+        if info.name == "Bool":
+            return "std_toml_require_bool"
     return ""
 
 fn ir_json_field_type_tag(field_tid: Int) -> Int:
@@ -1977,13 +2030,25 @@ fn ir_emit_json_field_ok(result_r: Int, field_tid: Int) -> Int:
     ir_emit("field " + ok_r.to_string() + " " + result_r.to_string() + " 8 " + ir_type_from_tid(field_tid) + " ok")
     return ok_r
 
-fn ir_emit_config_field_key(field_name: String, prefix_r: Int) -> Int:
+fn ir_resolve_config_call_name(index_idx: Int, member_name: String) -> String:
+    index_node := get_node(index_idx)
+    if index_node.kind == "index" and index_node.children.len() > 0:
+        base_node := get_node(index_node.children[0])
+        if base_node.kind == "field_access" and base_node.children.len() > 0:
+            recv := get_node(base_node.children[0])
+            if recv.kind == "ident":
+                alias_name := ir_module_alias_member_name(recv.value, member_name)
+                if alias_name.len() > 0:
+                    return alias_name
+    return member_name
+
+fn ir_emit_config_field_key(field_name: String, prefix_r: Int, index_idx: Int) -> Int:
     key_r := ir_reg()
     ir_emit("strref " + key_r.to_string() + " " + ir_str(field_name))
     if prefix_r < 0:
         return key_r
     full_key_r := ir_reg()
-    ir_emit_call2(full_key_r, "std_config_dotted_key", "string", prefix_r, key_r)
+    ir_emit_call2(full_key_r, ir_resolve_config_call_name(index_idx, "dotted_key"), "string", prefix_r, key_r)
     return full_key_r
 
 fn ir_emit_config_decode_call(idx: Int, node: Node, prefixed: Bool) -> Int:
@@ -2021,9 +2086,143 @@ fn ir_emit_config_decode_call(idx: Int, node: Node, prefixed: Bool) -> Int:
         helper_name := ir_config_require_helper_name(field_tid)
         if helper_name.len() == 0:
             continue
-        full_key_r := ir_emit_config_field_key(field_name, prefix_r)
+        full_key_r := ir_emit_config_field_key(field_name, prefix_r, node.children[0])
         field_result_r := ir_reg()
-        ir_emit_call2(field_result_r, helper_name, "tuple", cfg_r, full_key_r)
+        ir_emit_call2(field_result_r, ir_resolve_config_call_name(node.children[0], helper_name), "tuple", cfg_r, full_key_r)
+        ok_flag_r := ir_emit_result_flag_field(field_result_r, "is_ok")
+        ok_l := ir_label()
+        err_l := ir_label()
+        ir_emit("brif " + ok_flag_r.to_string() + " " + ok_l + " " + err_l)
+        ir_emit("label " + err_l)
+        ir_emit("store " + temp_name + " " + field_result_r.to_string())
+        ir_emit("jmp " + done_l)
+        ir_emit("label " + ok_l)
+        field_regs.push(ir_emit_json_field_ok(field_result_r, field_tid))
+
+    struct_r := ir_reg()
+    field_count_r := ir_reg()
+    ir_emit("iconst " + field_count_r.to_string() + " " + field_regs.len().to_string())
+    ir_emit_call1(struct_r, "__struct_alloc", "struct:" + target_info.name, field_count_r)
+    for field_reg, fi in field_regs:
+        ir_emit("sstore " + struct_r.to_string() + " " + fi.to_string() + " " + field_reg.to_string())
+    ir_emit("store " + temp_name + " " + ir_emit_ok_result_tuple(struct_r).to_string())
+    ir_emit("label " + done_l)
+    r := ir_reg()
+    ir_emit("load " + r.to_string() + " " + temp_name)
+    return r
+
+fn ir_emit_config_file_decode_call(idx: Int, node: Node, loader_name: String) -> Int:
+    arg_regs := ir_collect_call_arg_regs(node, 1)
+    if arg_regs.len() == 0:
+        return ir_zero_reg()
+
+    file_path_r := arg_regs[0]
+    ret_tid := c_get_expr_type(idx)
+    if ret_tid < 0:
+        return ir_zero_reg()
+    ret_info := get_type_info(ret_tid)
+    if ret_info.kind != "result":
+        return ir_zero_reg()
+    target_tid := ret_info.inner
+    target_info := get_type_info(target_tid)
+    if target_info.kind != "struct":
+        return ir_zero_reg()
+
+    temp_name := ir_new_temp_name("config_file_decode")
+    ir_var_types.insert(temp_name, "tuple")
+    done_l := ir_label()
+
+    load_result_r := ir_reg()
+    ir_emit_call1(load_result_r, ir_resolve_config_call_name(node.children[0], loader_name), "tuple", file_path_r)
+    load_ok_r := ir_emit_result_flag_field(load_result_r, "is_ok")
+    load_ok_l := ir_label()
+    load_err_l := ir_label()
+    ir_emit("brif " + load_ok_r.to_string() + " " + load_ok_l + " " + load_err_l)
+    ir_emit("label " + load_err_l)
+    ir_emit("store " + temp_name + " " + load_result_r.to_string())
+    ir_emit("jmp " + done_l)
+    ir_emit("label " + load_ok_l)
+    cfg_r := ir_emit_result_value_field(load_result_r, lookup_type_id("Config"), "ok")
+
+    mut field_regs: List[Int] := []
+    for field_name, i in target_info.fields:
+        if i >= target_info.field_types.len():
+            continue
+        field_tid := target_info.field_types[i]
+        helper_name := ir_config_require_helper_name(field_tid)
+        if helper_name.len() == 0:
+            continue
+        full_key_r := ir_emit_config_field_key(field_name, -1, node.children[0])
+        field_result_r := ir_reg()
+        ir_emit_call2(field_result_r, ir_resolve_config_call_name(node.children[0], helper_name), "tuple", cfg_r, full_key_r)
+        ok_flag_r := ir_emit_result_flag_field(field_result_r, "is_ok")
+        ok_l := ir_label()
+        err_l := ir_label()
+        ir_emit("brif " + ok_flag_r.to_string() + " " + ok_l + " " + err_l)
+        ir_emit("label " + err_l)
+        ir_emit("store " + temp_name + " " + field_result_r.to_string())
+        ir_emit("jmp " + done_l)
+        ir_emit("label " + ok_l)
+        field_regs.push(ir_emit_json_field_ok(field_result_r, field_tid))
+
+    struct_r := ir_reg()
+    field_count_r := ir_reg()
+    ir_emit("iconst " + field_count_r.to_string() + " " + field_regs.len().to_string())
+    ir_emit_call1(struct_r, "__struct_alloc", "struct:" + target_info.name, field_count_r)
+    for field_reg, fi in field_regs:
+        ir_emit("sstore " + struct_r.to_string() + " " + fi.to_string() + " " + field_reg.to_string())
+    ir_emit("store " + temp_name + " " + ir_emit_ok_result_tuple(struct_r).to_string())
+    ir_emit("label " + done_l)
+    r := ir_reg()
+    ir_emit("load " + r.to_string() + " " + temp_name)
+    return r
+
+fn ir_emit_toml_decode_call(idx: Int, node: Node, text_input: Bool) -> Int:
+    arg_regs := ir_collect_call_arg_regs(node, 1)
+    if arg_regs.len() == 0:
+        return ir_zero_reg()
+
+    mut handle_r := arg_regs[0]
+    ret_tid := c_get_expr_type(idx)
+    if ret_tid < 0:
+        return ir_zero_reg()
+    ret_info := get_type_info(ret_tid)
+    if ret_info.kind != "result":
+        return ir_zero_reg()
+    target_tid := ret_info.inner
+    target_info := get_type_info(target_tid)
+    if target_info.kind != "struct":
+        return ir_zero_reg()
+
+    temp_name := ir_new_temp_name("toml_decode")
+    ir_var_types.insert(temp_name, "tuple")
+    done_l := ir_label()
+    mut field_regs: List[Int] := []
+
+    if text_input:
+        parse_result_r := ir_reg()
+        ir_emit_call1(parse_result_r, "std_toml_parse_required", "tuple", handle_r)
+        parse_ok_r := ir_emit_result_flag_field(parse_result_r, "is_ok")
+        parse_ok_l := ir_label()
+        parse_err_l := ir_label()
+        ir_emit("brif " + parse_ok_r.to_string() + " " + parse_ok_l + " " + parse_err_l)
+        ir_emit("label " + parse_err_l)
+        ir_emit("store " + temp_name + " " + parse_result_r.to_string())
+        ir_emit("jmp " + done_l)
+        ir_emit("label " + parse_ok_l)
+        handle_r = ir_emit_result_value_field(parse_result_r, lookup_type_id("Int"), "ok")
+
+    for field_name, i in target_info.fields:
+        if i >= target_info.field_types.len():
+            continue
+        field_tid := target_info.field_types[i]
+        helper_name := ir_toml_require_helper_name(field_tid)
+        if helper_name.len() == 0:
+            continue
+        key_r := ir_reg()
+        ir_emit("strref " + key_r.to_string() + " " + ir_str(field_name))
+        field_result_r := ir_reg()
+        ir_emit_call2(field_result_r, helper_name, "tuple", handle_r, key_r)
         ok_flag_r := ir_emit_result_flag_field(field_result_r, "is_ok")
         ok_l := ir_label()
         err_l := ir_label()
@@ -2182,6 +2381,7 @@ fn ir_emit_json_decode_call(idx: Int, node: Node, text_input: Bool) -> Int:
     return r
 
 fn ir_emit_static_call(idx: Int, node: Node) -> Int:
+    mut explicit_generic_types: List[String] := []
     if node.children.len() > 0:
         callee_node := get_node(node.children[0])
         if callee_node.kind == "index":
@@ -2193,6 +2393,15 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
                 return ir_emit_config_decode_call(idx, node, false)
             if ir_is_config_decode_callee(node.children[0], "decode_prefix"):
                 return ir_emit_config_decode_call(idx, node, true)
+            if ir_is_toml_decode_callee(node.children[0], "decode"):
+                return ir_emit_toml_decode_call(idx, node, false)
+            if ir_is_toml_decode_callee(node.children[0], "decode_text"):
+                return ir_emit_toml_decode_call(idx, node, true)
+            if ir_is_config_file_decode_callee(node.children[0], "from_toml_file_typed"):
+                return ir_emit_config_file_decode_call(idx, node, "from_toml_file")
+            if ir_is_config_file_decode_callee(node.children[0], "from_json_file_typed"):
+                return ir_emit_config_file_decode_call(idx, node, "from_json_file")
+            explicit_generic_types = ir_explicit_generic_concrete_types(callee_node)
 
     mut callee := ResolvedCallee("unknown", false)
     if node.children.len() > 0:
@@ -2203,7 +2412,10 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
         mut generic_ret_type := ir_checked_type(idx)
         if generic_ret_type.len() == 0:
             generic_ret_type = ir_infer_type(idx)
-        callee = ResolvedCallee(ir_queue_generic_specialization(callee.name, ir_infer_generic_concrete_types(callee.name, node), generic_ret_type), false)
+        mut concrete_types := explicit_generic_types
+        if concrete_types.len() == 0:
+            concrete_types = ir_infer_generic_concrete_types(callee.name, node)
+        callee = ResolvedCallee(ir_queue_generic_specialization(callee.name, concrete_types, generic_ret_type), false)
     arg_regs := ir_collect_call_arg_regs(node, 1)
     if callee.name == "Channel" and arg_regs.len() == 0:
         zero_r := ir_reg()
@@ -4076,6 +4288,23 @@ fn ir_infer_generic_concrete_types(name: String, node: Node) -> List[String]:
             concrete_types.push(ir_generic_runtime_subst[gp])
         else:
             concrete_types.push("unknown")
+    return concrete_types
+
+fn ir_resolve_explicit_generic_type_arg(type_idx: Int) -> String:
+    type_node := get_node(type_idx)
+    if type_node.kind == "ident":
+        resolved := ir_specialize_type_name(type_node.value, ir_active_generic_params, ir_active_generic_concrete_types)
+        if resolved.len() > 0:
+            return resolved
+        return ir_resolve_type_hint(type_node.value)
+    return ir_resolve_type_node_with_subst(type_idx, ir_active_generic_params, ir_active_generic_concrete_types)
+
+fn ir_explicit_generic_concrete_types(index_node: Node) -> List[String]:
+    mut concrete_types: List[String] := []
+    mut i := 1
+    while i < index_node.children.len():
+        concrete_types.push(ir_resolve_explicit_generic_type_arg(index_node.children[i]))
+        i = i + 1
     return concrete_types
 
 fn ir_emit_fn_params_with_types(fn_idx: Int, param_types: List[String]):
