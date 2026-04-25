@@ -6,6 +6,7 @@ forge:west:42:5:3
 true
 forge:west:true
 forge:true:false
+forge:local:false
 localhost#8080
 localhost$8080
 localhost%8080

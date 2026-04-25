@@ -15,6 +15,10 @@ struct TomlOptionalFixture:
     pub name: String
     pub tls: Bool?
 
+struct TomlDefaultFixture:
+    pub name: String
+    pub tls: Bool = false
+
 fn main() -> Int!:
     nl := chr(10)
     dq := chr(34)
@@ -48,6 +52,10 @@ fn main() -> Int!:
         print(optional_present.ok.name + ":" + optional_present.ok.tls?.to_string())
     if optional_missing.is_ok:
         print(optional_missing.ok.name + ":" + (optional_missing.ok.tls == none).to_string())
+
+    defaulted := toml.decode_text[TomlDefaultFixture]("name = " + dq + "forge" + dq)
+    if defaulted.is_ok:
+        print(defaulted.ok.name + ":" + defaulted.ok.tls.to_string())
 
     nested_root := toml.parse(nested_doc)
     nested := toml.decode_path[TomlServerFixture](nested_root, "server")

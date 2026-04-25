@@ -82,6 +82,7 @@ pub mut current_scope := -1
 pub mut method_type_map: Map[String, Int] := {}
 pub mut method_visibility_map: Map[String, Bool] := {}
 mut method_decl_index_map: Map[String, Int] := {}
+mut struct_field_default_nodes: Map[String, Int] := {}
 # legacy map kept for probes; generic declaration lookup uses flat lists
 pub mut generic_declaration_map: Map[String, Int] := {}
 mut generic_declaration_names: List[String] := []
@@ -104,6 +105,7 @@ pub fn initialize_checker(file_path: String):
     method_type_map = {}
     method_visibility_map = {}
     method_decl_index_map = {}
+    struct_field_default_nodes = {}
     generic_declaration_map = {}
     generic_declaration_names = []
     interface_declaration_names = []
@@ -1021,6 +1023,17 @@ fn register_struct_declaration(node_idx: Int, node: Node):
             if cn.children.len() > 0:
                 ftid := resolve_type_implementation(cn.children[0])
                 field_types.push(ftid)
+                if cn.children.len() > 1:
+                    default_tid := c_check_expr(cn.children[1], current_scope)
+                    if value_matches_optional_target(cn.children[1], default_tid, ftid):
+                        struct_field_default_nodes.insert(base_name + "." + fname, cn.children[1])
+                    elif is_error_type(default_tid) == false and default_tid != ftid:
+                        if types_structurally_equal(default_tid, ftid) == false:
+                            report_error("E219", "default for field '" + fname + "' must be " + get_type_name(ftid) + ", got " + get_type_name(default_tid))
+                        else:
+                            struct_field_default_nodes.insert(base_name + "." + fname, cn.children[1])
+                    else:
+                        struct_field_default_nodes.insert(base_name + "." + fname, cn.children[1])
             else:
                 field_types.push(TID_ERR)
             field_pub.push(is_pub)
@@ -4463,6 +4476,8 @@ fn instantiate_generic_struct_type(decl: Node, type_args: List[Int]) -> Int:
             if cn.children.len() > 0:
                 ftid := resolve_type_with_substitution_map(cn.children[0], generic_params, type_args)
                 field_types.push(ftid)
+                if cn.children.len() > 1:
+                    struct_field_default_nodes.insert(inst_name + "." + fname, cn.children[1])
             else:
                 field_types.push(TID_ERR)
     tid := add_type_info(ti_struct(inst_name, field_names, field_types, field_pub, field_mut))
