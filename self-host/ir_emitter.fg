@@ -93,6 +93,7 @@ mut ir_module_aliases: Map[String, String] := {}
 mut ir_import_declared_functions: Map[String, Bool] := {}
 mut ir_import_declared_globals: Map[String, Bool] := {}
 mut ir_current_func_return_kind := ""
+mut ir_current_func_optional_inner_kind := ""
 mut ir_preloaded_import_roots: List[Int] := []
 mut ir_preloaded_import_paths: List[String] := []
 mut ir_emit_tests := false
@@ -197,6 +198,7 @@ fn ir_reset_type_state():
     ir_import_declared_functions = {}
     ir_import_declared_globals = {}
     ir_current_func_return_kind = ""
+    ir_current_func_optional_inner_kind = ""
     ir_generic_decl_indices = {}
     ir_generic_decl_module_paths = {}
     ir_generic_specialization_keys = []
@@ -316,7 +318,7 @@ fn ir_resolve_type_node(type_idx: Int) -> String:
         inner_type := ir_resolve_type_node(tn.children[0])
         return ir_resolve_result_type_kind(inner_type)
     if tn.kind == "optional_type" and tn.children.len() > 0:
-        return ir_resolve_type_node(tn.children[0])
+        return "tuple"
     if tn.kind == "fn_type":
         return "closure"
     if tn.kind == "tuple_type":
@@ -1184,7 +1186,7 @@ fn ir_record_struct_field(struct_name: String, field_names: List[String], field_
     updated_fields.push(field_name)
     if field_node.children.len() > 0:
         type_node := get_node(field_node.children[0])
-        if type_node.kind == "type" or type_node.kind == "generic_type":
+        if type_node.kind == "type" or type_node.kind == "generic_type" or type_node.kind == "optional_type":
             ir_struct_field_lookup.insert(struct_name + "." + field_name, ir_resolve_type_node(field_node.children[0]))
     ir_struct_field_index_lookup.insert(struct_name + "." + field_name, field_index.to_string())
     return updated_fields
@@ -1691,8 +1693,39 @@ fn ir_optional_value_field(obj_r: Int, opt_tid: Int) -> Int:
     ir_emit("field " + r.to_string() + " " + obj_r.to_string() + " 8 " + ir_type_from_tid(info.inner) + " value")
     return r
 
+fn ir_emit_optional_tuple(flag_r: Int, value_r: Int) -> Int:
+    tuple_r := ir_reg()
+    field_count_r := ir_reg()
+    ir_emit("iconst " + field_count_r.to_string() + " 2")
+    ir_emit_call1(tuple_r, "__struct_alloc", "tuple", field_count_r)
+    ir_emit("sstore " + tuple_r.to_string() + " 0 " + flag_r.to_string())
+    ir_emit("sstore " + tuple_r.to_string() + " 1 " + value_r.to_string())
+    return tuple_r
+
+fn ir_emit_optional_none_value() -> Int:
+    flag_r := ir_reg()
+    value_r := ir_reg()
+    ir_emit("iconst " + flag_r.to_string() + " 0")
+    ir_emit("iconst " + value_r.to_string() + " 0")
+    return ir_emit_optional_tuple(flag_r, value_r)
+
+fn ir_emit_optional_some_value(value_r: Int) -> Int:
+    flag_r := ir_reg()
+    ir_emit("iconst " + flag_r.to_string() + " 1")
+    return ir_emit_optional_tuple(flag_r, value_r)
+
 fn ir_emit_value_for_target(val_idx: Int, target_type: String) -> Int:
     vn := get_node(val_idx)
+    if target_type == "tuple":
+        if vn.kind == "none_lit":
+            return ir_emit_optional_none_value()
+        value_r := ir_expr(val_idx)
+        actual_tid := c_get_expr_type(val_idx)
+        if actual_tid >= 0:
+            actual_info := get_type_info(actual_tid)
+            if actual_info.kind == "optional" or actual_info.kind == "result" or actual_info.kind == "tuple":
+                return value_r
+        return ir_emit_optional_some_value(value_r)
     if vn.kind == "map" and vn.children.len() == 0 and target_type == "set":
         r := ir_reg()
         ir_emit_call0(r, "__set_new", "set")
@@ -2012,9 +2045,34 @@ fn ir_emit_binary_expr(node: Node) -> Int:
     op := node.value
     left_type := ir_infer_type(node.children[0])
     right_type := ir_infer_type(node.children[1])
+    left_tid := c_get_expr_type(node.children[0])
+    right_tid := c_get_expr_type(node.children[1])
+    left_info := get_type_info(left_tid)
+    right_info := get_type_info(right_tid)
+    left_node := get_node(node.children[0])
+    right_node := get_node(node.children[1])
     is_str_op := left_type == "string" or right_type == "string"
     is_bytes_op := left_type == "bytes" and right_type == "bytes"
     is_float_op := left_type == "float" or right_type == "float"
+    if op == "eq" or op == "neq":
+        if left_node.kind == "none_lit" and right_info.kind == "optional":
+            flag_r := ir_optional_flag_field(right_r)
+            zero_r := ir_reg()
+            ir_emit("iconst " + zero_r.to_string() + " 0")
+            if op == "eq":
+                ir_emit("eq " + r.to_string() + " " + flag_r.to_string() + " " + zero_r.to_string())
+            else:
+                ir_emit("neq " + r.to_string() + " " + flag_r.to_string() + " " + zero_r.to_string())
+            return r
+        if right_node.kind == "none_lit" and left_info.kind == "optional":
+            flag_r := ir_optional_flag_field(left_r)
+            zero_r := ir_reg()
+            ir_emit("iconst " + zero_r.to_string() + " 0")
+            if op == "eq":
+                ir_emit("eq " + r.to_string() + " " + flag_r.to_string() + " " + zero_r.to_string())
+            else:
+                ir_emit("neq " + r.to_string() + " " + flag_r.to_string() + " " + zero_r.to_string())
+            return r
     if is_float_op and (op == "add" or op == "sub" or op == "mul" or op == "div"):
         ir_emit("f" + op + " " + r.to_string() + " " + left_r.to_string() + " " + right_r.to_string())
         return r
@@ -4754,7 +4812,17 @@ fn ir_emit_return_stmt(node: Node):
     if node.children.len() > 0:
         mut r := ir_expr(node.children[0])
         result_kind := ir_expr_result_kind(node.children[0])
-        if ir_current_func_return_kind == "tuple":
+        expr_tid := c_get_expr_type(node.children[0])
+        mut expr_kind := ""
+        if expr_tid >= 0:
+            expr_kind = get_type_info(expr_tid).kind
+        if ir_current_func_optional_inner_kind.len() > 0:
+            expr_node := get_node(node.children[0])
+            if expr_node.kind == "none_lit":
+                r = ir_emit_optional_none_value()
+            elif expr_kind != "optional":
+                r = ir_emit_optional_some_value(r)
+        elif ir_current_func_return_kind == "tuple":
             if result_kind != "tuple":
                 r = ir_emit_ok_result_tuple(r)
         ir_emit("ret " + r.to_string())
@@ -4774,7 +4842,7 @@ fn ir_emit_bind_stmt(node: Node):
     mut type_idx := 0 - 1
     for child in node.children:
         cn := get_node(child)
-        if cn.kind == "type" or cn.kind == "generic_type":
+        if cn.kind == "type" or cn.kind == "generic_type" or cn.kind == "optional_type":
             type_idx = child
         else:
             val_idx = child
@@ -5131,9 +5199,20 @@ fn ir_extract_return_type(fn_idx: Int) -> String:
         if cn.kind == "returns":
             for returns_child in cn.children:
                 rn := get_node(returns_child)
-                if rn.kind == "type" or rn.kind == "generic_type" or rn.kind == "result_type":
+                if rn.kind == "type" or rn.kind == "generic_type" or rn.kind == "result_type" or rn.kind == "optional_type":
                     return ir_resolve_type_node(returns_child)
     return "unknown"
+
+fn ir_extract_optional_inner_type(fn_idx: Int) -> String:
+    node := get_node(fn_idx)
+    for child in node.children:
+        cn := get_node(child)
+        if cn.kind == "returns":
+            for returns_child in cn.children:
+                rn := get_node(returns_child)
+                if rn.kind == "optional_type" and rn.children.len() > 0:
+                    return ir_resolve_type_node(rn.children[0])
+    return ""
 
 fn ir_lookup_func_return(full_name: String, base_name: String) -> String:
     if ir_func_returns.contains_key(full_name):
@@ -5282,7 +5361,7 @@ fn ir_resolve_type_node_with_subst(type_idx: Int, generic_params: List[String], 
         inner_type := ir_resolve_type_node_with_subst(tn.children[0], generic_params, concrete_types)
         return ir_resolve_result_type_kind(inner_type)
     if tn.kind == "optional_type" and tn.children.len() > 0:
-        return ir_resolve_type_node_with_subst(tn.children[0], generic_params, concrete_types)
+        return "tuple"
     if tn.kind == "fn_type":
         return "closure"
     if tn.kind == "tuple_type":
@@ -5299,6 +5378,17 @@ fn ir_extract_return_type_with_subst(fn_idx: Int, generic_params: List[String], 
                 if rn.kind == "type" or rn.kind == "generic_type" or rn.kind == "result_type" or rn.kind == "optional_type":
                     return ir_resolve_type_node_with_subst(returns_child, generic_params, concrete_types)
     return "unknown"
+
+fn ir_extract_optional_inner_type_with_subst(fn_idx: Int, generic_params: List[String], concrete_types: List[String]) -> String:
+    node := get_node(fn_idx)
+    for child in node.children:
+        cn := get_node(child)
+        if cn.kind == "returns":
+            for returns_child in cn.children:
+                rn := get_node(returns_child)
+                if rn.kind == "optional_type" and rn.children.len() > 0:
+                    return ir_resolve_type_node_with_subst(rn.children[0], generic_params, concrete_types)
+    return ""
 
 fn ir_extract_param_types_with_subst(fn_idx: Int, generic_params: List[String], concrete_types: List[String]) -> List[String]:
     node := get_node(fn_idx)
@@ -5516,6 +5606,7 @@ fn ir_emit_generic_specialization(key: String):
     else:
         ir_active_generic_module_path = ""
     ir_prepare_func_emission(ret_type)
+    ir_current_func_optional_inner_kind = ir_extract_optional_inner_type_with_subst(decl_idx, generic_params, concrete_types)
     ir_emit_func_header(spec_name, param_count, ret_type)
     ir_emit_fn_params_with_types(decl_idx, param_types)
     ir_func_returns.insert(spec_name, ret_type)
@@ -5574,6 +5665,7 @@ fn ir_prepare_func_emission(ret_type: String):
     ir_map_value_types = {}
     ir_seed_global_types()
     ir_current_func_return_kind = ret_type
+    ir_current_func_optional_inner_kind = ""
 
 fn ir_finish_func_emission(body_idx: Int):
     if body_idx >= 0:
@@ -5617,6 +5709,7 @@ fn ir_func(idx: Int):
     param_count := ir_param_count(idx)
     ret_type := ir_lookup_func_return(full_name, name)
     ir_prepare_func_emission(ret_type)
+    ir_current_func_optional_inner_kind = ir_extract_optional_inner_type(idx)
     ir_emit_func_header(name, param_count, ret_type)
     ir_emit_fn_params(idx)
     ir_finish_func_emission(body_idx)
@@ -5633,6 +5726,7 @@ fn ir_impl_func(idx: Int, impl_type: String):
     param_count := ir_param_count(idx) + 1
     ret_type := ir_extract_return_type(idx)
     ir_prepare_func_emission(ret_type)
+    ir_current_func_optional_inner_kind = ir_extract_optional_inner_type(idx)
     ir_emit_func_header(full_name, param_count, ret_type)
     ir_emit_named_param("self", impl_type)
     ir_emit_fn_params(idx)
@@ -5731,7 +5825,7 @@ fn ir_record_function_return_as(name: String, node: Node):
 fn ir_record_returns_clause(name: String, returns_node: Node):
     for type_idx in returns_node.children:
         type_node := get_node(type_idx)
-        if type_node.kind == "type" or type_node.kind == "generic_type" or type_node.kind == "result_type":
+        if type_node.kind == "type" or type_node.kind == "generic_type" or type_node.kind == "result_type" or type_node.kind == "optional_type":
             ir_func_returns.insert(name, ir_resolve_type_node(type_idx))
         if type_node.kind == "result" or type_node.kind == "result_type":
             if type_node.children.len() > 0:
@@ -5744,7 +5838,7 @@ fn ir_emit_global_binding(node: Node):
     mut global_map_value_type := ""
     for gc in node.children:
         gcn := get_node(gc)
-        if gcn.kind == "type" or gcn.kind == "generic_type":
+        if gcn.kind == "type" or gcn.kind == "generic_type" or gcn.kind == "optional_type":
             global_type = ir_resolve_type_node(gc)
             if global_map_value_type.len() == 0:
                 global_map_value_type = ir_resolve_map_value_type_node(gc)

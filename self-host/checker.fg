@@ -1543,6 +1543,23 @@ fn check_statement(node_idx: Int, scope_id: Int):
 # binding statement
 # ---------------------------------------------------------------
 
+fn value_matches_optional_target(value_idx: Int, actual_tid: Int, expected_tid: Int) -> Bool:
+    if expected_tid < 0:
+        return false
+    expected_info := get_type_info(expected_tid)
+    if expected_info.kind != "optional":
+        return false
+    value_node := get_node(value_idx)
+    if value_node.kind == "none_lit":
+        return true
+    if actual_tid < 0:
+        return false
+    if actual_tid == expected_tid:
+        return true
+    if actual_tid == expected_info.inner:
+        return true
+    return types_structurally_equal(actual_tid, expected_info.inner)
+
 fn check_binding_statement(node_idx: Int, scope_id: Int):
     node := get_node(node_idx)
     name := extract_binding_name(node.value)
@@ -1553,15 +1570,18 @@ fn check_binding_statement(node_idx: Int, scope_id: Int):
     if node.children.len() == 2:
         # has type annotation
         annotated := resolve_type_implementation(node.children[0])
+        val_node := get_node(node.children[1])
         val_type := c_check_expr(node.children[1], scope_id)
         if is_error_type(annotated) == false:
+            if value_matches_optional_target(node.children[1], val_type, annotated):
+                define_binding(scope_id, name, annotated, is_mut)
+                return
             if is_error_type(val_type) == false:
                 if annotated != val_type:
                     if types_structurally_equal(annotated, val_type):
                         define_binding(scope_id, name, annotated, is_mut)
                         return
                     # special case: allow empty collections with annotations
-                    val_node := get_node(node.children[1])
                     if val_node.kind != "list":
                         if val_node.kind != "map":
                             if val_node.kind != "set":
@@ -1592,6 +1612,8 @@ fn check_assignment(node: Node, scope_id: Int):
     val_type := c_check_expr(value_idx, scope_id)
     if is_error_type(target_type):
         return
+    if value_matches_optional_target(value_idx, val_type, target_type):
+        return
     if is_error_type(val_type):
         return
     op := node.value
@@ -1621,12 +1643,16 @@ fn check_return_statement(node: Node, scope_id: Int):
             report_error("E200", "return type mismatch: expected " + get_type_name(expected) + ", got Void")
         return
     actual := c_check_expr(node.children[0], scope_id)
+    actual_node := get_node(node.children[0])
+    exp_info := get_type_info(expected)
+    if actual_node.kind == "none_lit":
+        if exp_info.kind == "optional":
+            return
     if is_error_type(actual):
         return
     if actual == expected:
         return
     # allow returning inner type from result-returning function
-    exp_info := get_type_info(expected)
     if exp_info.kind == "result":
         if actual == exp_info.inner:
             return
@@ -1910,8 +1936,20 @@ fn check_binary_expression(node: Node, scope_id: Int) -> Int:
     if op == "pipe":
         return check_pipe_expression(node, scope_id)
 
+    left_node := get_node(node.children[0])
+    right_node := get_node(node.children[1])
     left := c_check_expr(node.children[0], scope_id)
     right := c_check_expr(node.children[1], scope_id)
+
+    if op == "eq" or op == "neq":
+        if left_node.kind == "none_lit" and right_node.kind == "none_lit":
+            return tid_bool
+        if left_node.kind == "none_lit" and right >= 0:
+            if get_type_info(right).kind == "optional":
+                return tid_bool
+        if right_node.kind == "none_lit" and left >= 0:
+            if get_type_info(left).kind == "optional":
+                return tid_bool
 
     if is_error_type(left):
         return TID_ERR
