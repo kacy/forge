@@ -4,3 +4,7 @@ missing:missing config key: name
 bad:invalid int config key: server.port
 typed-toml:localhost:8080
 typed-json:0.0.0.0:9090
+prefix-toml:127.0.0.1:8080:true
+prefix-json:0.0.0.0:9090:false
+file-prefix-toml:localhost:8080
+file-prefix-json:0.0.0.0:9090

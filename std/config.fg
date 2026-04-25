@@ -384,9 +384,33 @@ pub fn decode_prefix[T](cfg: Config, prefix: String) -> T!ConfigError:
 pub fn from_toml_file_typed[T](file_path: String) -> T!ConfigError:
     return decode[T](from_toml_file(file_path)!)
 
+# # parse toml text and decode it into a concrete struct.
+pub fn from_toml_typed[T](text: String) -> T!ConfigError:
+    return decode[T](from_toml(text)!)
+
+# # parse toml text and decode a dotted subtree into a concrete struct.
+pub fn from_toml_typed_prefix[T](text: String, prefix: String) -> T!ConfigError:
+    return decode_prefix[T](from_toml(text)!, prefix)!
+
+# # load a toml file and decode a dotted subtree into a concrete struct.
+pub fn from_toml_file_typed_prefix[T](file_path: String, prefix: String) -> T!ConfigError:
+    return decode_prefix[T](from_toml_file(file_path)!, prefix)!
+
 # # load a json file and decode it into a concrete struct.
 pub fn from_json_file_typed[T](file_path: String) -> T!ConfigError:
     return decode[T](from_json_file(file_path)!)
+
+# # parse json text and decode it into a concrete struct.
+pub fn from_json_typed[T](text: String) -> T!ConfigError:
+    return decode[T](from_json(text)!)
+
+# # parse json text and decode a dotted subtree into a concrete struct.
+pub fn from_json_typed_prefix[T](text: String, prefix: String) -> T!ConfigError:
+    return decode_prefix[T](from_json(text)!, prefix)!
+
+# # load a json file and decode a dotted subtree into a concrete struct.
+pub fn from_json_file_typed_prefix[T](file_path: String, prefix: String) -> T!ConfigError:
+    return decode_prefix[T](from_json_file(file_path)!, prefix)!
 
 test "config maps copy values and expose lookups":
     mut values: Map[String, String] := {}
@@ -506,9 +530,50 @@ test "config loads files and reports missing values":
     assert(from_toml_file(path.join(root, "missing.toml")).is_err)
     assert(fs.remove_tree(root))
 
+test "config decodes typed text and file prefixes":
+    nl := chr(10)
+    q := chr(34)
+    lb := chr(123)
+    rb := chr(125)
+
+    toml_doc := "name = " + q + "forge" + q + nl + "[server]" + nl + "host = " + q + "127.0.0.1" + q + nl + "port = 8080" + nl + "tls = true" + nl
+    json_doc := lb + q + "name" + q + ":" + q + "forge" + q + "," + q + "server" + q + ":" + lb + q + "host" + q + ":" + q + "0.0.0.0" + q + "," + q + "port" + q + ":9090," + q + "tls" + q + ":false" + rb + rb
+    toml_cfg := from_toml_typed_prefix[ConfigNestedServer](toml_doc, "server")
+    json_cfg := from_json_typed_prefix[ConfigNestedServer](json_doc, "server")
+
+    assert(toml_cfg.is_ok)
+    assert(json_cfg.is_ok)
+    assert_eq(toml_cfg.ok.host, "127.0.0.1")
+    assert_eq(toml_cfg.ok.port, 8080)
+    assert(toml_cfg.ok.tls)
+    assert_eq(json_cfg.ok.host, "0.0.0.0")
+    assert_eq(json_cfg.ok.port, 9090)
+    assert(not json_cfg.ok.tls)
+
+    root := fs.make_temp_dir("forge-config-prefix-")!
+    toml_path := path.join(root, "app.toml")
+    json_path := path.join(root, "app.json")
+    assert(fs.write(toml_path, "host = " + q + "localhost" + q + nl + "port = 8080" + nl)!)
+    assert(fs.write(json_path, lb + q + "host" + q + ":" + q + "0.0.0.0" + q + "," + q + "port" + q + ":9090" + rb)!)
+
+    file_toml := from_toml_file_typed_prefix[ConfigFileServer](toml_path, "")
+    file_json := from_json_file_typed_prefix[ConfigFileServer](json_path, "")
+    assert(file_toml.is_ok)
+    assert(file_json.is_ok)
+    assert_eq(file_toml.ok.host, "localhost")
+    assert_eq(file_toml.ok.port, 8080)
+    assert_eq(file_json.ok.host, "0.0.0.0")
+    assert_eq(file_json.ok.port, 9090)
+    assert(fs.remove_tree(root))
+
 struct ConfigFileServer:
     pub host: String
     pub port: Int
 
 struct ConfigFileName:
     pub name: String
+
+struct ConfigNestedServer:
+    pub host: String
+    pub port: Int
+    pub tls: Bool

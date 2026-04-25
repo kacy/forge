@@ -51,6 +51,21 @@ fn main() -> String!:
     assert(typed_json.is_ok)
     print("typed-toml:{typed_toml.ok.host}:{typed_toml.ok.port}")
     print("typed-json:{typed_json.ok.host}:{typed_json.ok.port}")
+
+    nested_toml := "name = " + chr(34) + "forge" + chr(34) + chr(10) + "[server]" + chr(10) + "host = " + chr(34) + "127.0.0.1" + chr(34) + chr(10) + "port = 8080" + chr(10) + "tls = true" + chr(10)
+    nested_json := chr(123) + chr(34) + "name" + chr(34) + ":" + chr(34) + "forge" + chr(34) + "," + chr(34) + "server" + chr(34) + ":" + chr(123) + chr(34) + "host" + chr(34) + ":" + chr(34) + "0.0.0.0" + chr(34) + "," + chr(34) + "port" + chr(34) + ":9090," + chr(34) + "tls" + chr(34) + ":false" + chr(125) + chr(125)
+    nested_toml_cfg := config.from_toml_typed_prefix[ServerConfig](nested_toml, "server")
+    nested_json_cfg := config.from_json_typed_prefix[ServerConfig](nested_json, "server")
+    file_nested_toml := config.from_toml_file_typed_prefix[ConfigFileServer](toml_path, "")
+    file_nested_json := config.from_json_file_typed_prefix[ConfigFileServer](json_path, "")
+    assert(nested_toml_cfg.is_ok)
+    assert(nested_json_cfg.is_ok)
+    assert(file_nested_toml.is_ok)
+    assert(file_nested_json.is_ok)
+    print("prefix-toml:{nested_toml_cfg.ok.host}:{nested_toml_cfg.ok.port}:{nested_toml_cfg.ok.tls}")
+    print("prefix-json:{nested_json_cfg.ok.host}:{nested_json_cfg.ok.port}:{nested_json_cfg.ok.tls}")
+    print("file-prefix-toml:{file_nested_toml.ok.host}:{file_nested_toml.ok.port}")
+    print("file-prefix-json:{file_nested_json.ok.host}:{file_nested_json.ok.port}")
     assert(fs.remove_tree(root))
     return ""
 

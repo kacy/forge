@@ -5,10 +5,15 @@ struct TomlDerivedFixture:
     pub score: Int
     pub active: Bool
 
+struct TomlServerFixture:
+    pub host: String
+    pub port: Int
+
 fn main() -> Int:
     nl := chr(10)
     dq := chr(34)
     doc := "name = " + dq + "forge" + dq + nl + "score = 42" + nl + "active = true"
+    nested_doc := "[server]" + nl + "host = " + dq + "localhost" + dq + nl + "port = 8080"
 
     root := toml.parse(doc)
     from_handle := toml.decode[TomlDerivedFixture](root)
@@ -28,4 +33,18 @@ fn main() -> Int:
     print(invalid.is_err.to_string())
     if invalid.is_err:
         print(invalid.err.message.contains("invalid toml").to_string())
+
+    nested_root := toml.parse(nested_doc)
+    nested := toml.decode_path[TomlServerFixture](nested_root, "server")
+    if nested.is_ok:
+        print(nested.ok.host + "#" + nested.ok.port.to_string())
+
+    nested_text := toml.decode_text_path[TomlServerFixture](nested_doc, "server")
+    if nested_text.is_ok:
+        print(nested_text.ok.host + "$" + nested_text.ok.port.to_string())
+
+    nested_missing := toml.decode_text_path[TomlServerFixture](nested_doc, "database")
+    print(nested_missing.is_err.to_string())
+    if nested_missing.is_err:
+        print(nested_missing.err.message.contains("missing table field").to_string())
     return 0

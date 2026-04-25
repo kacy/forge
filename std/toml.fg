@@ -614,6 +614,32 @@ pub fn decode[T](handle: Int) -> T!TomlDecodeError:
 pub fn decode_text[T](input: String) -> T!TomlDecodeError:
     fail toml_decode_fail("toml.decode_text requires compiler support")
 
+fn toml_require_table(handle: Int, key: String) -> Int!TomlDecodeError:
+    child := table_lookup(handle, key)
+    if child < 0:
+        fail toml_decode_fail("missing table field: " + key)
+    if node_types[child] != "table":
+        fail toml_decode_fail("expected table field: " + key)
+    return child
+
+# # decode a nested table selected by a dotted path.
+pub fn decode_path[T](handle: Int, dotted_path: String) -> T!TomlDecodeError:
+    mut current := handle
+    for part in dotted_path.split("."):
+        if part == "":
+            continue
+        current = toml_require_table(current, part)!
+    return decode[T](current)!
+
+# # parse toml text and decode a nested table selected by a dotted path.
+pub fn decode_text_path[T](input: String, dotted_path: String) -> T!TomlDecodeError:
+    root := parse_required(input)!
+    return decode_path[T](root, dotted_path)!
+
+struct TomlNestedFixture:
+    pub host: String
+    pub port: Int
+
 test "toml parses scalar values":
     doc := "title = " + chr(34) + "forge" + chr(34) + chr(10) + "version = 3" + chr(10) + "pi = 3.14" + chr(10) + "enabled = true"
     root := parse(doc)
