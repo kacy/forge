@@ -4273,12 +4273,6 @@ fn ir_emit_json_decode_call(idx: Int, node: Node, text_input: Bool) -> Int:
     if arg_regs.len() == 0:
         return ir_zero_reg()
 
-    mut input_r := arg_regs[0]
-    if text_input:
-        converted_r := ir_reg()
-        ir_emit_call1(converted_r, "std_bytes_from_string_utf8", "bytes", input_r)
-        input_r = converted_r
-
     ret_tid := c_get_expr_type(idx)
     if ret_tid < 0:
         return ir_zero_reg()
@@ -4289,6 +4283,7 @@ fn ir_emit_json_decode_call(idx: Int, node: Node, text_input: Bool) -> Int:
     target_info := get_type_info(target_tid)
     if target_info.kind != "struct":
         return ir_zero_reg()
+    mut input_r := arg_regs[0]
     has_optional_fields := ir_struct_has_optional_fields(target_info)
     has_default_fields := ir_struct_has_default_fields(target_info)
     has_nested_fields := ir_struct_has_nested_decode_fields(target_info)
@@ -4329,6 +4324,10 @@ fn ir_emit_json_decode_call(idx: Int, node: Node, text_input: Bool) -> Int:
         r := ir_reg()
         ir_emit("load " + r.to_string() + " " + temp_name)
         return r
+    if text_input:
+        converted_r := ir_reg()
+        ir_emit_call1(converted_r, "std_bytes_from_string_utf8", "bytes", input_r)
+        input_r = converted_r
     if target_info.fields.len() == 6 and not has_optional_fields and not has_default_fields:
         return ir_emit_json_decode_flat6_call(input_r, target_info)
     if target_info.fields.len() > 3 or has_optional_fields or has_default_fields:
