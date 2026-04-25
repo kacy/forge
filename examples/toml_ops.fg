@@ -3,6 +3,10 @@ import std.toml as toml
 import std.fs as fs
 import std.io as io
 
+struct ServerConfig:
+    pub host: String
+    pub port: Int
+
 fn main() -> String!:
     path := "/tmp/forge_toml_ops.toml"
 
@@ -46,6 +50,9 @@ fn main() -> String!:
     server := toml.get_table(root, "server")
     print("server host: " + toml.get_string(server, "host"))
     print("server port: " + toml.get_int(server, "port").to_string())
+    typed_server := toml.decode[ServerConfig](server)
+    if typed_server.is_ok:
+        print("typed server: " + typed_server.ok.host + ":" + typed_server.ok.port.to_string())
 
     # keys
     root_keys := toml.keys(root)

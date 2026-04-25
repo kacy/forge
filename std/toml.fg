@@ -450,6 +450,7 @@ fn toml_get_string(handle: Int, key: String) -> String:
         return string_values[v]
     return ""
 
+# # get a required string field or return a typed decode error.
 pub fn require_string(handle: Int, key: String) -> String!TomlDecodeError:
     v := table_lookup(handle, key)
     if v < 0:
@@ -475,6 +476,7 @@ fn toml_get_int(handle: Int, key: String) -> Int:
         return integer_values[v]
     return 0
 
+# # get a required int field or return a typed decode error.
 pub fn require_int(handle: Int, key: String) -> Int!TomlDecodeError:
     v := table_lookup(handle, key)
     if v < 0:
@@ -517,6 +519,7 @@ fn toml_get_bool(handle: Int, key: String) -> Bool:
         return boolean_values[v]
     return false
 
+# # get a required bool field or return a typed decode error.
 pub fn require_bool(handle: Int, key: String) -> Bool!TomlDecodeError:
     v := table_lookup(handle, key)
     if v < 0:
@@ -603,9 +606,11 @@ pub fn has(handle: Int, key: String) -> Bool:
 fn toml_has(handle: Int, key: String) -> Bool:
     return table_lookup(handle, key) >= 0
 
+# # decode a toml table handle into a concrete struct with public string/int/bool fields.
 pub fn decode[T](handle: Int) -> T!TomlDecodeError:
     fail toml_decode_fail("toml.decode requires compiler support")
 
+# # parse toml text and decode it into a concrete struct.
 pub fn decode_text[T](input: String) -> T!TomlDecodeError:
     fail toml_decode_fail("toml.decode_text requires compiler support")
 
