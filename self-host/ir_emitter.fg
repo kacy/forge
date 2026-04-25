@@ -1594,6 +1594,18 @@ fn ir_method_expr_type(idx: Int, node: Node) -> String:
         obj_type = ir_infer_type(node.children[0])
     return ir_known_method_return_type(obj_type, ir_plain_method_name(node_value(idx)))
 
+fn ir_checked_struct_field_type(recv_idx: Int, field_name: String) -> String:
+    recv_tid := c_get_expr_type(recv_idx)
+    if recv_tid < 0:
+        return ""
+    recv_info := get_type_info(recv_tid)
+    if recv_info.kind != "struct":
+        return ""
+    for name, i in recv_info.fields:
+        if name == field_name and i < recv_info.field_types.len():
+            return ir_type_from_tid(recv_info.field_types[i])
+    return ""
+
 fn ir_field_expr_type(node: Node) -> String:
     if node.children.len() == 0:
         return ""
@@ -1612,6 +1624,9 @@ fn ir_field_expr_type(node: Node) -> String:
             obj_info := get_type_info(obj_tid)
             if obj_info.kind == "result":
                 return ir_type_from_tid(obj_info.value_type)
+    concrete_field_type := ir_checked_struct_field_type(node.children[0], fname)
+    if concrete_field_type.len() > 0:
+        return concrete_field_type
     obj_type := ir_field_receiver_type(node.children[0])
     if obj_type.len() == 0:
         return ""
@@ -4251,11 +4266,13 @@ fn ir_unique_field_kind(field_name: String) -> String:
             continue
     return field_kind
 
-fn ir_emit_named_field_access(result_reg: Int, obj_r: Int, lookup_key: String, field_name: String):
+fn ir_emit_named_field_access(result_reg: Int, obj_r: Int, lookup_key: String, field_name: String, field_kind_override: String):
     if ir_struct_field_index_lookup.contains_key(lookup_key):
         field_offset := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key]) * 8
         mut field_kind := "unknown"
-        if ir_struct_field_lookup.contains_key(lookup_key):
+        if field_kind_override.len() > 0:
+            field_kind = field_kind_override
+        elif ir_struct_field_lookup.contains_key(lookup_key):
             field_kind = ir_retkind(ir_struct_field_lookup[lookup_key])
         ir_emit("field " + result_reg.to_string() + " " + obj_r.to_string() + " " + field_offset.to_string() + " " + field_kind + " " + field_name)
     else:
@@ -4300,7 +4317,7 @@ fn ir_emit_field_access(idx: Int, node: Node) -> Int:
     r := ir_reg()
     if ir_emit_tuple_field_access(r, obj_r, recv_idx, fname):
         return r
-    ir_emit_named_field_access(r, obj_r, ir_field_lookup_key(recv_idx, fname), fname)
+    ir_emit_named_field_access(r, obj_r, ir_field_lookup_key(recv_idx, fname), fname, ir_checked_struct_field_type(recv_idx, fname))
     return r
 
 fn ir_emit_result_flag_field(obj_r: Int, fname: String) -> Int:
