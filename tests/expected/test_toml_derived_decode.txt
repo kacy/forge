@@ -4,6 +4,8 @@ true
 true
 true
 true
+forge:true
+forge:true
 localhost#8080
 localhost$8080
 localhost%8080

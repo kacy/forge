@@ -11,6 +11,10 @@ struct TomlServerFixture:
     pub host: String
     pub port: Int
 
+struct TomlOptionalFixture:
+    pub name: String
+    pub tls: Bool?
+
 fn main() -> Int!:
     nl := chr(10)
     dq := chr(34)
@@ -35,6 +39,15 @@ fn main() -> Int!:
     print(invalid.is_err.to_string())
     if invalid.is_err:
         print(invalid.err.message.contains("invalid toml").to_string())
+
+    optional_doc := "name = " + dq + "forge" + dq + nl + "tls = true"
+    optional_missing_doc := "name = " + dq + "forge" + dq
+    optional_present := toml.decode_text[TomlOptionalFixture](optional_doc)
+    optional_missing := toml.decode_text[TomlOptionalFixture](optional_missing_doc)
+    if optional_present.is_ok:
+        print(optional_present.ok.name + ":" + optional_present.ok.tls?.to_string())
+    if optional_missing.is_ok:
+        print(optional_missing.ok.name + ":" + (optional_missing.ok.tls == none).to_string())
 
     nested_root := toml.parse(nested_doc)
     nested := toml.decode_path[TomlServerFixture](nested_root, "server")

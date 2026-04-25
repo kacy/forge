@@ -11,6 +11,10 @@ struct ServerConfig:
     pub port: Int
     pub tls: Bool
 
+struct OptionalServerConfig:
+    pub host: String
+    pub tls: Bool?
+
 fn main() -> String!:
     mut values: Map[String, String] := {}
     values.insert("name", "forge")
@@ -26,6 +30,16 @@ fn main() -> String!:
     assert(server.is_ok)
     print("app:{app.ok.name}:{app.ok.debug}")
     print("server:{server.ok.host}:{server.ok.port}:{server.ok.tls}")
+
+    optional_server := config.decode_prefix[OptionalServerConfig](cfg, "server")
+    assert(optional_server.is_ok)
+    print("optional-server:{optional_server.ok.host}:{optional_server.ok.tls?.to_string()}")
+
+    mut optional_values: Map[String, String] := {}
+    optional_values.insert("server.host", "127.0.0.1")
+    optional_missing_server := config.decode_prefix[OptionalServerConfig](config.from_map(optional_values), "server")
+    assert(optional_missing_server.is_ok)
+    print("optional-missing:{optional_missing_server.ok.host}:{(optional_missing_server.ok.tls == none).to_string()}")
 
     missing := config.decode[AppConfig](config.empty())
     assert(missing.is_err)

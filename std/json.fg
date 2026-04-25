@@ -680,17 +680,29 @@ pub fn scalar_string_or(object: JsonScalarObject, key: String, default_value: St
         return object.strings[key]
     return default_value
 
+ # returns true when a scanned scalar object contains a string field.
+pub fn scalar_has_string(object: JsonScalarObject, key: String) -> Bool:
+    return object.strings.contains_key(key)
+
  # gets an int from a scanned scalar object with a fallback.
 pub fn scalar_int_or(object: JsonScalarObject, key: String, default_value: Int) -> Int:
     if object.ints.contains_key(key):
         return object.ints[key]
     return default_value
 
+ # returns true when a scanned scalar object contains an int field.
+pub fn scalar_has_int(object: JsonScalarObject, key: String) -> Bool:
+    return object.ints.contains_key(key)
+
  # gets a bool from a scanned scalar object with a fallback.
 pub fn scalar_bool_or(object: JsonScalarObject, key: String, default_value: Bool) -> Bool:
     if object.bools.contains_key(key):
         return object.bools[key]
     return default_value
+
+ # returns true when a scanned scalar object contains a bool field.
+pub fn scalar_has_bool(object: JsonScalarObject, key: String) -> Bool:
+    return object.bools.contains_key(key)
 
  # decodes a shallow scalar object or returns a typed error.
 pub fn decode_scalars_bytes(input: Bytes) -> JsonScalarObject!JsonDecodeError:

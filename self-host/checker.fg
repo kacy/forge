@@ -2209,7 +2209,12 @@ fn resolve_json_decode_type_arg(type_arg_idx: Int) -> Int:
     return TID_ERR
 
 fn json_decode_field_supported(field_tid: Int) -> Bool:
-    return field_tid == lookup_type_id("String") or field_tid == lookup_type_id("Int") or field_tid == lookup_type_id("Bool")
+    if field_tid == lookup_type_id("String") or field_tid == lookup_type_id("Int") or field_tid == lookup_type_id("Bool"):
+        return true
+    info := get_type_info(field_tid)
+    if info.kind == "optional" and info.inner >= 0:
+        return json_decode_field_supported(info.inner)
+    return false
 
 fn check_config_decode_call(index_node: Node, arg_indices: List[Int], scope_id: Int, prefixed: Bool) -> Int:
     if index_node.children.len() < 2:
