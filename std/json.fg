@@ -741,6 +741,24 @@ pub fn decode[T](input: Bytes) -> T!JsonDecodeError:
 pub fn decode_text[T](input: String) -> T!JsonDecodeError:
     fail JsonDecodeError("json.decode_text requires compiler support")
 
+ # decodes a parsed json object handle into a concrete struct.
+ # this is lowered by the compiler so structs do not need runtime reflection.
+pub fn decode_object[T](handle: Int) -> T!JsonDecodeError:
+    fail JsonDecodeError("json.decode_object requires compiler support")
+
+ # decodes a nested json object selected by a dotted path.
+pub fn decode_path[T](handle: Int, dotted_path: String) -> T!JsonDecodeError:
+    mut current := require_object_handle(handle)!
+    for part in dotted_path.split("."):
+        if part == "":
+            continue
+        current = object_require_object(current, part)!
+    return decode_object[T](current)!
+
+ # parses json text and decodes a nested object selected by a dotted path.
+pub fn decode_text_path[T](input: String, dotted_path: String) -> T!JsonDecodeError:
+    return decode_path[T](parse(input), dotted_path)!
+
  # captures the current parser state.
 pub fn checkpoint() -> JsonCheckpoint:
     return json_checkpoint()
@@ -875,9 +893,24 @@ pub fn object_has(handle: Int, key: String) -> Bool:
 fn json_object_has(handle: Int, key: String) -> Bool:
     return json_object_get(handle, key) >= 0
 
+# requires an object handle or returns a typed decode error.
+pub fn require_object_handle(handle: Int) -> Int!JsonDecodeError:
+    if handle_has_type(handle, "object"):
+        return handle
+    fail json_invalid_object_error()
+
 # Gets a string value by key from an object. Returns empty string if missing or wrong type.
 pub fn object_get_string(handle: Int, key: String) -> String:
     return json_get_string(json_object_get(handle, key))
+
+# gets a required string value by key from an object.
+pub fn object_require_string(handle: Int, key: String) -> String!JsonDecodeError:
+    value := json_object_get(handle, key)
+    if handle_has_type(value, "string"):
+        return string_values[value]
+    if value < 0:
+        fail json_missing_field_error("string", key)
+    fail json_wrong_field_error("string", key)
 
 # Gets a string value by key from an object with a fallback.
 pub fn object_get_string_or(handle: Int, key: String, default_value: String) -> String:
@@ -889,6 +922,15 @@ pub fn object_get_string_or(handle: Int, key: String, default_value: String) -> 
 # Gets an int value by key from an object. Returns 0 if missing or wrong type.
 pub fn object_get_int(handle: Int, key: String) -> Int:
     return json_get_int(json_object_get(handle, key))
+
+# gets a required int value by key from an object.
+pub fn object_require_int(handle: Int, key: String) -> Int!JsonDecodeError:
+    value := json_object_get(handle, key)
+    if handle_has_type(value, "int"):
+        return integer_values[value]
+    if value < 0:
+        fail json_missing_field_error("int", key)
+    fail json_wrong_field_error("int", key)
 
 # Gets an int value by key from an object with a fallback.
 pub fn object_get_int_or(handle: Int, key: String, default_value: Int) -> Int:
@@ -912,6 +954,15 @@ pub fn object_get_float_or(handle: Int, key: String, default_value: Float) -> Fl
 pub fn object_get_bool(handle: Int, key: String) -> Bool:
     return json_get_bool(json_object_get(handle, key))
 
+# gets a required bool value by key from an object.
+pub fn object_require_bool(handle: Int, key: String) -> Bool!JsonDecodeError:
+    value := json_object_get(handle, key)
+    if handle_has_type(value, "bool"):
+        return boolean_values[value]
+    if value < 0:
+        fail json_missing_field_error("bool", key)
+    fail json_wrong_field_error("bool", key)
+
 # Gets a bool value by key from an object with a fallback.
 pub fn object_get_bool_or(handle: Int, key: String, default_value: Bool) -> Bool:
     value := json_object_get(handle, key)
@@ -932,6 +983,15 @@ pub fn object_get_object(handle: Int, key: String) -> Int:
     if not handle_has_type(value, "object"):
         return 0 - 1
     return value
+
+# gets a required object handle by key from an object.
+pub fn object_require_object(handle: Int, key: String) -> Int!JsonDecodeError:
+    value := json_object_get(handle, key)
+    if handle_has_type(value, "object"):
+        return value
+    if value < 0:
+        fail json_missing_field_error("object", key)
+    fail json_wrong_field_error("object", key)
 
 # Returns the list of keys in an object (deduplicated, insertion order).
 pub fn object_keys(handle: Int) -> List[String]:
@@ -1422,6 +1482,10 @@ struct JsonStructDecodeFixture:
     pub score: Int
     pub active: Bool
 
+struct JsonNestedDecodeFixture:
+    pub host: String
+    pub port: Int
+
 fn json_decode_fixture(fields: JsonScalarObject) -> JsonStructDecodeFixture!JsonDecodeError:
     name := require_string(fields, "name")!
     score := require_int(fields, "score")!
@@ -1447,6 +1511,24 @@ test "json scalar decoding reports missing required fields":
 
     assert(decoded.is_err)
     assert(decoded.err.message.contains("score"))
+
+test "json decodes nested objects by dotted path":
+    dq := chr(34)
+    doc := chr(123) + dq + "server" + dq + ":" + chr(123) + dq + "host" + dq + ":" + dq + "localhost" + dq + "," + dq + "port" + dq + ":8080" + chr(125) + chr(125)
+    root := parse(doc)
+
+    decoded := decode_path[JsonNestedDecodeFixture](root, "server")
+    decoded_text := decode_text_path[JsonNestedDecodeFixture](doc, "server")
+    missing := decode_text_path[JsonNestedDecodeFixture](doc, "database")
+
+    assert(decoded.is_ok)
+    assert(decoded_text.is_ok)
+    assert_eq(decoded.ok.host, "localhost")
+    assert_eq(decoded.ok.port, 8080)
+    assert_eq(decoded_text.ok.host, "localhost")
+    assert_eq(decoded_text.ok.port, 8080)
+    assert(missing.is_err)
+    assert(missing.err.message.contains("missing object field"))
 
 fn json_save_chunked(path: String, handle: Int, chunk_size: Int) -> Int:
     write_result := io.write_file_text_chunked(path, json_encode(handle), chunk_size)

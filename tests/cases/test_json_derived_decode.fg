@@ -14,6 +14,10 @@ struct JsonDerivedWideFixture:
     pub limit: Int
     pub multiplier: Int
 
+struct JsonDerivedNestedFixture:
+    pub host: String
+    pub port: Int
+
 fn main() -> Int:
     dq := chr(34)
     mut doc := chr(123) + dq + "name" + dq + ":" + dq + "forge" + dq
@@ -44,4 +48,15 @@ fn main() -> Int:
         print(wide.ok.name + ":" + wide.ok.region + ":" + wide.ok.score.to_string() + ":" + wide.ok.limit.to_string() + ":" + wide.ok.multiplier.to_string())
     wide_missing := json.decode_text[JsonDerivedWideFixture](chr(123) + dq + "name" + dq + ":" + dq + "forge" + dq + chr(125))
     print(wide_missing.is_err.to_string())
+
+    nested_doc := chr(123) + dq + "server" + dq + ":" + chr(123) + dq + "host" + dq + ":" + dq + "localhost" + dq + "," + dq + "port" + dq + ":8080" + chr(125) + chr(125)
+    nested_root := json.parse(nested_doc)
+    nested := json.decode_path[JsonDerivedNestedFixture](nested_root, "server")
+    nested_text := json.decode_text_path[JsonDerivedNestedFixture](nested_doc, "server")
+    nested_missing := json.decode_text_path[JsonDerivedNestedFixture](nested_doc, "database")
+    if nested.is_ok:
+        print(nested.ok.host + "#" + nested.ok.port.to_string())
+    if nested_text.is_ok:
+        print(nested_text.ok.host + "$" + nested_text.ok.port.to_string())
+    print(nested_missing.is_err.to_string())
     return 0
