@@ -1,0 +1,26 @@
+struct Server:
+    host: String
+    port: Int = 8080
+    tls: Bool = false
+    region: String? = none
+
+struct Bucket[T]:
+    value: T
+    label: String = "default"
+    count: Int = 1
+
+fn main():
+    a := Server("local")
+    print("a:{a.host}:{a.port}:{a.tls}:{a.region == none}")
+
+    b := Server("edge", 9000)
+    print("b:{b.host}:{b.port}:{b.tls}:{b.region == none}")
+
+    c := Server("secure", 9443, true, "west")
+    print("c:{c.host}:{c.port}:{c.tls}:{c.region?}")
+
+    g1: Bucket[Int] := Bucket[Int](7)
+    print("g1:{g1.value}:{g1.label}:{g1.count}")
+
+    g2: Bucket[String] := Bucket("hi", "named")
+    print("g2:{g2.value}:{g2.label}:{g2.count}")

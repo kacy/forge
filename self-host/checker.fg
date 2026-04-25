@@ -1573,6 +1573,19 @@ fn value_matches_optional_target(value_idx: Int, actual_tid: Int, expected_tid: 
         return true
     return types_structurally_equal(actual_tid, expected_info.inner)
 
+fn struct_field_has_default(struct_name: String, field_name: String) -> Bool:
+    return struct_field_default_nodes.contains_key(struct_name + "." + field_name)
+
+fn struct_min_required_fields(struct_name: String, info: TypeInfo) -> Int:
+    mut min_required := info.fields.len()
+    while min_required > 0:
+        field_name := info.fields[min_required - 1]
+        if struct_field_has_default(struct_name, field_name):
+            min_required = min_required - 1
+        else:
+            break
+    return min_required
+
 fn check_binding_statement(node_idx: Int, scope_id: Int):
     node := get_node(node_idx)
     name := extract_binding_name(node.value)
@@ -2652,11 +2665,15 @@ fn check_callable_type_with_args(callee_type: Int, arg_indices: List[Int], scope
     return fn_info.return_type
 
 fn check_struct_constructor(name: String, struct_tid: Int, info: TypeInfo, arg_indices: List[Int], scope_id: Int) -> Int:
-    # check field count
-    if arg_indices.len() != info.fields.len():
-        report_error("E207", name + " expects " + info.fields.len().to_string() + " fields, got " + arg_indices.len().to_string())
+    # constructor calls can omit trailing fields with defaults.
+    if arg_indices.len() > info.fields.len():
+        report_error("E207", name + " expects at most " + info.fields.len().to_string() + " fields, got " + arg_indices.len().to_string())
         return TID_ERR
-    # check field types
+    min_required := struct_min_required_fields(name, info)
+    if arg_indices.len() < min_required:
+        report_error("E207", name + " expects at least " + min_required.to_string() + " fields, got " + arg_indices.len().to_string())
+        return TID_ERR
+    # check provided field types
     mut idx := 0
     for ai in arg_indices:
         arg_node := get_node(ai)
@@ -2668,8 +2685,9 @@ fn check_struct_constructor(name: String, struct_tid: Int, info: TypeInfo, arg_i
         if is_error_type(arg_type) == false:
             if idx < info.field_types.len():
                 expected := info.field_types[idx]
-                if arg_type != expected:
-                    report_error("E219", "field '" + info.fields[idx] + "' type mismatch: expected " + get_type_name(expected) + ", got " + get_type_name(arg_type))
+                if value_matches_optional_target(arg_expr_idx, arg_type, expected) == false:
+                    if arg_type != expected:
+                        report_error("E219", "field '" + info.fields[idx] + "' type mismatch: expected " + get_type_name(expected) + ", got " + get_type_name(arg_type))
         idx = idx + 1
     return struct_tid
 
@@ -2695,9 +2713,9 @@ fn check_generic_struct_constructor(name: String, arg_indices: List[Int], scope_
                 field_type_nodes.push(cn.children[0])
             else:
                 field_type_nodes.push(-1)
-    # check field count
-    if arg_types.len() != field_type_nodes.len():
-        report_error("E207", name + " expects " + field_type_nodes.len().to_string() + " fields, got " + arg_types.len().to_string())
+    # generic constructor calls can omit trailing fields with defaults.
+    if arg_types.len() > field_type_nodes.len():
+        report_error("E207", name + " expects at most " + field_type_nodes.len().to_string() + " fields, got " + arg_types.len().to_string())
         return TID_ERR
     # infer type args from argument types
     mut subst_map: Map[String, Int] := {}
@@ -2722,8 +2740,11 @@ fn check_generic_struct_constructor(name: String, arg_indices: List[Int], scope_
             type_args.push(subst_map[gp])
         else:
             type_args.push(TID_ERR)
-    # instantiate the struct
-    return instantiate_generic_struct_type(decl_node, type_args)
+    # instantiate the struct and reuse the concrete constructor checks
+    struct_tid := instantiate_generic_struct_type(decl_node, type_args)
+    if struct_tid < 0:
+        return TID_ERR
+    return check_struct_constructor(get_type_name(struct_tid), struct_tid, get_type_info(struct_tid), arg_indices, scope_id)
 
 fn check_assertion_equality(arg_indices: List[Int], scope_id: Int) -> Int:
     if arg_indices.len() != 2:
@@ -4392,20 +4413,24 @@ fn check_struct_initialization(node: Node, scope_id: Int) -> Int:
         return TID_ERR
 
     # check field count
-    if node.children.len() != info.fields.len():
-        report_error("E207", struct_name + " expects " + info.fields.len().to_string() + " fields, got " + node.children.len().to_string())
+    if node.children.len() > info.fields.len():
+        report_error("E207", struct_name + " expects at most " + info.fields.len().to_string() + " fields, got " + node.children.len().to_string())
+        return TID_ERR
+    min_required := struct_min_required_fields(struct_name, info)
+    if node.children.len() < min_required:
+        report_error("E207", struct_name + " expects at least " + min_required.to_string() + " fields, got " + node.children.len().to_string())
         return TID_ERR
 
     # check each field type
     mut idx := 0
     for child in node.children:
-        arg_node := get_node(child)
         arg_type := c_check_expr(child, scope_id)
         if is_error_type(arg_type) == false:
             if idx < info.field_types.len():
                 expected := info.field_types[idx]
-                if arg_type != expected:
-                    report_error("E219", "field '" + info.fields[idx] + "' type mismatch: expected " + get_type_name(expected) + ", got " + get_type_name(arg_type))
+                if value_matches_optional_target(child, arg_type, expected) == false:
+                    if arg_type != expected:
+                        report_error("E219", "field '" + info.fields[idx] + "' type mismatch: expected " + get_type_name(expected) + ", got " + get_type_name(arg_type))
         idx = idx + 1
 
     return struct_tid

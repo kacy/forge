@@ -2341,8 +2341,23 @@ fn ir_emit_config_field_key(field_name: String, prefix_r: Int, index_idx: Int) -
     ir_emit_call2(full_key_r, ir_resolve_config_call_name(index_idx, "dotted_key"), "string", prefix_r, key_r)
     return full_key_r
 
+fn ir_struct_layout_name(struct_name: String) -> String:
+    if ir_struct_names.contains_key(struct_name):
+        return struct_name
+    if struct_name.contains("["):
+        base_name := struct_name.substring(0, struct_name.index_of("["))
+        if ir_struct_names.contains_key(base_name):
+            return base_name
+    return struct_name
+
+fn ir_struct_field_count(struct_name: String) -> Int:
+    layout_name := ir_struct_layout_name(struct_name)
+    if ir_struct_names.contains_key(layout_name):
+        return ir_struct_names[layout_name]
+    return 0
+
 fn ir_struct_field_name_at(struct_name: String, field_index: Int) -> String:
-    prefix := struct_name + "."
+    prefix := ir_struct_layout_name(struct_name) + "."
     want := field_index.to_string()
     for key in ir_struct_field_index_lookup:
         if key.starts_with(prefix) and ir_struct_field_index_lookup[key] == want:
@@ -2350,13 +2365,13 @@ fn ir_struct_field_name_at(struct_name: String, field_index: Int) -> String:
     return ""
 
 fn ir_struct_field_type_name(struct_name: String, field_name: String) -> String:
-    key := struct_name + "." + field_name
+    key := ir_struct_layout_name(struct_name) + "." + field_name
     if ir_struct_field_lookup.contains_key(key):
         return ir_struct_field_lookup[key]
     return ""
 
 fn ir_struct_field_default_node(struct_name: String, field_name: String) -> Int:
-    key := struct_name + "." + field_name
+    key := ir_struct_layout_name(struct_name) + "." + field_name
     if ir_struct_field_default_nodes.contains_key(key):
         return ir_struct_field_default_nodes[key]
     return 0 - 1
@@ -2387,7 +2402,7 @@ fn ir_emit_config_decode_specialization_body(struct_name: String, prefixed: Bool
         ir_emit("load " + prefix_r.to_string() + " prefix")
 
     mut field_regs: List[Int] := []
-    field_count := ir_struct_names[struct_name]
+    field_count := ir_struct_field_count(struct_name)
     mut i := 0
     while i < field_count:
         field_name := ir_struct_field_name_at(struct_name, i)
@@ -2664,7 +2679,7 @@ fn ir_emit_toml_decode_struct_from_handle(struct_name: String, module_path: Stri
     ir_emit("load " + handle_r.to_string() + " " + handle_name)
 
     mut field_regs: List[Int] := []
-    field_count := ir_struct_names[struct_name]
+    field_count := ir_struct_field_count(struct_name)
     mut i := 0
     while i < field_count:
         field_name := ir_struct_field_name_at(struct_name, i)
@@ -4092,6 +4107,16 @@ fn ir_emit_static_call(idx: Int, node: Node) -> Int:
         callee = ir_resolve_static_callee(node.children[0])
         if callee.name.len() == 0:
             callee = ResolvedCallee("unknown", false)
+    expr_tid := c_get_expr_type(idx)
+    if expr_tid >= 0:
+        expr_info := get_type_info(expr_tid)
+        if expr_info.kind == "struct" and ir_is_declared_callable(callee.name) == false:
+            mut arg_nodes: List[Int] := []
+            for child, i in node.children:
+                if i == 0:
+                    continue
+                arg_nodes.push(child)
+            return ir_emit_struct_positional_init(expr_info.name, arg_nodes)
     if ir_is_generic_function_name(callee.name):
         mut generic_ret_type := ir_checked_type(idx)
         if generic_ret_type.len() == 0:
@@ -5022,23 +5047,39 @@ fn ir_emit_ident_load(idx: Int, name: String) -> Int:
     ir_emit("load " + r.to_string() + " " + ir_resolve_storage_name(name))
     return r
 
-fn ir_emit_struct_init(node: Node) -> Int:
-    sname := node.value
+fn ir_emit_struct_positional_init(sname: String, arg_nodes: List[Int]) -> Int:
     mut field_regs: List[Int] := []
-    for child in node.children:
+    mut field_idx := 0
+    while field_idx < arg_nodes.len():
+        child := arg_nodes[field_idx]
         cn := get_node(child)
         if cn.kind == "field_init" and cn.children.len() > 0:
-            field_regs.push(ir_expr(cn.children[0]))
+            field_regs.push(ir_emit_value_for_target(cn.children[0], ir_struct_field_type_name(sname, ir_struct_field_name_at(sname, field_idx))))
+        elif cn.kind == "arg" and cn.children.len() > 0:
+            field_regs.push(ir_emit_value_for_target(cn.children[0], ir_struct_field_type_name(sname, ir_struct_field_name_at(sname, field_idx))))
         else:
-            field_regs.push(ir_expr(child))
+            field_regs.push(ir_emit_value_for_target(child, ir_struct_field_type_name(sname, ir_struct_field_name_at(sname, field_idx))))
+        field_idx = field_idx + 1
+    total_fields := ir_struct_field_count(sname)
+    while field_idx < total_fields:
+        field_name := ir_struct_field_name_at(sname, field_idx)
+        default_idx := ir_struct_field_default_node(sname, field_name)
+        if default_idx >= 0:
+            field_regs.push(ir_emit_value_for_target(default_idx, ir_struct_field_type_name(sname, field_name)))
+        else:
+            field_regs.push(ir_zero_reg())
+        field_idx = field_idx + 1
 
     r := ir_reg()
     field_count_r := ir_reg()
-    ir_emit("iconst " + field_count_r.to_string() + " " + field_regs.len().to_string())
+    ir_emit("iconst " + field_count_r.to_string() + " " + total_fields.to_string())
     ir_emit_call1(r, "__struct_alloc", "struct:" + sname, field_count_r)
     for field_reg, fi in field_regs:
         ir_emit("sstore " + r.to_string() + " " + fi.to_string() + " " + field_reg.to_string())
     return r
+
+fn ir_emit_struct_init(node: Node) -> Int:
+    return ir_emit_struct_positional_init(node.value, node.children)
 
 fn ir_emit_spawn_expr(node: Node) -> Int:
     if node.children.len() > 0:

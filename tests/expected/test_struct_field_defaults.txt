@@ -1,0 +1,5 @@
+a:local:8080:false:true
+b:edge:9000:false:true
+c:secure:9443:true:west
+g1:7:default:1
+g2:hi:named:1
