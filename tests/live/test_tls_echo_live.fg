@@ -23,6 +23,29 @@ fn alpn_client_config() -> tls.Config!:
     cfg := tls.client_config_with_ca_file(CA_PATH)!
     return cfg.with_alpn(["forge.echo", "http/1.1"]).enable_session_resumption()
 
+fn verify_echo_client(state: tls.ConnectionState) -> String:
+    if state.negotiated_protocol != "forge.echo":
+        return "expected forge.echo"
+    if state.peer_common_name != "localhost":
+        return "expected localhost certificate"
+    if not state.peer_chain_present:
+        return "expected verified peer certificate"
+    return ""
+
+fn verify_optional_server(state: tls.ConnectionState) -> String:
+    if not state.client_auth_requested:
+        return "expected client auth request"
+    if state.client_auth_verified:
+        return "did not expect a verified client certificate"
+    if state.peer_chain_present:
+        return "did not expect client certificate metadata"
+    return ""
+
+fn reject_client(state: tls.ConnectionState) -> String:
+    if state.negotiated_protocol == "forge.echo":
+        return "intentional tls hook rejection"
+    return ""
+
 fn run_server(port: Int) -> Int!:
     server_cfg := alpn_server_config()!
     listener := tls.listen("127.0.0.1", port, server_cfg)!
@@ -57,6 +80,9 @@ fn run_server(port: Int) -> Int!:
         http_conn.write_all("HTTP/1.1 400 Bad Request\r\nContent-Length: 3\r\nConnection: close\r\n\r\nbad")!
     http_conn.close()
 
+    rejected_conn := listener.accept()!
+    rejected_conn.close()
+
     listener.close()
     server_cfg.close()
     return 0
@@ -81,7 +107,7 @@ fn run_mtls_server(port: Int) -> Int!:
     return 0
 
 fn run_optional_client_auth_server(port: Int) -> Int!:
-    server_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["forge.optional"]).request_client_ca_file(CA_PATH)!
+    server_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["forge.optional"]).request_client_ca_file(CA_PATH)!.with_verify_connection(verify_optional_server)
     listener := tls.listen("127.0.0.1", port, server_cfg)!
     conn := listener.accept()!
     state := conn.state()
@@ -104,7 +130,7 @@ fn main() -> Int!:
     server_task := spawn run_server(port)
     sleep(200)
 
-    client_cfg := alpn_client_config()!
+    client_cfg := alpn_client_config()!.with_verify_connection(verify_echo_client)
     conn := tls.dial_with_config("127.0.0.1", port, "localhost", client_cfg)!
     state := conn.state()
     assert(state.version == 772)
@@ -137,6 +163,10 @@ fn main() -> Int!:
     assert(res.status == 200)
     assert(res.body_text()! == "hello secure")
     http_cfg.close()
+
+    rejecting_cfg := alpn_client_config()!.with_verify_connection(reject_client)
+    assert(tls.dial_with_config("127.0.0.1", port, "localhost", rejecting_cfg).is_err)
+    rejecting_cfg.close()
     client_cfg.close()
 
     await server_task
