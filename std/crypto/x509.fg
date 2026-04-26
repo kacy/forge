@@ -428,34 +428,8 @@ fn find_issuer_in_roots(cert: Certificate, roots: List[Certificate]) -> Certific
             return root
     fail "issuer not found in trusted roots"
 
-# check the server name against the certificate san list.
-pub fn verify_hostname(cert: Certificate, host: String) -> VerificationResult:
-    hostname_ok := matches_hostname(cert, host)
-    return VerificationResult(hostname_ok, hostname_ok, true, true, true, verification_reason(hostname_ok, true, true, true))
-
-# run the native trust preflight for a server certificate and root.
-#
-# this checks hostname, issuer metadata, ca constraints, and certificate signature.
-pub fn preflight_server_certificate(cert: Certificate, trusted_root: Certificate, host: String) -> VerificationResult:
-    hostname_ok := matches_hostname(cert, host)
-    issuer_ok := issuer_matches(cert, trusted_root)
-    root_ca_ok := trusted_root.is_ca
-    signature_verified := verify_signature(cert, trusted_root)
-    ok := hostname_ok and issuer_ok and root_ca_ok and signature_verified
-    return VerificationResult(ok, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
-
-# verify a server certificate chain against trusted roots.
-pub fn verify_server_chain(chain: List[Certificate], trusted_roots: List[Certificate], host: String) -> VerificationResult:
-    if chain.len() == 0:
-        return VerificationResult(false, false, false, false, false, "certificate chain is empty")
-    if trusted_roots.len() == 0:
-        return VerificationResult(false, false, false, false, false, "trusted roots are empty")
-    leaf := chain[0]
-    hostname_ok := matches_hostname(leaf, host)
-    if not hostname_ok:
-        return VerificationResult(false, false, true, true, true, verification_reason(false, true, true, true))
-
-    mut current := leaf
+fn verify_chain_issuers(chain: List[Certificate], trusted_roots: List[Certificate], hostname_ok: Bool) -> VerificationResult:
+    mut current := chain[0]
     mut next_chain_index := 1
     mut issuer_ok := false
     mut root_ca_ok := false
@@ -484,6 +458,43 @@ pub fn verify_server_chain(chain: List[Certificate], trusted_roots: List[Certifi
             return VerificationResult(ok, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
         depth = depth + 1
     return VerificationResult(false, hostname_ok, issuer_ok, root_ca_ok, signature_verified, "certificate chain is too deep")
+
+# check the server name against the certificate san list.
+pub fn verify_hostname(cert: Certificate, host: String) -> VerificationResult:
+    hostname_ok := matches_hostname(cert, host)
+    return VerificationResult(hostname_ok, hostname_ok, true, true, true, verification_reason(hostname_ok, true, true, true))
+
+# run the native trust preflight for a server certificate and root.
+#
+# this checks hostname, issuer metadata, ca constraints, and certificate signature.
+pub fn preflight_server_certificate(cert: Certificate, trusted_root: Certificate, host: String) -> VerificationResult:
+    hostname_ok := matches_hostname(cert, host)
+    issuer_ok := issuer_matches(cert, trusted_root)
+    root_ca_ok := trusted_root.is_ca
+    signature_verified := verify_signature(cert, trusted_root)
+    ok := hostname_ok and issuer_ok and root_ca_ok and signature_verified
+    return VerificationResult(ok, hostname_ok, issuer_ok, root_ca_ok, signature_verified, verification_reason(hostname_ok, issuer_ok, root_ca_ok, signature_verified))
+
+# verify a server certificate chain against trusted roots.
+pub fn verify_server_chain(chain: List[Certificate], trusted_roots: List[Certificate], host: String) -> VerificationResult:
+    if chain.len() == 0:
+        return VerificationResult(false, false, false, false, false, "certificate chain is empty")
+    if trusted_roots.len() == 0:
+        return VerificationResult(false, false, false, false, false, "trusted roots are empty")
+    leaf := chain[0]
+    hostname_ok := matches_hostname(leaf, host)
+    if not hostname_ok:
+        return VerificationResult(false, false, true, true, true, verification_reason(false, true, true, true))
+
+    return verify_chain_issuers(chain, trusted_roots, hostname_ok)
+
+# verify a client certificate chain against trusted roots.
+pub fn verify_client_chain(chain: List[Certificate], trusted_roots: List[Certificate]) -> VerificationResult:
+    if chain.len() == 0:
+        return VerificationResult(false, true, false, false, false, "certificate chain is empty")
+    if trusted_roots.len() == 0:
+        return VerificationResult(false, true, false, false, false, "trusted roots are empty")
+    return verify_chain_issuers(chain, trusted_roots, true)
 
 test "der oid decoder reads common object ids":
     data := encoding.from_hex("0603551D11")!
@@ -551,6 +562,18 @@ test "x509 verifies server chains against trusted roots":
     assert(good.signature_verified)
     assert(not bad_host.ok)
     assert(not bad_host.hostname_ok)
+    assert(not bad_roots.ok)
+
+test "x509 verifies client chains against trusted roots":
+    cert := parse_pem(read_file("tests/live/fixtures/localhost.crt")!)!
+    ca := parse_pem(read_file("tests/live/fixtures/localhost-ca.crt")!)!
+    good := verify_client_chain([cert], [ca])
+    bad_roots := verify_client_chain([cert], [])
+
+    assert(good.ok)
+    assert(good.issuer_ok)
+    assert(good.root_ca_ok)
+    assert(good.signature_verified)
     assert(not bad_roots.ok)
 
 test "x509 fixture key signs rsa pss messages":

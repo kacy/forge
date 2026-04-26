@@ -1,3 +1,0 @@
-echo:forge
-200
-hello secure

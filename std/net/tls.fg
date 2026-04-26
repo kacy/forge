@@ -13,13 +13,20 @@ import std.encoding as encoding
 import std.io as io
 import std.net.tls13 as tls13
 import std.os.certs as os_certs
+import std.time as time
 from std.io import TcpStream
 
 mut next_native_config_handle := -1
 mut next_native_conn_handle := -1000000
 mut native_config_roots_pem: Map[Int, String] := {}
+mut native_config_alpn: Map[Int, List[String]] := {}
+mut native_config_resumption_enabled: Map[Int, Bool] := {}
+mut native_client_cert_pem: Map[Int, String] := {}
+mut native_client_key_der: Map[Int, Bytes] := {}
 mut native_server_cert_pem: Map[Int, String] := {}
 mut native_server_key_der: Map[Int, Bytes] := {}
+mut native_server_client_ca_pem: Map[Int, String] := {}
+mut native_server_client_ca_optional: Map[Int, Bool] := {}
 mut native_listener_config: Map[Int, Int] := {}
 mut native_conn_fd: Map[Int, Int] := {}
 mut native_conn_cipher: Map[Int, Int] := {}
@@ -30,20 +37,67 @@ mut native_conn_write_iv: Map[Int, Bytes] := {}
 mut native_conn_read_seq: Map[Int, Int] := {}
 mut native_conn_write_seq: Map[Int, Int] := {}
 mut native_conn_pending: Map[Int, Bytes] := {}
+mut native_conn_cache_key: Map[Int, String] := {}
+mut native_conn_resumption_master_secret: Map[Int, Bytes] := {}
 TLS_CONTENT_CHANGE_CIPHER_SPEC := 20
 TLS_CONTENT_ALERT := 21
 TLS_CONTENT_HANDSHAKE := 22
 TLS_CONTENT_APPLICATION_DATA := 23
 TLS_HANDSHAKE_CLIENT_HELLO := 1
 TLS_HANDSHAKE_SERVER_HELLO := 2
+TLS_HANDSHAKE_NEW_SESSION_TICKET := 4
 TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS := 8
 TLS_HANDSHAKE_CERTIFICATE := 11
+TLS_HANDSHAKE_CERTIFICATE_REQUEST := 13
 TLS_HANDSHAKE_CERTIFICATE_VERIFY := 15
 TLS_HANDSHAKE_FINISHED := 20
 TLS_CIPHER_AES_128_GCM_SHA256 := 4865
 TLS_CIPHER_CHACHA20_POLY1305_SHA256 := 4867
 TLS_SIG_RSA_PSS_RSAE_SHA256 := 2052
 TLS_MAX_PLAINTEXT_RECORD := 16384
+TLS_SESSION_TICKET_LIFETIME := 86400
+TLS_MAX_SERVER_SESSION_TICKETS := 64
+TLS_MAX_CLIENT_SESSION_CACHE := 32
+
+struct SessionTicketEntry:
+    config_handle: Int
+    cipher: Int
+    psk: Bytes
+    alpn_protocol: String
+    issued_at_ms: Int
+    lifetime_ms: Int
+
+# summary view of one peer certificate.
+pub struct PeerCertificate:
+    pub subject_common_name: String
+    pub issuer_common_name: String
+    pub serial_hex: String
+    pub not_before: String
+    pub not_after: String
+    pub dns_names: List[String]
+    pub ip_addresses: List[String]
+    pub is_ca: Bool
+
+struct CachedSession:
+    ticket: Bytes
+    psk: Bytes
+    cipher: Int
+    alpn_protocol: String
+    peer_common_name: String
+    peer_issuer_common_name: String
+    peer_serial_hex: String
+    peer_not_before: String
+    peer_not_after: String
+    peer_dns_names: List[String]
+    peer_ip_addresses: List[String]
+    peer_certificate_count: Int
+    peer_certificates: List[PeerCertificate]
+    expires_at_ms: Int
+
+mut native_server_session_tickets: Map[String, SessionTicketEntry] := {}
+mut native_client_session_cache: Map[String, CachedSession] := {}
+mut native_server_session_ticket_order: List[String] := []
+mut native_client_session_cache_order: List[String] := []
 
 # reusable tls configuration.
 pub struct Config:
@@ -53,9 +107,60 @@ pub struct Config:
 pub struct Conn:
     pub handle: Int
 
+# summary of one negotiated tls connection.
+pub struct ConnectionState:
+    pub version: Int
+    pub cipher_suite: Int
+    pub negotiated_protocol: String
+    pub did_resume: Bool
+    pub peer_common_name: String
+    pub peer_issuer_common_name: String
+    pub peer_serial_hex: String
+    pub peer_not_before: String
+    pub peer_not_after: String
+    pub peer_dns_names: List[String]
+    pub peer_ip_addresses: List[String]
+    pub peer_certificate_count: Int
+    pub peer_certificates: List[PeerCertificate]
+    pub peer_chain_present: Bool
+    pub client_auth_requested: Bool
+    pub client_auth_verified: Bool
+
+# parsed client hello data used for server-side config selection.
+pub struct ClientHelloInfo:
+    pub server_name: String
+    pub alpn_protocols: List[String]
+
+# internal callback context shared by tls config hooks.
+struct ConfigHookContext:
+    kind: String
+    state: ConnectionState
+    client_hello: ClientHelloInfo
+
+# internal callback result shared by tls config hooks.
+struct ConfigHookResult:
+    selected_config: Config
+    reason: String
+
+struct PeerIdentity:
+    common_name: String
+    issuer_common_name: String
+    serial_hex: String
+    not_before: String
+    not_after: String
+    dns_names: List[String]
+    ip_addresses: List[String]
+    certificate_count: Int
+    certificates: List[PeerCertificate]
+    chain_present: Bool
+
 # a tls listener.
 pub struct Listener:
     pub handle: Int
+
+mut native_config_verify_connection: Map[Int, fn(ConfigHookContext) -> ConfigHookResult] := {}
+mut native_server_config_selector: Map[Int, fn(ConfigHookContext) -> ConfigHookResult] := {}
+mut native_conn_state: Map[Int, ConnectionState] := {}
 
 fn native_config_handle(roots_pem: String) -> Config!:
     if roots_pem == "":
@@ -79,6 +184,49 @@ fn native_server_config_handle(cert_pem: String, key_pem: String) -> Config!:
     native_server_cert_pem.insert(handle, cert_pem)
     native_server_key_der.insert(handle, key.body)
     return Config(handle)
+
+fn config_alpn_protocols(config: Config) -> List[String]:
+    if native_config_alpn.contains_key(config.handle):
+        return native_config_alpn[config.handle]
+    return []
+
+fn config_alpn_key(config: Config) -> String:
+    protocols := config_alpn_protocols(config)
+    if protocols.len() == 0:
+        return ""
+    return protocols.join(",")
+
+fn config_session_cache_key(config: Config, server_name: String) -> String:
+    return config.handle.to_string() + "|" + server_name + "|" + config_alpn_key(config)
+
+fn config_has_client_certificate(config: Config) -> Bool:
+    return native_client_cert_pem.contains_key(config.handle) and native_client_key_der.contains_key(config.handle)
+
+fn config_requires_client_certificate(config: Config) -> Bool:
+    return native_server_client_ca_pem.contains_key(config.handle) and (not native_server_client_ca_optional.contains_key(config.handle) or not native_server_client_ca_optional[config.handle])
+
+fn config_requests_client_certificate(config: Config) -> Bool:
+    return native_server_client_ca_pem.contains_key(config.handle)
+
+fn config_resumption_enabled(config: Config) -> Bool:
+    return native_config_resumption_enabled.contains_key(config.handle) and native_config_resumption_enabled[config.handle]
+
+fn native_config_client_cert_chain(config: Config) -> List[Bytes]!:
+    if not native_client_cert_pem.contains_key(config.handle):
+        fail "native tls client certificate not found"
+    blocks := encoding.pem_decode_all(native_client_cert_pem[config.handle])!
+    certs: List[Bytes] := []
+    for block in blocks:
+        if block.kind == "CERTIFICATE":
+            certs.push(block.body)
+    if certs.len() == 0:
+        fail "tls client certificate chain is empty"
+    return certs
+
+fn native_client_private_key(config: Config) -> Bytes!:
+    if not native_client_key_der.contains_key(config.handle):
+        fail "native tls client key not found"
+    return native_client_key_der[config.handle]
 
 fn native_config_roots(config: Config) -> List[x509.Certificate]!:
     if not native_config_roots_pem.contains_key(config.handle):
@@ -155,6 +303,22 @@ fn traffic_keys_for_cipher(cipher: Int, secret: Bytes) -> tls13.TrafficKeys!:
         return tls13.traffic_keys_chacha20_poly1305_sha256(secret)
     fail "unsupported tls cipher suite"
 
+# return a small printable tls version label for connection state.
+pub fn version_name(version: Int) -> String:
+    if version == 772:
+        return "tls1.3"
+    if version == 771:
+        return "tls1.2"
+    return "unknown"
+
+# return a printable cipher suite label for connection state.
+pub fn cipher_suite_name(cipher: Int) -> String:
+    if cipher == TLS_CIPHER_AES_128_GCM_SHA256:
+        return "TLS_AES_128_GCM_SHA256"
+    if cipher == TLS_CIPHER_CHACHA20_POLY1305_SHA256:
+        return "TLS_CHACHA20_POLY1305_SHA256"
+    return "unknown"
+
 fn select_cipher(client: tls13.ClientHello) -> Int!:
     if client.cipher_suites.contains(TLS_CIPHER_AES_128_GCM_SHA256):
         return TLS_CIPHER_AES_128_GCM_SHA256
@@ -190,7 +354,180 @@ fn verify_certificate_chain(certs: List[x509.Certificate], config: Config, serve
         fail result.reason
     return true
 
-fn allocate_native_conn(stream: TcpStream, cipher: Int, read_keys: tls13.TrafficKeys, write_keys: tls13.TrafficKeys) -> Conn:
+fn verify_client_certificate_chain(certs: List[x509.Certificate], config: Config) -> Bool!:
+    if not native_server_client_ca_pem.contains_key(config.handle):
+        fail "native tls client ca config not found"
+    roots := x509.parse_pem_chain(native_server_client_ca_pem[config.handle])!
+    result := x509.verify_client_chain(certs, roots)
+    if not result.ok:
+        fail result.reason
+    return true
+
+fn select_alpn_protocol(config: Config, offered: List[String]) -> String!:
+    protocols := config_alpn_protocols(config)
+    if protocols.len() == 0:
+        return ""
+    if offered.len() == 0:
+        fail "client did not offer alpn"
+    for protocol in protocols:
+        if offered.contains(protocol):
+            return protocol
+    fail "client did not offer a supported alpn protocol"
+
+fn resume_cache_key(config: Config, server_name: String) -> String:
+    return config_session_cache_key(config, server_name)
+
+fn server_ticket_key(ticket: Bytes) -> String:
+    return encoding.to_hex(ticket)
+
+fn cache_resumed_session(cache_key: String, ticket: Bytes, entry: SessionTicketEntry):
+    expires_at_ms := entry.issued_at_ms + entry.lifetime_ms
+    remember_client_cached_session(cache_key, cached_session_from_peer(ticket, entry.psk, entry.cipher, entry.alpn_protocol, empty_peer_identity(), expires_at_ms))
+
+fn copy_string_list(items: List[String]) -> List[String]:
+    out: List[String] := []
+    for item in items:
+        out.push(item)
+    return out
+
+fn copy_peer_certificate(cert: PeerCertificate) -> PeerCertificate:
+    return PeerCertificate(cert.subject_common_name, cert.issuer_common_name, cert.serial_hex, cert.not_before, cert.not_after, copy_string_list(cert.dns_names), copy_string_list(cert.ip_addresses), cert.is_ca)
+
+fn copy_peer_certificate_list(items: List[PeerCertificate]) -> List[PeerCertificate]:
+    out: List[PeerCertificate] := []
+    for item in items:
+        out.push(copy_peer_certificate(item))
+    return out
+
+fn copy_connection_state(state: ConnectionState) -> ConnectionState:
+    return ConnectionState(state.version, state.cipher_suite, state.negotiated_protocol, state.did_resume, state.peer_common_name, state.peer_issuer_common_name, state.peer_serial_hex, state.peer_not_before, state.peer_not_after, copy_string_list(state.peer_dns_names), copy_string_list(state.peer_ip_addresses), state.peer_certificate_count, copy_peer_certificate_list(state.peer_certificates), state.peer_chain_present, state.client_auth_requested, state.client_auth_verified)
+
+fn empty_connection_state() -> ConnectionState:
+    return ConnectionState(0, 0, "", false, "", "", "", "", "", [], [], 0, [], false, false, false)
+
+fn empty_peer_identity() -> PeerIdentity:
+    return PeerIdentity("", "", "", "", "", [], [], 0, [], false)
+
+fn peer_certificate_from_x509(cert: x509.Certificate) -> PeerCertificate:
+    return PeerCertificate(cert.subject_common_name, cert.issuer_common_name, cert.serial_hex, cert.not_before, cert.not_after, copy_string_list(cert.dns_names), copy_string_list(cert.ip_addresses), cert.is_ca)
+
+fn certificate_summaries(certs: List[x509.Certificate]) -> List[PeerCertificate]:
+    out: List[PeerCertificate] := []
+    for cert in certs:
+        out.push(peer_certificate_from_x509(cert))
+    return out
+
+fn peer_identity_from_certificates(certs: List[x509.Certificate]) -> PeerIdentity:
+    if certs.len() == 0:
+        return empty_peer_identity()
+    leaf := certs[0]
+    return PeerIdentity(leaf.subject_common_name, leaf.issuer_common_name, leaf.serial_hex, leaf.not_before, leaf.not_after, copy_string_list(leaf.dns_names), copy_string_list(leaf.ip_addresses), certs.len(), certificate_summaries(certs), true)
+
+fn peer_identity_from_cached_session(session: CachedSession) -> PeerIdentity:
+    chain_present := session.peer_common_name != "" or session.peer_dns_names.len() > 0 or session.peer_ip_addresses.len() > 0
+    return PeerIdentity(session.peer_common_name, session.peer_issuer_common_name, session.peer_serial_hex, session.peer_not_before, session.peer_not_after, copy_string_list(session.peer_dns_names), copy_string_list(session.peer_ip_addresses), session.peer_certificate_count, copy_peer_certificate_list(session.peer_certificates), chain_present)
+
+fn peer_identity_from_connection_state(state: ConnectionState) -> PeerIdentity:
+    return PeerIdentity(state.peer_common_name, state.peer_issuer_common_name, state.peer_serial_hex, state.peer_not_before, state.peer_not_after, copy_string_list(state.peer_dns_names), copy_string_list(state.peer_ip_addresses), state.peer_certificate_count, copy_peer_certificate_list(state.peer_certificates), state.peer_chain_present)
+
+fn connection_state_from_peer(version: Int, cipher: Int, negotiated_alpn: String, did_resume: Bool, peer: PeerIdentity, client_auth_requested: Bool, client_auth_verified: Bool) -> ConnectionState:
+    return ConnectionState(version, cipher, negotiated_alpn, did_resume, peer.common_name, peer.issuer_common_name, peer.serial_hex, peer.not_before, peer.not_after, copy_string_list(peer.dns_names), copy_string_list(peer.ip_addresses), peer.certificate_count, copy_peer_certificate_list(peer.certificates), peer.chain_present, client_auth_requested, client_auth_verified)
+
+fn cached_session_from_peer(ticket: Bytes, psk: Bytes, cipher: Int, alpn_protocol: String, peer: PeerIdentity, expires_at_ms: Int) -> CachedSession:
+    return CachedSession(ticket, psk, cipher, alpn_protocol, peer.common_name, peer.issuer_common_name, peer.serial_hex, peer.not_before, peer.not_after, copy_string_list(peer.dns_names), copy_string_list(peer.ip_addresses), peer.certificate_count, copy_peer_certificate_list(peer.certificates), expires_at_ms)
+
+fn empty_cached_session() -> CachedSession:
+    return cached_session_from_peer(bytes.empty(), bytes.empty(), 0, "", empty_peer_identity(), 0)
+
+fn empty_client_hello_info() -> ClientHelloInfo:
+    return ClientHelloInfo("", [])
+
+fn copy_client_hello_info(info: ClientHelloInfo) -> ClientHelloInfo:
+    return ClientHelloInfo(info.server_name, copy_string_list(info.alpn_protocols))
+
+fn run_verify_connection_hook(config: Config, state: ConnectionState) -> Bool!:
+    if not native_config_verify_connection.contains_key(config.handle):
+        return true
+    ctx := ConfigHookContext("verify_connection", copy_connection_state(state), empty_client_hello_info())
+    result := native_config_verify_connection[config.handle](ctx)
+    if result.reason != "":
+        fail result.reason
+    return true
+
+fn select_server_config(config: Config, client_hello: tls13.ClientHello) -> Config!:
+    if not native_server_config_selector.contains_key(config.handle):
+        return config
+    info := ClientHelloInfo(client_hello.server_name, copy_string_list(client_hello.alpn_protocols))
+    ctx := ConfigHookContext("select_server_config", empty_connection_state(), copy_client_hello_info(info))
+    result := native_server_config_selector[config.handle](ctx)
+    selected := result.selected_config
+    if not is_native_server_config(selected):
+        fail "tls config selector must return a server config"
+    return selected
+
+fn ttl_ms(seconds: Int) -> Int:
+    if seconds <= 0:
+        return 0
+    return seconds * 1000
+
+fn drop_key(order: List[String], key: String) -> List[String]:
+    next: List[String] := []
+    for item in order:
+        if item != key:
+            next.push(item)
+    return next
+
+fn session_ticket_expired(entry: SessionTicketEntry) -> Bool:
+    if entry.lifetime_ms <= 0:
+        return true
+    return time.now() >= entry.issued_at_ms + entry.lifetime_ms
+
+fn cached_session_expired(entry: CachedSession) -> Bool:
+    if entry.expires_at_ms <= 0:
+        return true
+    return time.now() >= entry.expires_at_ms
+
+fn forget_server_ticket(ticket_key: String):
+    if native_server_session_tickets.contains_key(ticket_key):
+        native_server_session_tickets.remove(ticket_key)
+    native_server_session_ticket_order = drop_key(native_server_session_ticket_order, ticket_key)
+
+fn forget_client_cached_session(cache_key: String):
+    if native_client_session_cache.contains_key(cache_key):
+        native_client_session_cache.remove(cache_key)
+    native_client_session_cache_order = drop_key(native_client_session_cache_order, cache_key)
+
+fn remember_server_ticket(ticket_key: String, entry: SessionTicketEntry):
+    forget_server_ticket(ticket_key)
+    native_server_session_tickets.insert(ticket_key, entry)
+    native_server_session_ticket_order.push(ticket_key)
+    while native_server_session_ticket_order.len() > TLS_MAX_SERVER_SESSION_TICKETS:
+        oldest := native_server_session_ticket_order[0]
+        native_server_session_ticket_order = native_server_session_ticket_order.slice(1, native_server_session_ticket_order.len())
+        if native_server_session_tickets.contains_key(oldest):
+            native_server_session_tickets.remove(oldest)
+
+fn touch_server_ticket(ticket_key: String):
+    if native_server_session_tickets.contains_key(ticket_key):
+        native_server_session_ticket_order = drop_key(native_server_session_ticket_order, ticket_key)
+        native_server_session_ticket_order.push(ticket_key)
+
+fn remember_client_cached_session(cache_key: String, session: CachedSession):
+    forget_client_cached_session(cache_key)
+    native_client_session_cache.insert(cache_key, session)
+    native_client_session_cache_order.push(cache_key)
+    while native_client_session_cache_order.len() > TLS_MAX_CLIENT_SESSION_CACHE:
+        oldest := native_client_session_cache_order[0]
+        native_client_session_cache_order = native_client_session_cache_order.slice(1, native_client_session_cache_order.len())
+        if native_client_session_cache.contains_key(oldest):
+            native_client_session_cache.remove(oldest)
+
+fn touch_client_cached_session(cache_key: String):
+    if native_client_session_cache.contains_key(cache_key):
+        native_client_session_cache_order = drop_key(native_client_session_cache_order, cache_key)
+        native_client_session_cache_order.push(cache_key)
+
+fn allocate_native_conn(stream: TcpStream, cipher: Int, read_keys: tls13.TrafficKeys, write_keys: tls13.TrafficKeys, read_seq: Int, write_seq: Int, cache_key: String, resumption_master_secret: Bytes, state: ConnectionState) -> Conn:
     handle := next_native_conn_handle
     next_native_conn_handle = next_native_conn_handle - 1
     native_conn_fd.insert(handle, stream.fd)
@@ -199,9 +536,13 @@ fn allocate_native_conn(stream: TcpStream, cipher: Int, read_keys: tls13.Traffic
     native_conn_read_iv.insert(handle, read_keys.iv)
     native_conn_write_key.insert(handle, write_keys.key)
     native_conn_write_iv.insert(handle, write_keys.iv)
-    native_conn_read_seq.insert(handle, 0)
-    native_conn_write_seq.insert(handle, 0)
+    native_conn_read_seq.insert(handle, read_seq)
+    native_conn_write_seq.insert(handle, write_seq)
     native_conn_pending.insert(handle, bytes.empty())
+    native_conn_cache_key.insert(handle, cache_key)
+    native_conn_state.insert(handle, copy_connection_state(state))
+    if not resumption_master_secret.is_empty():
+        native_conn_resumption_master_secret.insert(handle, resumption_master_secret)
     return Conn(handle)
 
 fn native_fail_alert(record: tls13.Record) -> Bool!:
@@ -214,10 +555,35 @@ fn native_client_handshake(stream: TcpStream, server_name: String, config: Confi
     keypair := ecdh.x25519_keypair()!
     client_random := random.bytes(32)!
     session_id := random.bytes(32)!
-    client_hello := tls13.encode_client_hello(server_name, client_random, session_id, keypair.public_key)!
+    alpn_protocols := config_alpn_protocols(config)
+    mut cache_key := ""
+    mut cached_session := empty_cached_session()
+    mut offering_psk := false
+    if config_resumption_enabled(config) and not config_has_client_certificate(config):
+        cache_key = resume_cache_key(config, server_name)
+        if native_client_session_cache.contains_key(cache_key):
+            cached_session = native_client_session_cache[cache_key]
+            if cached_session_expired(cached_session):
+                forget_client_cached_session(cache_key)
+            else:
+                touch_client_cached_session(cache_key)
+                binder_input := tls13.client_hello_psk_binder_input(server_name, client_random, session_id, keypair.public_key, alpn_protocols, cached_session.ticket, 0)!
+                binder := tls13.resumption_binder_verify_data_sha256(cached_session.psk, binder_input)!
+                client_hello := tls13.encode_client_hello_with_options(server_name, client_random, session_id, keypair.public_key, alpn_protocols, cached_session.ticket, 0, binder)!
+                native_write_all(stream, tls13.encode_record(TLS_CONTENT_HANDSHAKE, client_hello)!)!
+                transcript := bytes.buffer()
+                transcript.write(client_hello)!
+                return native_client_handshake_after_client_hello(stream, server_name, config, keypair, cached_session, true, cache_key, transcript)
+    client_hello := tls13.encode_client_hello_with_options(server_name, client_random, session_id, keypair.public_key, alpn_protocols, bytes.empty(), 0, bytes.empty())!
     native_write_all(stream, tls13.encode_record(TLS_CONTENT_HANDSHAKE, client_hello)!)!
     transcript := bytes.buffer()
     transcript.write(client_hello)!
+    return native_client_handshake_after_client_hello(stream, server_name, config, keypair, cached_session, offering_psk, cache_key, transcript)
+
+fn native_client_handshake_after_client_hello(stream: TcpStream, server_name: String, config: Config, keypair: ecdh.X25519KeyPair, cached_session: CachedSession, offering_psk: Bool, cache_key: String, transcript: ByteBuffer) -> Conn!:
+    mut transcript_buf := transcript
+    alpn_protocols := config_alpn_protocols(config)
+    mut peer := empty_peer_identity()
 
     mut first_record := native_read_record(stream)!
     while first_record.content_type == TLS_CONTENT_CHANGE_CIPHER_SPEC:
@@ -230,13 +596,22 @@ fn native_client_handshake(stream: TcpStream, server_name: String, config: Confi
     if server_messages.len() == 0 or server_messages[0].message_type != TLS_HANDSHAKE_SERVER_HELLO:
         fail "expected tls server hello"
     server_hello := tls13.parse_server_hello(server_messages[0].body)!
-    transcript_append(transcript, server_messages[0])!
+    transcript_append(transcript_buf, server_messages[0])!
 
     shared_secret := keypair.shared_secret(server_hello.key_share)!
     keypair.close()
-    handshake_secret := tls13.handshake_secret_sha256(shared_secret)!
-    server_hs_secret := tls13.server_handshake_traffic_secret_sha256(handshake_secret, transcript.bytes())!
-    client_hs_secret := tls13.client_handshake_traffic_secret_sha256(handshake_secret, transcript.bytes())!
+    mut did_resume := false
+    if server_hello.selected_psk_identity >= 0:
+        if not offering_psk or server_hello.selected_psk_identity != 0:
+            fail "server selected an unexpected tls psk identity"
+        did_resume = true
+    mut handshake_secret := bytes.empty()
+    if did_resume:
+        handshake_secret = tls13.handshake_secret_from_early_secret_sha256(tls13.early_secret_from_psk_sha256(cached_session.psk), shared_secret)!
+    else:
+        handshake_secret = tls13.handshake_secret_sha256(shared_secret)!
+    server_hs_secret := tls13.server_handshake_traffic_secret_sha256(handshake_secret, transcript_buf.bytes())!
+    client_hs_secret := tls13.client_handshake_traffic_secret_sha256(handshake_secret, transcript_buf.bytes())!
     server_hs_keys := traffic_keys_for_cipher(server_hello.cipher_suite, server_hs_secret)!
     client_hs_keys := traffic_keys_for_cipher(server_hello.cipher_suite, client_hs_secret)!
 
@@ -244,6 +619,8 @@ fn native_client_handshake(stream: TcpStream, server_name: String, config: Confi
     mut certs: List[x509.Certificate] := []
     mut cert_verified := false
     mut cert_verify_seen := false
+    mut client_cert_requested := false
+    mut negotiated_alpn := ""
     mut server_finished := false
     while not server_finished:
         record := native_read_record(stream)!
@@ -260,44 +637,87 @@ fn native_client_handshake(stream: TcpStream, server_name: String, config: Confi
         messages := tls13.decode_handshakes(inner.payload)!
         for message in messages:
             if message.message_type == TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
-                transcript_append(transcript, message)!
+                encrypted_extensions := tls13.parse_encrypted_extensions(message.body)!
+                if encrypted_extensions.alpn_protocol != "":
+                    if not alpn_protocols.contains(encrypted_extensions.alpn_protocol):
+                        fail "server negotiated an unexpected alpn protocol"
+                negotiated_alpn = encrypted_extensions.alpn_protocol
+                transcript_append(transcript_buf, message)!
+            elif message.message_type == TLS_HANDSHAKE_CERTIFICATE_REQUEST:
+                client_cert_requested = true
+                request := tls13.parse_certificate_request(message.body)!
+                if request.signature_schemes.len() > 0 and not request.signature_schemes.contains(TLS_SIG_RSA_PSS_RSAE_SHA256):
+                    fail "server requested an unsupported client certificate signature"
+                transcript_append(transcript_buf, message)!
             elif message.message_type == TLS_HANDSHAKE_CERTIFICATE:
+                if did_resume:
+                    fail "unexpected certificate during resumed tls handshake"
                 certs = parse_certificate_chain(message)!
                 verify_certificate_chain(certs, config, server_name)!
+                peer = peer_identity_from_certificates(certs)
                 cert_verified = true
-                transcript_append(transcript, message)!
+                transcript_append(transcript_buf, message)!
             elif message.message_type == TLS_HANDSHAKE_CERTIFICATE_VERIFY:
+                if did_resume:
+                    fail "unexpected certificate verify during resumed tls handshake"
                 if certs.len() == 0:
                     fail "certificate verify arrived before certificate"
                 cv := tls13.parse_certificate_verify(message.body)!
-                if not tls13.verify_server_certificate_sha256(certs[0].subject_public_key, cv.signature_scheme, transcript.bytes(), cv.signature)!:
+                if not tls13.verify_server_certificate_sha256(certs[0].subject_public_key, cv.signature_scheme, transcript_buf.bytes(), cv.signature)!:
                     fail "certificate verify failed"
                 cert_verify_seen = true
-                transcript_append(transcript, message)!
+                transcript_append(transcript_buf, message)!
             elif message.message_type == TLS_HANDSHAKE_FINISHED:
-                if not cert_verified or not cert_verify_seen:
+                if not did_resume and (not cert_verified or not cert_verify_seen):
                     fail "server finished before certificate verification"
                 verify_data := tls13.parse_finished(message.body)!
-                if not tls13.verify_finished_sha256(server_hs_secret, transcript.bytes(), verify_data)!:
+                if not tls13.verify_finished_sha256(server_hs_secret, transcript_buf.bytes(), verify_data)!:
                     fail "server finished verification failed"
-                transcript_append(transcript, message)!
+                transcript_append(transcript_buf, message)!
                 server_finished = true
             else:
                 fail "unexpected tls handshake message"
 
-    application_transcript := transcript.bytes()
+    application_transcript := transcript_buf.bytes()
     master_secret := tls13.master_secret_sha256(handshake_secret)!
     server_app_secret := tls13.server_application_traffic_secret_sha256(master_secret, application_transcript)!
     client_app_secret := tls13.client_application_traffic_secret_sha256(master_secret, application_transcript)!
     server_app_keys := traffic_keys_for_cipher(server_hello.cipher_suite, server_app_secret)!
     client_app_keys := traffic_keys_for_cipher(server_hello.cipher_suite, client_app_secret)!
 
-    client_verify := tls13.finished_verify_data_sha256(client_hs_secret, application_transcript)!
+    client_flight := bytes.buffer()
+    if client_cert_requested:
+        if config_has_client_certificate(config):
+            client_certs := native_config_client_cert_chain(config)!
+            client_certificate := tls13.encode_certificate_message(client_certs)!
+            transcript_buf.write(client_certificate)!
+            client_cert_input := tls13.client_certificate_verify_input_sha256(transcript_buf.bytes())!
+            client_sig := signature.sign_rsa_pss_sha256_pkcs8(native_client_private_key(config)!, client_cert_input)!
+            client_certificate_verify := tls13.encode_certificate_verify(TLS_SIG_RSA_PSS_RSAE_SHA256, client_sig)!
+            transcript_buf.write(client_certificate_verify)!
+            client_flight.write(client_certificate)!
+            client_flight.write(client_certificate_verify)!
+        else:
+            client_certificate := tls13.encode_certificate_message([])!
+            transcript_buf.write(client_certificate)!
+            client_flight.write(client_certificate)!
+    client_verify := tls13.finished_verify_data_sha256(client_hs_secret, transcript_buf.bytes())!
     client_finished := tls13.encode_finished(client_verify)!
+    transcript_buf.write(client_finished)!
+    client_flight.write(client_finished)!
     native_write_all(stream, tls13.encode_change_cipher_spec()!)!
-    encrypted_finished := seal_record_for_cipher(server_hello.cipher_suite, client_hs_keys.key, client_hs_keys.iv, 0, TLS_CONTENT_HANDSHAKE, client_finished)!
+    encrypted_finished := seal_record_for_cipher(server_hello.cipher_suite, client_hs_keys.key, client_hs_keys.iv, 0, TLS_CONTENT_HANDSHAKE, client_flight.bytes())!
     native_write_all(stream, encrypted_finished)!
-    return allocate_native_conn(stream, server_hello.cipher_suite, server_app_keys, client_app_keys)
+    mut resumption_master_secret := bytes.empty()
+    if config_resumption_enabled(config) and not config_has_client_certificate(config):
+        resumption_master_secret = tls13.resumption_master_secret_sha256(master_secret, transcript_buf.bytes())!
+    if did_resume and negotiated_alpn != cached_session.alpn_protocol:
+        fail "server resumed the session with a different alpn protocol"
+    if did_resume:
+        peer = peer_identity_from_cached_session(cached_session)
+    state := connection_state_from_peer(772, server_hello.cipher_suite, negotiated_alpn, did_resume, peer, client_cert_requested, false)
+    run_verify_connection_hook(config, state)!
+    return allocate_native_conn(stream, server_hello.cipher_suite, server_app_keys, client_app_keys, 0, 0, cache_key, resumption_master_secret, state)
 
 fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
     first_record := native_read_record(stream)!
@@ -309,11 +729,31 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
     if client_messages.len() == 0 or client_messages[0].message_type != TLS_HANDSHAKE_CLIENT_HELLO:
         fail "expected tls client hello"
     client_hello := tls13.parse_client_hello(client_messages[0].body)!
-    cipher := select_cipher(client_hello)!
+    handshake_config := select_server_config(config, client_hello)!
+    mut cipher := select_cipher(client_hello)!
+    selected_alpn := select_alpn_protocol(handshake_config, client_hello.alpn_protocols)!
+    mut did_resume := false
+    mut resumed_psk := bytes.empty()
+    if config_resumption_enabled(handshake_config) and not config_requires_client_certificate(handshake_config) and client_hello.psk_mode_dhe and client_hello.psk_identity.len() > 0:
+        ticket_key := server_ticket_key(client_hello.psk_identity)
+        if native_server_session_tickets.contains_key(ticket_key):
+            entry := native_server_session_tickets[ticket_key]
+            if session_ticket_expired(entry):
+                forget_server_ticket(ticket_key)
+            elif entry.config_handle == handshake_config.handle and client_hello.cipher_suites.contains(entry.cipher) and entry.alpn_protocol == selected_alpn:
+                expected_binder := tls13.resumption_binder_verify_data_sha256(entry.psk, client_hello.psk_binder_input)!
+                if bytes.eq(expected_binder, client_hello.psk_binder):
+                    touch_server_ticket(ticket_key)
+                    did_resume = true
+                    resumed_psk = entry.psk
+                    cipher = entry.cipher
 
     keypair := ecdh.x25519_keypair()!
     server_random := random.bytes(32)!
-    server_hello := tls13.encode_server_hello(server_random, client_hello.session_id, cipher, keypair.public_key)!
+    mut selected_psk_identity := 0 - 1
+    if did_resume:
+        selected_psk_identity = 0
+    server_hello := tls13.encode_server_hello_with_options(server_random, client_hello.session_id, cipher, keypair.public_key, selected_psk_identity)!
     native_write_all(stream, tls13.encode_record(TLS_CONTENT_HANDSHAKE, server_hello)!)!
 
     transcript := bytes.buffer()
@@ -323,30 +763,49 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
 
     shared_secret := keypair.shared_secret(client_hello.key_share)!
     keypair.close()
-    handshake_secret := tls13.handshake_secret_sha256(shared_secret)!
+    mut handshake_secret := bytes.empty()
+    if did_resume:
+        handshake_secret = tls13.handshake_secret_from_early_secret_sha256(tls13.early_secret_from_psk_sha256(resumed_psk), shared_secret)!
+    else:
+        handshake_secret = tls13.handshake_secret_sha256(shared_secret)!
     server_hs_secret := tls13.server_handshake_traffic_secret_sha256(handshake_secret, transcript.bytes())!
     client_hs_secret := tls13.client_handshake_traffic_secret_sha256(handshake_secret, transcript.bytes())!
     server_hs_keys := traffic_keys_for_cipher(cipher, server_hs_secret)!
     client_hs_keys := traffic_keys_for_cipher(cipher, client_hs_secret)!
 
-    encrypted_extensions := tls13.encode_encrypted_extensions()!
+    encrypted_extensions := tls13.encode_encrypted_extensions_with_alpn(selected_alpn)!
     transcript.write(encrypted_extensions)!
-    certificate := tls13.encode_certificate_message(native_server_certificate_chain(config)!)!
-    transcript.write(certificate)!
-    cert_verify_input := tls13.server_certificate_verify_input_sha256(transcript.bytes())!
-    cert_signature := signature.sign_rsa_pss_sha256_pkcs8(native_server_private_key(config)!, cert_verify_input)!
-    certificate_verify := tls13.encode_certificate_verify(TLS_SIG_RSA_PSS_RSAE_SHA256, cert_signature)!
-    transcript.write(certificate_verify)!
+    server_flight := bytes.buffer()
+    server_flight.write(encrypted_extensions)!
+    client_cert_requested := config_requests_client_certificate(handshake_config)
+    client_cert_required := config_requires_client_certificate(handshake_config)
+    if client_cert_requested and not did_resume:
+        certificate_request := tls13.encode_certificate_request([TLS_SIG_RSA_PSS_RSAE_SHA256])!
+        transcript.write(certificate_request)!
+        server_flight.write(certificate_request)!
+    if not did_resume:
+        certificate := tls13.encode_certificate_message(native_server_certificate_chain(handshake_config)!)!
+        transcript.write(certificate)!
+        cert_verify_input := tls13.server_certificate_verify_input_sha256(transcript.bytes())!
+        cert_signature := signature.sign_rsa_pss_sha256_pkcs8(native_server_private_key(handshake_config)!, cert_verify_input)!
+        certificate_verify := tls13.encode_certificate_verify(TLS_SIG_RSA_PSS_RSAE_SHA256, cert_signature)!
+        transcript.write(certificate_verify)!
+        server_flight.write(certificate)!
+        server_flight.write(certificate_verify)!
     server_verify := tls13.finished_verify_data_sha256(server_hs_secret, transcript.bytes())!
     server_finished := tls13.encode_finished(server_verify)!
-    server_flight := encrypted_extensions.concat(certificate).concat(certificate_verify).concat(server_finished)
-    encrypted_flight := seal_record_for_cipher(cipher, server_hs_keys.key, server_hs_keys.iv, 0, TLS_CONTENT_HANDSHAKE, server_flight)!
+    server_flight.write(server_finished)!
+    encrypted_flight := seal_record_for_cipher(cipher, server_hs_keys.key, server_hs_keys.iv, 0, TLS_CONTENT_HANDSHAKE, server_flight.bytes())!
     native_write_all(stream, encrypted_flight)!
     transcript.write(server_finished)!
 
     application_transcript := transcript.bytes()
     mut client_hs_seq := 0
+    mut client_certs: List[x509.Certificate] := []
+    mut client_cert_seen := false
+    mut client_cert_verify_seen := false
     mut client_finished_seen := false
+    mut peer := empty_peer_identity()
     while not client_finished_seen:
         record := native_read_record(stream)!
         if record.content_type == TLS_CONTENT_CHANGE_CIPHER_SPEC:
@@ -361,10 +820,28 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
             fail "expected tls client finished"
         messages := tls13.decode_handshakes(inner.payload)!
         for message in messages:
-            if message.message_type == TLS_HANDSHAKE_FINISHED:
+            if message.message_type == TLS_HANDSHAKE_CERTIFICATE:
+                client_certs = parse_certificate_chain(message)!
+                if client_certs.len() > 0:
+                    verify_client_certificate_chain(client_certs, handshake_config)!
+                    peer = peer_identity_from_certificates(client_certs)
+                client_cert_seen = true
+                transcript_append(transcript, message)!
+            elif message.message_type == TLS_HANDSHAKE_CERTIFICATE_VERIFY:
+                if client_certs.len() == 0:
+                    fail "client certificate verify arrived before certificate"
+                cv := tls13.parse_certificate_verify(message.body)!
+                if not tls13.verify_client_certificate_sha256(client_certs[0].subject_public_key, cv.signature_scheme, transcript.bytes(), cv.signature)!:
+                    fail "client certificate verify failed"
+                client_cert_verify_seen = true
+                transcript_append(transcript, message)!
+            elif message.message_type == TLS_HANDSHAKE_FINISHED:
+                if client_cert_required and (client_certs.len() == 0 or not client_cert_verify_seen):
+                    fail "client finished arrived before client certificate verification"
                 verify_data := tls13.parse_finished(message.body)!
                 if not tls13.verify_finished_sha256(client_hs_secret, application_transcript, verify_data)!:
                     fail "client finished verification failed"
+                transcript_append(transcript, message)!
                 client_finished_seen = true
             else:
                 fail "unexpected tls client handshake message"
@@ -374,7 +851,20 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
     client_app_secret := tls13.client_application_traffic_secret_sha256(master_secret, application_transcript)!
     server_app_keys := traffic_keys_for_cipher(cipher, server_app_secret)!
     client_app_keys := traffic_keys_for_cipher(cipher, client_app_secret)!
-    return allocate_native_conn(stream, cipher, client_app_keys, server_app_keys)
+    mut initial_write_seq := 0
+    if config_resumption_enabled(handshake_config) and not client_cert_requested:
+        ticket_nonce := random.bytes(8)!
+        ticket := random.bytes(32)!
+        resumption_master_secret := tls13.resumption_master_secret_sha256(master_secret, transcript.bytes())!
+        ticket_psk := tls13.resumption_psk_sha256(resumption_master_secret, ticket_nonce)!
+        remember_server_ticket(server_ticket_key(ticket), SessionTicketEntry(handshake_config.handle, cipher, ticket_psk, selected_alpn, time.now(), ttl_ms(TLS_SESSION_TICKET_LIFETIME)))
+        ticket_message := tls13.encode_new_session_ticket(TLS_SESSION_TICKET_LIFETIME, 0, ticket_nonce, ticket)!
+        ticket_record := seal_record_for_cipher(cipher, server_app_keys.key, server_app_keys.iv, 0, TLS_CONTENT_HANDSHAKE, ticket_message)!
+        native_write_all(stream, ticket_record)!
+        initial_write_seq = 1
+    state := connection_state_from_peer(772, cipher, selected_alpn, did_resume, peer, client_cert_requested, client_cert_seen and client_cert_verify_seen)
+    run_verify_connection_hook(handshake_config, state)!
+    return allocate_native_conn(stream, cipher, client_app_keys, server_app_keys, 0, initial_write_seq, "", bytes.empty(), state)
 
 fn record_bytes(record: tls13.Record) -> Bytes!:
     out := bytes.buffer_with_capacity(record.payload.len() + 5)
@@ -411,6 +901,24 @@ fn native_conn_read_bytes(handle: Int, max_bytes: Int) -> Bytes!:
         native_conn_read_seq.insert(handle, seq + 1)
         if inner.content_type == TLS_CONTENT_ALERT:
             return bytes.empty()
+        if inner.content_type == TLS_CONTENT_HANDSHAKE:
+            messages := tls13.decode_handshakes(inner.payload)!
+            for message in messages:
+                if message.message_type == TLS_HANDSHAKE_NEW_SESSION_TICKET and native_conn_resumption_master_secret.contains_key(handle):
+                    cache_key := native_conn_cache_key[handle]
+                    if cache_key == "":
+                        continue
+                    ticket_message := tls13.parse_new_session_ticket(message.body)!
+                    if ticket_message.ticket_lifetime <= 0:
+                        continue
+                    psk := tls13.resumption_psk_sha256(native_conn_resumption_master_secret[handle], ticket_message.nonce)!
+                    expires_at_ms := time.now() + ttl_ms(ticket_message.ticket_lifetime)
+                    mut state := empty_connection_state()
+                    if native_conn_state.contains_key(handle):
+                        state = native_conn_state[handle]
+                    peer := peer_identity_from_connection_state(state)
+                    remember_client_cached_session(cache_key, cached_session_from_peer(ticket_message.ticket, psk, cipher, state.negotiated_protocol, peer, expires_at_ms))
+            continue
         if inner.content_type == TLS_CONTENT_APPLICATION_DATA:
             payload := inner.payload
             if payload.len() > size:
@@ -453,6 +961,12 @@ fn native_conn_close(handle: Int):
         native_conn_write_seq.remove(handle)
     if native_conn_pending.contains_key(handle):
         native_conn_pending.remove(handle)
+    if native_conn_cache_key.contains_key(handle):
+        native_conn_cache_key.remove(handle)
+    if native_conn_resumption_master_secret.contains_key(handle):
+        native_conn_resumption_master_secret.remove(handle)
+    if native_conn_state.contains_key(handle):
+        native_conn_state.remove(handle)
 
 # create a client config using system certificate roots.
 pub fn client_config() -> Config!:
@@ -465,6 +979,11 @@ pub fn client_config_with_ca_file(path: String) -> Config!:
 # create a server config from pem certificate and private key files.
 pub fn server_config(cert_path: String, key_path: String) -> Config!:
     return native_server_config_handle(read_file(cert_path)!, read_file(key_path)!)
+
+# install a server-side config selector that runs before the native handshake.
+pub fn with_config_selector(config: Config, chooser: fn(ClientHelloInfo) -> Config) -> Config:
+    native_server_config_selector.insert(config.handle, fn(ctx: ConfigHookContext) => ConfigHookResult(chooser(ctx.client_hello), ""))
+    return config
 
 # dial a tls server with system roots and host name verification.
 pub fn dial(host: String, port: Int) -> Conn!:
@@ -497,14 +1016,81 @@ pub fn accept(listener: Listener) -> Conn!:
     return Listener(listener.handle).accept()
 
 impl Config:
+    fn with_alpn(protocols: List[String]) -> Config:
+        next_protocols: List[String] := []
+        for protocol in protocols:
+            if protocol != "":
+                next_protocols.push(protocol)
+        if next_protocols.len() == 0:
+            if native_config_alpn.contains_key(self.handle):
+                native_config_alpn.remove(self.handle)
+            return self
+        native_config_alpn.insert(self.handle, next_protocols)
+        return self
+
+    fn with_client_certificate(cert_path: String, key_path: String) -> Config!:
+        cert_pem := read_file(cert_path)!
+        certs := x509.parse_pem_chain(cert_pem)!
+        if certs.len() == 0:
+            fail "tls client certificate chain is empty"
+        key_pem := read_file(key_path)!
+        key := encoding.pem_decode(key_pem)!
+        if key.kind != "PRIVATE KEY":
+            fail "tls client private key must be pkcs#8 pem"
+        native_client_cert_pem.insert(self.handle, cert_pem)
+        native_client_key_der.insert(self.handle, key.body)
+        return self
+
+    fn require_client_ca_file(path: String) -> Config!:
+        roots_pem := read_file(path)!
+        roots := x509.parse_pem_chain(roots_pem)!
+        if roots.len() == 0:
+            fail "tls client ca bundle is empty"
+        native_server_client_ca_pem.insert(self.handle, roots_pem)
+        if native_server_client_ca_optional.contains_key(self.handle):
+            native_server_client_ca_optional.remove(self.handle)
+        return self
+
+    fn request_client_ca_file(path: String) -> Config!:
+        roots_pem := read_file(path)!
+        roots := x509.parse_pem_chain(roots_pem)!
+        if roots.len() == 0:
+            fail "tls client ca bundle is empty"
+        native_server_client_ca_pem.insert(self.handle, roots_pem)
+        native_server_client_ca_optional.insert(self.handle, true)
+        return self
+
+    fn enable_session_resumption() -> Config:
+        native_config_resumption_enabled.insert(self.handle, true)
+        return self
+
+    fn with_verify_connection(verify: fn(ConnectionState) -> String) -> Config:
+        native_config_verify_connection.insert(self.handle, fn(ctx: ConfigHookContext) => ConfigHookResult(Config(0), verify(ctx.state)))
+        return self
+
     fn close():
         if native_config_roots_pem.contains_key(self.handle):
             native_config_roots_pem.remove(self.handle)
-            return
+        if native_config_alpn.contains_key(self.handle):
+            native_config_alpn.remove(self.handle)
+        if native_config_resumption_enabled.contains_key(self.handle):
+            native_config_resumption_enabled.remove(self.handle)
+        if native_config_verify_connection.contains_key(self.handle):
+            native_config_verify_connection.remove(self.handle)
+        if native_server_config_selector.contains_key(self.handle):
+            native_server_config_selector.remove(self.handle)
+        if native_client_cert_pem.contains_key(self.handle):
+            native_client_cert_pem.remove(self.handle)
+        if native_client_key_der.contains_key(self.handle):
+            native_client_key_der.remove(self.handle)
         if native_server_cert_pem.contains_key(self.handle):
             native_server_cert_pem.remove(self.handle)
+        if native_server_key_der.contains_key(self.handle):
             native_server_key_der.remove(self.handle)
-            return
+        if native_server_client_ca_pem.contains_key(self.handle):
+            native_server_client_ca_pem.remove(self.handle)
+        if native_server_client_ca_optional.contains_key(self.handle):
+            native_server_client_ca_optional.remove(self.handle)
         return
 
 impl Listener:
@@ -522,6 +1108,65 @@ impl Listener:
         return
 
 impl Conn:
+    fn state() -> ConnectionState:
+        if native_conn_state.contains_key(self.handle):
+            return copy_connection_state(native_conn_state[self.handle])
+        return empty_connection_state()
+
+    fn version() -> Int:
+        return self.state().version
+
+    fn version_name() -> String:
+        return version_name(self.version())
+
+    fn cipher_suite() -> Int:
+        return self.state().cipher_suite
+
+    fn cipher_suite_name() -> String:
+        return cipher_suite_name(self.cipher_suite())
+
+    fn negotiated_protocol() -> String:
+        return self.state().negotiated_protocol
+
+    fn did_resume() -> Bool:
+        return self.state().did_resume
+
+    fn peer_common_name() -> String:
+        return self.state().peer_common_name
+
+    fn peer_issuer_common_name() -> String:
+        return self.state().peer_issuer_common_name
+
+    fn peer_serial_hex() -> String:
+        return self.state().peer_serial_hex
+
+    fn peer_not_before() -> String:
+        return self.state().peer_not_before
+
+    fn peer_not_after() -> String:
+        return self.state().peer_not_after
+
+    fn peer_dns_names() -> List[String]:
+        return self.state().peer_dns_names
+
+    fn peer_ip_addresses() -> List[String]:
+        return self.state().peer_ip_addresses
+
+    fn peer_certificate_count() -> Int:
+        return self.state().peer_certificate_count
+
+    fn peer_certificates() -> List[PeerCertificate]:
+        return self.state().peer_certificates
+
+    fn peer_chain_present() -> Bool:
+        return self.state().peer_chain_present
+
+    fn client_auth_requested() -> Bool:
+        return self.state().client_auth_requested
+
+    fn client_auth_verified() -> Bool:
+        return self.state().client_auth_verified
+
     fn read_bytes(max_bytes: Int) -> Bytes!:
         if is_native_conn(self.handle):
             return native_conn_read_bytes(self.handle, max_bytes)
@@ -574,16 +1219,137 @@ impl Conn:
             native_conn_close(self.handle)
             return
 
+fn verify_state_accept(state: ConnectionState) -> String:
+    if state.version != 772:
+        return "unexpected tls version"
+    return ""
+
+fn verify_state_reject(state: ConnectionState) -> String:
+    if state.negotiated_protocol == "reject":
+        return "unexpected protocol"
+    return "tls verify hook rejected connection"
+
+fn select_test_server_config(info: ClientHelloInfo) -> Config:
+    if info.server_name == "":
+        return Config(-1)
+    return Config(-2)
+
 test "tls configs reject missing files":
     assert(client_config_with_ca_file("/path/that/does/not/exist").is_err)
     assert(server_config("/path/that/does/not/exist.crt", "/path/that/does/not/exist.key").is_err)
 
+test "tls config helpers track alpn, client auth, and resumption":
+    mut client_cfg := client_config_with_ca_file("tests/live/fixtures/localhost-ca.crt")!
+    client_cfg = client_cfg.with_alpn(["forge.rpc"]).with_client_certificate("tests/live/fixtures/localhost.crt", "tests/live/fixtures/localhost.key")!.enable_session_resumption().with_verify_connection(verify_state_accept)
+    mut server_cfg := server_config("tests/live/fixtures/localhost.crt", "tests/live/fixtures/localhost.key")!
+    server_cfg = with_config_selector(server_cfg.with_alpn(["forge.rpc"]).require_client_ca_file("tests/live/fixtures/localhost-ca.crt")!.with_verify_connection(verify_state_reject), select_test_server_config)
+
+    assert_eq(config_alpn_protocols(client_cfg).len(), 1)
+    assert_eq(config_alpn_protocols(client_cfg)[0], "forge.rpc")
+    assert(config_has_client_certificate(client_cfg))
+    assert(config_resumption_enabled(client_cfg))
+    assert(native_config_verify_connection.contains_key(client_cfg.handle))
+    assert_eq(select_alpn_protocol(server_cfg, ["forge.rpc", "http/1.1"])!, "forge.rpc")
+    assert(select_alpn_protocol(server_cfg, ["http/1.1"]).is_err)
+    assert(config_requests_client_certificate(server_cfg))
+    assert(config_requires_client_certificate(server_cfg))
+    assert(native_config_verify_connection.contains_key(server_cfg.handle))
+    assert(native_server_config_selector.contains_key(server_cfg.handle))
+
+    optional_cfg := server_config("tests/live/fixtures/localhost.crt", "tests/live/fixtures/localhost.key")!.request_client_ca_file("tests/live/fixtures/localhost-ca.crt")!
+    assert(config_requests_client_certificate(optional_cfg))
+    assert(not config_requires_client_certificate(optional_cfg))
+
+    client_cfg.close()
+    server_cfg.close()
+    optional_cfg.close()
+
 test "tls wrappers reject invalid handles":
     bad_conn := Conn(-1)
     bad_listener := Listener(-1)
+    bad_state := bad_conn.state()
 
     assert(bad_conn.read_bytes(8).is_err)
     assert(bad_conn.write_bytes(bytes.from_string_utf8("hello")).is_err)
+    assert_eq(bad_state.version, 0)
+    assert_eq(bad_state.cipher_suite, 0)
+    assert_eq(bad_state.negotiated_protocol, "")
+    assert(not bad_state.did_resume)
+    assert_eq(bad_state.peer_common_name, "")
+    assert_eq(bad_state.peer_issuer_common_name, "")
+    assert_eq(bad_state.peer_serial_hex, "")
+    assert_eq(bad_state.peer_not_before, "")
+    assert_eq(bad_state.peer_not_after, "")
+    assert_eq(bad_state.peer_dns_names.len(), 0)
+    assert_eq(bad_state.peer_ip_addresses.len(), 0)
+    assert_eq(bad_state.peer_certificate_count, 0)
+    assert_eq(bad_state.peer_certificates.len(), 0)
+    assert(not bad_state.peer_chain_present)
+    assert(not bad_state.client_auth_requested)
+    assert(not bad_state.client_auth_verified)
+    assert_eq(bad_conn.version(), 0)
+    assert_eq(bad_conn.version_name(), "unknown")
+    assert_eq(bad_conn.cipher_suite(), 0)
+    assert_eq(bad_conn.cipher_suite_name(), "unknown")
+    assert_eq(bad_conn.negotiated_protocol(), "")
+    assert(not bad_conn.did_resume())
+    assert_eq(bad_conn.peer_common_name(), "")
+    assert_eq(bad_conn.peer_issuer_common_name(), "")
+    assert_eq(bad_conn.peer_serial_hex(), "")
+    assert_eq(bad_conn.peer_not_before(), "")
+    assert_eq(bad_conn.peer_not_after(), "")
+    assert_eq(bad_conn.peer_dns_names().len(), 0)
+    assert_eq(bad_conn.peer_ip_addresses().len(), 0)
+    assert_eq(bad_conn.peer_certificate_count(), 0)
+    assert_eq(bad_conn.peer_certificates().len(), 0)
+    assert(not bad_conn.peer_chain_present())
+    assert(not bad_conn.client_auth_requested())
+    assert(not bad_conn.client_auth_verified())
     assert(bad_listener.accept().is_err)
     bad_conn.close()
     bad_listener.close()
+
+test "tls helper names cover current protocol values":
+    assert_eq(version_name(772), "tls1.3")
+    assert_eq(version_name(771), "tls1.2")
+    assert_eq(version_name(0), "unknown")
+    assert_eq(cipher_suite_name(TLS_CIPHER_AES_128_GCM_SHA256), "TLS_AES_128_GCM_SHA256")
+    assert_eq(cipher_suite_name(TLS_CIPHER_CHACHA20_POLY1305_SHA256), "TLS_CHACHA20_POLY1305_SHA256")
+    assert_eq(cipher_suite_name(0), "unknown")
+
+test "tls cache helpers evict oldest and expire entries":
+    native_client_session_cache = {}
+    native_client_session_cache_order = []
+    native_server_session_tickets = {}
+    native_server_session_ticket_order = []
+
+    remember_client_cached_session("first", cached_session_from_peer(bytes.from_string_utf8("a"), bytes.from_string_utf8("psk-a"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", empty_peer_identity(), time.now() - 1))
+    assert(native_client_session_cache.contains_key("first"))
+    assert(cached_session_expired(native_client_session_cache["first"]))
+    forget_client_cached_session("first")
+
+    mut i := 0
+    while i < TLS_MAX_CLIENT_SESSION_CACHE + 1:
+        key := "client-" + i.to_string()
+        remember_client_cached_session(key, cached_session_from_peer(bytes.from_string_utf8(key), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", empty_peer_identity(), time.now() + 1000))
+        i = i + 1
+    touch_client_cached_session("client-1")
+    remember_client_cached_session("client-extra", cached_session_from_peer(bytes.from_string_utf8("extra"), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", empty_peer_identity(), time.now() + 1000))
+    assert_eq(native_client_session_cache_order.len(), TLS_MAX_CLIENT_SESSION_CACHE)
+    assert(not native_client_session_cache.contains_key("client-2"))
+    assert(native_client_session_cache.contains_key("client-1"))
+
+    remember_server_ticket("expired", SessionTicketEntry(1, TLS_CIPHER_AES_128_GCM_SHA256, bytes.from_string_utf8("psk"), "forge", time.now() - 1000, 1))
+    assert(session_ticket_expired(native_server_session_tickets["expired"]))
+    forget_server_ticket("expired")
+
+    i = 0
+    while i < TLS_MAX_SERVER_SESSION_TICKETS + 1:
+        key := "server-" + i.to_string()
+        remember_server_ticket(key, SessionTicketEntry(1, TLS_CIPHER_AES_128_GCM_SHA256, bytes.from_string_utf8("psk"), "forge", time.now(), 1000))
+        i = i + 1
+    touch_server_ticket("server-1")
+    remember_server_ticket("server-extra", SessionTicketEntry(1, TLS_CIPHER_AES_128_GCM_SHA256, bytes.from_string_utf8("psk"), "forge", time.now(), 1000))
+    assert_eq(native_server_session_ticket_order.len(), TLS_MAX_SERVER_SESSION_TICKETS)
+    assert(not native_server_session_tickets.contains_key("server-2"))
+    assert(native_server_session_tickets.contains_key("server-1"))

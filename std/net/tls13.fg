@@ -22,11 +22,16 @@ TLS13_VERSION := 772
 MAX_PLAINTEXT_RECORD := 16384
 HANDSHAKE_CLIENT_HELLO := 1
 HANDSHAKE_SERVER_HELLO := 2
+HANDSHAKE_NEW_SESSION_TICKET := 4
 HANDSHAKE_ENCRYPTED_EXTENSIONS := 8
 HANDSHAKE_CERTIFICATE := 11
+HANDSHAKE_CERTIFICATE_REQUEST := 13
 HANDSHAKE_CERTIFICATE_VERIFY := 15
 HANDSHAKE_FINISHED := 20
 EXT_SERVER_NAME := 0
+EXT_ALPN := 16
+EXT_PRE_SHARED_KEY := 41
+EXT_PSK_KEY_EXCHANGE_MODES := 45
 EXT_SUPPORTED_GROUPS := 10
 EXT_SIGNATURE_ALGORITHMS := 13
 EXT_SUPPORTED_VERSIONS := 43
@@ -34,6 +39,7 @@ EXT_KEY_SHARE := 51
 CIPHER_TLS_AES_128_GCM_SHA256 := 4865
 CIPHER_TLS_CHACHA20_POLY1305_SHA256 := 4867
 GROUP_X25519 := 29
+PSK_MODE_DHE_KE := 1
 SIG_RSA_PKCS1_SHA256 := 1025
 SIG_ECDSA_SECP256R1_SHA256 := 1027
 SIG_RSA_PSS_RSAE_SHA256 := 2052
@@ -61,17 +67,29 @@ pub struct ServerHello:
     pub supported_version: Int
     pub key_share_group: Int
     pub key_share: Bytes
+    pub selected_psk_identity: Int
 
 # parsed client hello fields needed by the tls 1.3 server handshake.
 pub struct ClientHello:
     pub legacy_version: Int
     pub random: Bytes
     pub session_id: Bytes
+    pub server_name: String
     pub cipher_suites: List[Int]
     pub supported_versions: List[Int]
     pub key_share_group: Int
     pub key_share: Bytes
     pub signature_schemes: List[Int]
+    pub alpn_protocols: List[String]
+    pub psk_mode_dhe: Bool
+    pub psk_identity: Bytes
+    pub psk_binder: Bytes
+    pub psk_obfuscated_ticket_age: Int
+    pub psk_binder_input: Bytes
+
+# parsed tls 1.3 encrypted extensions.
+pub struct EncryptedExtensions:
+    pub alpn_protocol: String
 
 # one certificate entry from a tls 1.3 Certificate message.
 pub struct CertificateEntry:
@@ -88,6 +106,11 @@ pub struct CertificateVerifyMessage:
     pub signature_scheme: Int
     pub signature: Bytes
 
+# parsed tls 1.3 CertificateRequest message.
+pub struct CertificateRequestMessage:
+    pub request_context: Bytes
+    pub signature_schemes: List[Int]
+
 # parsed tls alert.
 pub struct Alert:
     pub level: Int
@@ -97,6 +120,13 @@ pub struct Alert:
 pub struct TrafficKeys:
     pub key: Bytes
     pub iv: Bytes
+
+# parsed tls 1.3 NewSessionTicket message.
+pub struct NewSessionTicketMessage:
+    pub ticket_lifetime: Int
+    pub ticket_age_add: Int
+    pub nonce: Bytes
+    pub ticket: Bytes
 
 fn tls13_fail(message: String) -> String:
     return message
@@ -161,6 +191,23 @@ fn server_name_extension(server_name: String) -> Bytes!:
     write_bytes_if_any(data, name.bytes())!
     return extension_record(EXT_SERVER_NAME, data.bytes())
 
+fn alpn_extension(protocols: List[String]) -> Bytes!:
+    if protocols.len() == 0:
+        return bytes.empty()
+    data := bytes.buffer()
+    names := bytes.buffer()
+    for protocol in protocols:
+        encoded := bytes.from_string_utf8(protocol)
+        if encoded.len() == 0:
+            fail "tls alpn protocol cannot be empty"
+        if encoded.len() > 255:
+            fail "tls alpn protocol too long"
+        write_u8(names, encoded.len())!
+        write_bytes_if_any(names, encoded)!
+    write_u16_be(data, names.len())!
+    write_bytes_if_any(data, names.bytes())!
+    return extension_record(EXT_ALPN, data.bytes())
+
 fn supported_versions_client_extension() -> Bytes!:
     data := bytes.buffer_with_capacity(3)
     write_u8(data, 2)!
@@ -176,6 +223,15 @@ fn signature_algorithms_extension(schemes: List[Int]) -> Bytes!:
     data := bytes.buffer()
     write_u16_vector(data, schemes)!
     return extension_record(EXT_SIGNATURE_ALGORITHMS, data.bytes())
+
+fn psk_key_exchange_modes_extension(modes: List[Int]) -> Bytes!:
+    if modes.len() == 0:
+        return bytes.empty()
+    data := bytes.buffer()
+    write_u8(data, modes.len())!
+    for mode in modes:
+        write_u8(data, mode)!
+    return extension_record(EXT_PSK_KEY_EXCHANGE_MODES, data.bytes())
 
 fn key_share_client_extension(group: Int, public_key: Bytes) -> Bytes!:
     if public_key.len() == 0:
@@ -203,15 +259,78 @@ fn key_share_server_extension(group: Int, public_key: Bytes) -> Bytes!:
     write_bytes_if_any(data, public_key)!
     return extension_record(EXT_KEY_SHARE, data.bytes())
 
-fn default_client_extensions(server_name: String, x25519_public_key: Bytes) -> Bytes!:
+fn pre_shared_key_client_extension(identity: Bytes, obfuscated_ticket_age: Int, binder: Bytes) -> Bytes!:
+    if identity.len() == 0:
+        fail "tls psk identity cannot be empty"
+    if binder.len() == 0:
+        fail "tls psk binder cannot be empty"
+    identities := bytes.buffer()
+    write_u16_be(identities, identity.len())!
+    write_bytes_if_any(identities, identity)!
+    checked_write(binary.write_u32_be(identities, obfuscated_ticket_age))!
+    binders := bytes.buffer()
+    write_u8(binders, binder.len())!
+    write_bytes_if_any(binders, binder)!
+    data := bytes.buffer()
+    write_u16_be(data, identities.len())!
+    write_bytes_if_any(data, identities.bytes())!
+    write_u16_be(data, binders.len())!
+    write_bytes_if_any(data, binders.bytes())!
+    return extension_record(EXT_PRE_SHARED_KEY, data.bytes())
+
+fn pre_shared_key_client_partial_extension(identity: Bytes, obfuscated_ticket_age: Int, binder_len: Int) -> Bytes!:
+    if identity.len() == 0:
+        fail "tls psk identity cannot be empty"
+    if binder_len <= 0 or binder_len > 255:
+        fail "tls psk binder length out of range"
+    identities := bytes.buffer()
+    write_u16_be(identities, identity.len())!
+    write_bytes_if_any(identities, identity)!
+    checked_write(binary.write_u32_be(identities, obfuscated_ticket_age))!
+    extension := bytes.buffer()
+    write_u16_be(extension, EXT_PRE_SHARED_KEY)!
+    write_u16_be(extension, 2 + identities.len() + 2 + 1 + binder_len)!
+    write_u16_be(extension, identities.len())!
+    write_bytes_if_any(extension, identities.bytes())!
+    return extension.bytes()
+
+fn pre_shared_key_server_extension(selected_identity: Int) -> Bytes!:
+    if selected_identity < 0 or selected_identity > 65535:
+        fail "tls selected psk identity out of range"
+    data := bytes.buffer_with_capacity(2)
+    write_u16_be(data, selected_identity)!
+    return extension_record(EXT_PRE_SHARED_KEY, data.bytes())
+
+fn default_client_extensions_with_options(server_name: String, x25519_public_key: Bytes, alpn_protocols: List[String], psk_identity: Bytes, psk_binder: Bytes, psk_obfuscated_ticket_age: Int) -> Bytes!:
     if x25519_public_key.len() != 32:
         fail "x25519 public key must be 32 bytes"
     out := bytes.buffer()
     write_bytes_if_any(out, server_name_extension(server_name)!)!
+    write_bytes_if_any(out, alpn_extension(alpn_protocols)!)!
     write_bytes_if_any(out, supported_versions_client_extension()!)!
     write_bytes_if_any(out, supported_groups_extension([GROUP_X25519])!)!
     write_bytes_if_any(out, signature_algorithms_extension([SIG_ECDSA_SECP256R1_SHA256, SIG_RSA_PSS_RSAE_SHA256, SIG_RSA_PKCS1_SHA256, SIG_ED25519])!)!
     write_bytes_if_any(out, key_share_client_extension(GROUP_X25519, x25519_public_key)!)!
+    if psk_identity.len() > 0:
+        write_bytes_if_any(out, psk_key_exchange_modes_extension([PSK_MODE_DHE_KE])!)!
+        write_bytes_if_any(out, pre_shared_key_client_extension(psk_identity, psk_obfuscated_ticket_age, psk_binder)!)!
+    return out.bytes()
+
+fn default_client_extensions(server_name: String, x25519_public_key: Bytes) -> Bytes!:
+    return default_client_extensions_with_options(server_name, x25519_public_key, [], bytes.empty(), bytes.empty(), 0)
+
+fn default_client_extensions_partial_psk(server_name: String, x25519_public_key: Bytes, alpn_protocols: List[String], psk_identity: Bytes, psk_obfuscated_ticket_age: Int) -> Bytes!:
+    if x25519_public_key.len() != 32:
+        fail "x25519 public key must be 32 bytes"
+    out := bytes.buffer()
+    write_bytes_if_any(out, server_name_extension(server_name)!)!
+    write_bytes_if_any(out, alpn_extension(alpn_protocols)!)!
+    write_bytes_if_any(out, supported_versions_client_extension()!)!
+    write_bytes_if_any(out, supported_groups_extension([GROUP_X25519])!)!
+    write_bytes_if_any(out, signature_algorithms_extension([SIG_ECDSA_SECP256R1_SHA256, SIG_RSA_PSS_RSAE_SHA256, SIG_RSA_PKCS1_SHA256, SIG_ED25519])!)!
+    write_bytes_if_any(out, key_share_client_extension(GROUP_X25519, x25519_public_key)!)!
+    write_bytes_if_any(out, psk_key_exchange_modes_extension([PSK_MODE_DHE_KE])!)!
+    write_bytes_if_any(out, pre_shared_key_client_partial_extension(psk_identity, psk_obfuscated_ticket_age, 32)!)!
     return out.bytes()
 
 fn sequence_nonce(static_iv: Bytes, sequence: Int) -> Bytes!:
@@ -376,11 +495,14 @@ pub fn decode_handshakes(data: Bytes) -> List[HandshakeMessage]!:
 
 # encode a tls 1.3 client hello with x25519 key share support.
 pub fn encode_client_hello(server_name: String, random: Bytes, session_id: Bytes, x25519_public_key: Bytes) -> Bytes!:
+    return encode_client_hello_with_options(server_name, random, session_id, x25519_public_key, [], bytes.empty(), 0, bytes.empty())
+
+pub fn encode_client_hello_with_options(server_name: String, random: Bytes, session_id: Bytes, x25519_public_key: Bytes, alpn_protocols: List[String], psk_identity: Bytes, psk_obfuscated_ticket_age: Int, psk_binder: Bytes) -> Bytes!:
     if random.len() != 32:
         fail "tls client random must be 32 bytes"
     if session_id.len() > 32:
         fail "tls session id too long"
-    extensions := default_client_extensions(server_name, x25519_public_key)!
+    extensions := default_client_extensions_with_options(server_name, x25519_public_key, alpn_protocols, psk_identity, psk_binder, psk_obfuscated_ticket_age)!
     body := bytes.buffer()
     write_u16_be(body, TLS_LEGACY_VERSION)!
     write_bytes_if_any(body, random)!
@@ -392,6 +514,40 @@ pub fn encode_client_hello(server_name: String, random: Bytes, session_id: Bytes
     write_u16_be(body, extensions.len())!
     write_bytes_if_any(body, extensions)!
     return encode_handshake(HANDSHAKE_CLIENT_HELLO, body.bytes())
+
+pub fn client_hello_psk_binder_input(server_name: String, random: Bytes, session_id: Bytes, x25519_public_key: Bytes, alpn_protocols: List[String], psk_identity: Bytes, psk_obfuscated_ticket_age: Int) -> Bytes!:
+    if random.len() != 32:
+        fail "tls client random must be 32 bytes"
+    if session_id.len() > 32:
+        fail "tls session id too long"
+    if psk_identity.len() == 0:
+        fail "tls psk identity cannot be empty"
+    extensions := default_client_extensions_partial_psk(server_name, x25519_public_key, alpn_protocols, psk_identity, psk_obfuscated_ticket_age)!
+    body := bytes.buffer()
+    write_u16_be(body, TLS_LEGACY_VERSION)!
+    write_bytes_if_any(body, random)!
+    write_u8(body, session_id.len())!
+    write_bytes_if_any(body, session_id)!
+    write_u16_vector(body, [CIPHER_TLS_AES_128_GCM_SHA256, CIPHER_TLS_CHACHA20_POLY1305_SHA256])!
+    write_u8(body, 1)!
+    write_u8(body, 0)!
+    write_u16_be(body, extensions.len() + 2 + 1 + 32)!
+    write_bytes_if_any(body, extensions)!
+    return body.bytes()
+
+fn parse_alpn_protocol_list(data: Bytes) -> List[String]!:
+    mut protocols: List[String] := []
+    dr := binary.reader(data)
+    list_len := checked_read(binary.read_u16_be(dr))!
+    list := checked_bytes(binary.read_bytes(dr, list_len))!
+    if binary.remaining(dr) != 0:
+        fail "malformed tls alpn extension"
+    pr := binary.reader(list)
+    while binary.remaining(pr) > 0:
+        protocol_len := checked_read(binary.read_u8(pr))!
+        protocol := checked_bytes(binary.read_bytes(pr, protocol_len))!
+        protocols.push(protocol.to_string_utf8()!)
+    return protocols
 
 # parse the client hello body from a tls handshake message.
 pub fn parse_client_hello(body: Bytes) -> ClientHello!:
@@ -418,8 +574,17 @@ pub fn parse_client_hello(body: Bytes) -> ClientHello!:
 
     supported_versions: List[Int] := []
     signature_schemes: List[Int] := []
+    mut server_name := ""
+    mut alpn_protocols: List[String] := []
     mut key_share_group := 0
     mut key_share := bytes.empty()
+    mut psk_mode_dhe := false
+    mut psk_identity := bytes.empty()
+    mut psk_binder := bytes.empty()
+    mut psk_obfuscated_ticket_age := 0
+    mut psk_binder_input := bytes.empty()
+    extension_body_start := body.len() - extensions.len()
+    mut extension_offset := 0
     er := binary.reader(extensions)
     while binary.remaining(er) > 0:
         extension_type := checked_read(binary.read_u16_be(er))!
@@ -448,19 +613,78 @@ pub fn parse_client_hello(body: Bytes) -> ClientHello!:
             sr := binary.reader(list)
             while binary.remaining(sr) > 0:
                 signature_schemes.push(checked_read(binary.read_u16_be(sr))!)
+        elif extension_type == EXT_ALPN:
+            alpn_protocols = parse_alpn_protocol_list(data)!
+        elif extension_type == EXT_SERVER_NAME:
+            dr := binary.reader(data)
+            list_len := checked_read(binary.read_u16_be(dr))!
+            names := checked_bytes(binary.read_bytes(dr, list_len))!
+            if binary.remaining(dr) != 0:
+                fail "malformed tls server name extension"
+            nr := binary.reader(names)
+            if binary.remaining(nr) > 0:
+                name_type := checked_read(binary.read_u8(nr))!
+                if name_type != 0:
+                    fail "unsupported tls server name type"
+                name_len := checked_read(binary.read_u16_be(nr))!
+                server_name = checked_bytes(binary.read_bytes(nr, name_len))!.to_string_utf8()!
+                if binary.remaining(nr) != 0:
+                    fail "multiple tls server names are not supported"
+        elif extension_type == EXT_PSK_KEY_EXCHANGE_MODES:
+            dr := binary.reader(data)
+            list_len := checked_read(binary.read_u8(dr))!
+            modes := checked_bytes(binary.read_bytes(dr, list_len))!
+            if binary.remaining(dr) != 0:
+                fail "malformed tls psk key exchange modes"
+            mut i := 0
+            while i < modes.len():
+                if modes[i] == PSK_MODE_DHE_KE:
+                    psk_mode_dhe = true
+                i = i + 1
+        elif extension_type == EXT_PRE_SHARED_KEY:
+            dr := binary.reader(data)
+            identity_len := checked_read(binary.read_u16_be(dr))!
+            identities := checked_bytes(binary.read_bytes(dr, identity_len))!
+            binders_len_pos := extension_body_start + extension_offset + 4 + 2 + identity_len
+            if binders_len_pos < 0 or binders_len_pos > body.len():
+                fail "malformed tls psk binder input"
+            psk_binder_input = body.slice(0, binders_len_pos)
+            ir := binary.reader(identities)
+            if binary.remaining(ir) > 0:
+                ticket_len := checked_read(binary.read_u16_be(ir))!
+                psk_identity = checked_bytes(binary.read_bytes(ir, ticket_len))!
+                psk_obfuscated_ticket_age = checked_read(binary.read_u32_be(ir))!
+            binders_len := checked_read(binary.read_u16_be(dr))!
+            binders := checked_bytes(binary.read_bytes(dr, binders_len))!
+            if binary.remaining(dr) != 0:
+                fail "malformed tls pre_shared_key extension"
+            br := binary.reader(binders)
+            if binary.remaining(br) > 0:
+                binder_len := checked_read(binary.read_u8(br))!
+                psk_binder = checked_bytes(binary.read_bytes(br, binder_len))!
+                if binary.remaining(br) != 0:
+                    fail "multiple tls psk binders are not supported"
+            if psk_binder.len() == 0:
+                fail "tls psk binder is empty"
+        extension_offset = extension_offset + 4 + data_len
     if not supported_versions.contains(TLS13_VERSION):
         fail "client did not offer tls 1.3"
     if key_share_group != GROUP_X25519 or key_share.len() != 32:
         fail "client hello missing x25519 key share"
-    return ClientHello(legacy_version, random, session_id, cipher_suites, supported_versions, key_share_group, key_share, signature_schemes)
+    return ClientHello(legacy_version, random, session_id, server_name, cipher_suites, supported_versions, key_share_group, key_share, signature_schemes, alpn_protocols, psk_mode_dhe, psk_identity, psk_binder, psk_obfuscated_ticket_age, psk_binder_input)
 
 # encode a tls 1.3 server hello.
 pub fn encode_server_hello(random: Bytes, session_id: Bytes, cipher_suite: Int, x25519_public_key: Bytes) -> Bytes!:
+    return encode_server_hello_with_options(random, session_id, cipher_suite, x25519_public_key, 0 - 1)
+
+pub fn encode_server_hello_with_options(random: Bytes, session_id: Bytes, cipher_suite: Int, x25519_public_key: Bytes, selected_psk_identity: Int) -> Bytes!:
     if random.len() != 32:
         fail "tls server random must be 32 bytes"
     if session_id.len() > 32:
         fail "tls session id too long"
-    extensions := supported_versions_server_extension(TLS13_VERSION)!.concat(key_share_server_extension(GROUP_X25519, x25519_public_key)!)
+    mut extensions := supported_versions_server_extension(TLS13_VERSION)!.concat(key_share_server_extension(GROUP_X25519, x25519_public_key)!)
+    if selected_psk_identity >= 0:
+        extensions = extensions.concat(pre_shared_key_server_extension(selected_psk_identity)!)
     body := bytes.buffer()
     write_u16_be(body, TLS_LEGACY_VERSION)!
     write_bytes_if_any(body, random)!
@@ -491,6 +715,7 @@ pub fn parse_server_hello(body: Bytes) -> ServerHello!:
     mut supported_version := 0
     mut key_share_group := 0
     mut key_share := bytes.empty()
+    mut selected_psk_identity := 0 - 1
     er := binary.reader(extensions)
     while binary.remaining(er) > 0:
         extension_type := checked_read(binary.read_u16_be(er))!
@@ -508,11 +733,34 @@ pub fn parse_server_hello(body: Bytes) -> ServerHello!:
             key_share = checked_bytes(binary.read_bytes(dr, key_len))!
             if binary.remaining(dr) != 0:
                 fail "malformed key_share extension"
+        elif extension_type == EXT_PRE_SHARED_KEY:
+            dr := binary.reader(data)
+            selected_psk_identity = checked_read(binary.read_u16_be(dr))!
+            if binary.remaining(dr) != 0:
+                fail "malformed pre_shared_key extension"
     if supported_version != TLS13_VERSION:
         fail "server did not negotiate tls 1.3"
     if key_share_group == 0 or key_share.len() == 0:
         fail "server hello missing key share"
-    return ServerHello(legacy_version, random, session_id, cipher_suite, supported_version, key_share_group, key_share)
+    return ServerHello(legacy_version, random, session_id, cipher_suite, supported_version, key_share_group, key_share, selected_psk_identity)
+
+pub fn parse_encrypted_extensions(body: Bytes) -> EncryptedExtensions!:
+    r := binary.reader(body)
+    extension_len := checked_read(binary.read_u16_be(r))!
+    extensions := checked_bytes(binary.read_bytes(r, extension_len))!
+    if binary.remaining(r) != 0:
+        fail "trailing tls encrypted extensions bytes"
+    mut alpn_protocol := ""
+    er := binary.reader(extensions)
+    while binary.remaining(er) > 0:
+        extension_type := checked_read(binary.read_u16_be(er))!
+        data_len := checked_read(binary.read_u16_be(er))!
+        data := checked_bytes(binary.read_bytes(er, data_len))!
+        if extension_type == EXT_ALPN:
+            protocols := parse_alpn_protocol_list(data)!
+            if protocols.len() > 0:
+                alpn_protocol = protocols[0]
+    return EncryptedExtensions(alpn_protocol)
 
 # parse a tls 1.3 Certificate message body.
 pub fn parse_certificate_message(body: Bytes) -> CertificateMessage!:
@@ -531,20 +779,55 @@ pub fn parse_certificate_message(body: Bytes) -> CertificateMessage!:
         ext_len := checked_read(binary.read_u16_be(er))!
         extensions := checked_bytes(binary.read_bytes(er, ext_len))!
         entries.push(CertificateEntry(cert, extensions))
-    if entries.len() == 0:
-        fail "tls certificate message has no certificates"
     return CertificateMessage(context, entries)
 
 # encode a tls 1.3 EncryptedExtensions handshake message.
 pub fn encode_encrypted_extensions() -> Bytes!:
-    body := bytes.buffer_with_capacity(2)
-    write_u16_be(body, 0)!
+    return encode_encrypted_extensions_with_alpn("")
+
+pub fn encode_encrypted_extensions_with_alpn(alpn_protocol: String) -> Bytes!:
+    extensions := bytes.buffer()
+    if alpn_protocol != "":
+        write_bytes_if_any(extensions, alpn_extension([alpn_protocol])!)!
+    body := bytes.buffer_with_capacity(extensions.len() + 2)
+    write_u16_be(body, extensions.len())!
+    write_bytes_if_any(body, extensions.bytes())!
     return encode_handshake(HANDSHAKE_ENCRYPTED_EXTENSIONS, body.bytes())
+
+pub fn parse_certificate_request(body: Bytes) -> CertificateRequestMessage!:
+    r := binary.reader(body)
+    context_len := checked_read(binary.read_u8(r))!
+    request_context := checked_bytes(binary.read_bytes(r, context_len))!
+    extension_len := checked_read(binary.read_u16_be(r))!
+    extensions := checked_bytes(binary.read_bytes(r, extension_len))!
+    if binary.remaining(r) != 0:
+        fail "trailing tls certificate request bytes"
+    mut signature_schemes: List[Int] := []
+    er := binary.reader(extensions)
+    while binary.remaining(er) > 0:
+        extension_type := checked_read(binary.read_u16_be(er))!
+        data_len := checked_read(binary.read_u16_be(er))!
+        data := checked_bytes(binary.read_bytes(er, data_len))!
+        if extension_type == EXT_SIGNATURE_ALGORITHMS:
+            dr := binary.reader(data)
+            list_len := checked_read(binary.read_u16_be(dr))!
+            list := checked_bytes(binary.read_bytes(dr, list_len))!
+            sr := binary.reader(list)
+            while binary.remaining(sr) > 0:
+                signature_schemes.push(checked_read(binary.read_u16_be(sr))!)
+    return CertificateRequestMessage(request_context, signature_schemes)
+
+pub fn encode_certificate_request(signature_schemes: List[Int]) -> Bytes!:
+    body := bytes.buffer()
+    write_u8(body, 0)!
+    extensions := bytes.buffer()
+    write_bytes_if_any(extensions, signature_algorithms_extension(signature_schemes)!)!
+    write_u16_be(body, extensions.len())!
+    write_bytes_if_any(body, extensions.bytes())!
+    return encode_handshake(HANDSHAKE_CERTIFICATE_REQUEST, body.bytes())
 
 # encode a tls 1.3 Certificate handshake message.
 pub fn encode_certificate_message(certs_der: List[Bytes]) -> Bytes!:
-    if certs_der.len() == 0:
-        fail "tls certificate chain is empty"
     entries := bytes.buffer()
     for cert in certs_der:
         write_u24_be(entries, cert.len())!
@@ -587,6 +870,35 @@ pub fn encode_finished(verify_data: Bytes) -> Bytes!:
     if verify_data.len() == 0:
         fail "empty tls finished verify data"
     return encode_handshake(HANDSHAKE_FINISHED, verify_data)
+
+pub fn parse_new_session_ticket(body: Bytes) -> NewSessionTicketMessage!:
+    r := binary.reader(body)
+    lifetime := checked_read(binary.read_u32_be(r))!
+    age_add := checked_read(binary.read_u32_be(r))!
+    nonce_len := checked_read(binary.read_u8(r))!
+    nonce := checked_bytes(binary.read_bytes(r, nonce_len))!
+    ticket_len := checked_read(binary.read_u16_be(r))!
+    ticket := checked_bytes(binary.read_bytes(r, ticket_len))!
+    extension_len := checked_read(binary.read_u16_be(r))!
+    extensions := checked_bytes(binary.read_bytes(r, extension_len))!
+    if extensions.len() != 0 or binary.remaining(r) != 0:
+        fail "trailing tls new session ticket bytes"
+    return NewSessionTicketMessage(lifetime, age_add, nonce, ticket)
+
+pub fn encode_new_session_ticket(ticket_lifetime: Int, ticket_age_add: Int, nonce: Bytes, ticket: Bytes) -> Bytes!:
+    if ticket_lifetime < 0:
+        fail "tls session ticket lifetime must be non-negative"
+    if ticket.len() == 0:
+        fail "tls session ticket cannot be empty"
+    body := bytes.buffer()
+    checked_write(binary.write_u32_be(body, ticket_lifetime))!
+    checked_write(binary.write_u32_be(body, ticket_age_add))!
+    write_u8(body, nonce.len())!
+    write_bytes_if_any(body, nonce)!
+    write_u16_be(body, ticket.len())!
+    write_bytes_if_any(body, ticket)!
+    write_u16_be(body, 0)!
+    return encode_handshake(HANDSHAKE_NEW_SESSION_TICKET, body.bytes())
 
 # encode a compatibility change_cipher_spec record.
 pub fn encode_change_cipher_spec() -> Bytes!:
@@ -644,6 +956,12 @@ pub fn derive_secret_from_hash_sha256(secret: Bytes, label: String, transcript_h
 # derive the tls 1.3 handshake secret from an x25519 shared secret.
 pub fn handshake_secret_sha256(shared_secret: Bytes) -> Bytes!:
     early_secret := kdf.hkdf_extract_sha256(zero_secret_sha256(), bytes.empty())
+    return handshake_secret_from_early_secret_sha256(early_secret, shared_secret)
+
+pub fn early_secret_from_psk_sha256(psk: Bytes) -> Bytes:
+    return kdf.hkdf_extract_sha256(zero_secret_sha256(), psk)
+
+pub fn handshake_secret_from_early_secret_sha256(early_secret: Bytes, shared_secret: Bytes) -> Bytes!:
     derived := derive_secret_sha256(early_secret, "derived", bytes.empty())!
     return kdf.hkdf_extract_sha256(derived, shared_secret)
 
@@ -672,6 +990,20 @@ pub fn server_application_traffic_secret_sha256(master_secret: Bytes, transcript
 pub fn finished_key_sha256(base_key: Bytes) -> Bytes!:
     return hkdf_expand_label_sha256(base_key, "finished", bytes.empty(), 32)
 
+pub fn resumption_master_secret_sha256(master_secret: Bytes, transcript: Bytes) -> Bytes!:
+    return derive_secret_sha256(master_secret, "res master", transcript)
+
+pub fn resumption_psk_sha256(resumption_master_secret: Bytes, ticket_nonce: Bytes) -> Bytes!:
+    return hkdf_expand_label_sha256(resumption_master_secret, "resumption", ticket_nonce, 32)
+
+pub fn resumption_binder_key_sha256(psk: Bytes) -> Bytes!:
+    early_secret := early_secret_from_psk_sha256(psk)
+    return derive_secret_sha256(early_secret, "res binder", bytes.empty())
+
+pub fn resumption_binder_verify_data_sha256(psk: Bytes, client_hello_input: Bytes) -> Bytes!:
+    binder_key := resumption_binder_key_sha256(psk)!
+    return hmac.sha256(finished_key_sha256(binder_key)!, transcript_hash_sha256(client_hello_input))
+
 # calculate tls 1.3 finished verify data from raw transcript bytes.
 pub fn finished_verify_data_sha256(base_key: Bytes, transcript: Bytes) -> Bytes!:
     return hmac.sha256(finished_key_sha256(base_key)!, transcript_hash_sha256(transcript))
@@ -697,6 +1029,9 @@ pub fn client_certificate_verify_input_sha256(transcript: Bytes) -> Bytes!:
 # verify a tls 1.3 server CertificateVerify signature.
 pub fn verify_server_certificate_sha256(public_key: Bytes, scheme: Int, transcript: Bytes, signed: Bytes) -> Bool!:
     return verify_certificate_signature(public_key, scheme, server_certificate_verify_input_sha256(transcript)!, signed)
+
+pub fn verify_client_certificate_sha256(public_key: Bytes, scheme: Int, transcript: Bytes, signed: Bytes) -> Bool!:
+    return verify_certificate_signature(public_key, scheme, client_certificate_verify_input_sha256(transcript)!, signed)
 
 # expand an aes-128-gcm traffic secret into its key and static iv.
 pub fn traffic_keys_aes_128_gcm_sha256(secret: Bytes) -> TrafficKeys!:
@@ -783,6 +1118,24 @@ test "tls13 encodes client hello":
     assert(bytes.eq(parsed.key_share, public_key))
     assert(parsed.signature_schemes.contains(SIG_RSA_PSS_RSAE_SHA256))
 
+test "tls13 encodes client hello with alpn and psk":
+    random := encoding.from_hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")!
+    session := encoding.from_hex("aabbccdd")!
+    public_key := encoding.from_hex("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")!
+    ticket := bytes.from_string_utf8("ticket")
+    binder_input := client_hello_psk_binder_input("example.com", random, session, public_key, ["forge.rpc"], ticket, 7)!
+    binder := resumption_binder_verify_data_sha256(bytes.from_string_utf8("forge-resume"), binder_input)!
+    hello := encode_client_hello_with_options("example.com", random, session, public_key, ["forge.rpc"], ticket, 7, binder)!
+    parsed := parse_client_hello(decode_handshakes(hello)![0].body)!
+
+    assert_eq(parsed.alpn_protocols.len(), 1)
+    assert_eq(parsed.alpn_protocols[0], "forge.rpc")
+    assert(parsed.psk_mode_dhe)
+    assert(bytes.eq(parsed.psk_identity, ticket))
+    assert_eq(parsed.psk_obfuscated_ticket_age, 7)
+    assert(bytes.eq(parsed.psk_binder, binder))
+    assert(bytes.eq(parsed.psk_binder_input, binder_input))
+
 test "tls13 rejects malformed records":
     assert(encode_record(99, bytes.empty()).is_err)
     assert(decode_record(bytes.from_string_utf8(chr(CONTENT_HANDSHAKE))).is_err)
@@ -836,6 +1189,26 @@ test "tls13 encodes server handshake messages":
     assert_eq(ee[0].message_type, HANDSHAKE_ENCRYPTED_EXTENSIONS)
     assert_eq(cert[0].message_type, HANDSHAKE_CERTIFICATE)
     assert_eq(cv[0].message_type, HANDSHAKE_CERTIFICATE_VERIFY)
+
+test "tls13 parses alpn, certificate request, and new session ticket":
+    ee := parse_encrypted_extensions(decode_handshakes(encode_encrypted_extensions_with_alpn("forge.rpc")!)![0].body)!
+    cert_request := parse_certificate_request(decode_handshakes(encode_certificate_request([SIG_RSA_PSS_RSAE_SHA256])!)![0].body)!
+    ticket := parse_new_session_ticket(decode_handshakes(encode_new_session_ticket(60, 9, bytes.from_string_utf8("n"), bytes.from_string_utf8("ticket"))!)![0].body)!
+    server_hello := parse_server_hello(decode_handshakes(encode_server_hello_with_options(encoding.from_hex("101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f")!, bytes.from_string_utf8("id"), CIPHER_TLS_AES_128_GCM_SHA256, encoding.from_hex("303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f")!, 0)!)![0].body)!
+
+    assert_eq(ee.alpn_protocol, "forge.rpc")
+    assert_eq(cert_request.request_context.len(), 0)
+    assert(cert_request.signature_schemes.contains(SIG_RSA_PSS_RSAE_SHA256))
+    assert_eq(ticket.ticket_lifetime, 60)
+    assert_eq(ticket.ticket_age_add, 9)
+    assert(bytes.eq(ticket.nonce, bytes.from_string_utf8("n")))
+    assert(bytes.eq(ticket.ticket, bytes.from_string_utf8("ticket")))
+    assert_eq(server_hello.selected_psk_identity, 0)
+
+test "tls13 allows empty certificate messages":
+    cert := parse_certificate_message(decode_handshakes(encode_certificate_message([])!)![0].body)!
+
+    assert_eq(cert.certificates.len(), 0)
 
 test "tls13 encodes hkdf labels":
     label := hkdf_label("derived", bytes.empty(), 32)!
