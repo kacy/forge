@@ -67,6 +67,17 @@ struct SessionTicketEntry:
     issued_at_ms: Int
     lifetime_ms: Int
 
+# summary view of one peer certificate.
+pub struct PeerCertificate:
+    pub subject_common_name: String
+    pub issuer_common_name: String
+    pub serial_hex: String
+    pub not_before: String
+    pub not_after: String
+    pub dns_names: List[String]
+    pub ip_addresses: List[String]
+    pub is_ca: Bool
+
 struct CachedSession:
     ticket: Bytes
     psk: Bytes
@@ -80,6 +91,7 @@ struct CachedSession:
     peer_dns_names: List[String]
     peer_ip_addresses: List[String]
     peer_certificate_count: Int
+    peer_certificates: List[PeerCertificate]
     expires_at_ms: Int
 
 mut native_server_session_tickets: Map[String, SessionTicketEntry] := {}
@@ -109,6 +121,7 @@ pub struct ConnectionState:
     pub peer_dns_names: List[String]
     pub peer_ip_addresses: List[String]
     pub peer_certificate_count: Int
+    pub peer_certificates: List[PeerCertificate]
     pub peer_chain_present: Bool
     pub client_auth_requested: Bool
     pub client_auth_verified: Bool
@@ -357,7 +370,7 @@ fn server_ticket_key(ticket: Bytes) -> String:
 
 fn cache_resumed_session(cache_key: String, ticket: Bytes, entry: SessionTicketEntry):
     expires_at_ms := entry.issued_at_ms + entry.lifetime_ms
-    remember_client_cached_session(cache_key, CachedSession(ticket, entry.psk, entry.cipher, entry.alpn_protocol, "", "", "", "", "", [], [], 0, expires_at_ms))
+    remember_client_cached_session(cache_key, CachedSession(ticket, entry.psk, entry.cipher, entry.alpn_protocol, "", "", "", "", "", [], [], 0, [], expires_at_ms))
 
 fn copy_string_list(items: List[String]) -> List[String]:
     out: List[String] := []
@@ -365,11 +378,20 @@ fn copy_string_list(items: List[String]) -> List[String]:
         out.push(item)
     return out
 
+fn copy_peer_certificate(cert: PeerCertificate) -> PeerCertificate:
+    return PeerCertificate(cert.subject_common_name, cert.issuer_common_name, cert.serial_hex, cert.not_before, cert.not_after, copy_string_list(cert.dns_names), copy_string_list(cert.ip_addresses), cert.is_ca)
+
+fn copy_peer_certificate_list(items: List[PeerCertificate]) -> List[PeerCertificate]:
+    out: List[PeerCertificate] := []
+    for item in items:
+        out.push(copy_peer_certificate(item))
+    return out
+
 fn copy_connection_state(state: ConnectionState) -> ConnectionState:
-    return ConnectionState(state.version, state.cipher_suite, state.negotiated_protocol, state.did_resume, state.peer_common_name, state.peer_issuer_common_name, state.peer_serial_hex, state.peer_not_before, state.peer_not_after, copy_string_list(state.peer_dns_names), copy_string_list(state.peer_ip_addresses), state.peer_certificate_count, state.peer_chain_present, state.client_auth_requested, state.client_auth_verified)
+    return ConnectionState(state.version, state.cipher_suite, state.negotiated_protocol, state.did_resume, state.peer_common_name, state.peer_issuer_common_name, state.peer_serial_hex, state.peer_not_before, state.peer_not_after, copy_string_list(state.peer_dns_names), copy_string_list(state.peer_ip_addresses), state.peer_certificate_count, copy_peer_certificate_list(state.peer_certificates), state.peer_chain_present, state.client_auth_requested, state.client_auth_verified)
 
 fn empty_connection_state() -> ConnectionState:
-    return ConnectionState(0, 0, "", false, "", "", "", "", "", [], [], 0, false, false, false)
+    return ConnectionState(0, 0, "", false, "", "", "", "", "", [], [], 0, [], false, false, false)
 
 fn empty_client_hello_info() -> ClientHelloInfo:
     return ClientHelloInfo("", [])
@@ -434,6 +456,12 @@ fn certificate_ip_addresses(certs: List[x509.Certificate]) -> List[String]:
 
 fn certificate_count(certs: List[x509.Certificate]) -> Int:
     return certs.len()
+
+fn certificate_summaries(certs: List[x509.Certificate]) -> List[PeerCertificate]:
+    out: List[PeerCertificate] := []
+    for cert in certs:
+        out.push(PeerCertificate(cert.subject_common_name, cert.issuer_common_name, cert.serial_hex, cert.not_before, cert.not_after, copy_string_list(cert.dns_names), copy_string_list(cert.ip_addresses), cert.is_ca))
+    return out
 
 fn ttl_ms(seconds: Int) -> Int:
     if seconds <= 0:
@@ -527,7 +555,7 @@ fn native_client_handshake(stream: TcpStream, server_name: String, config: Confi
     session_id := random.bytes(32)!
     alpn_protocols := config_alpn_protocols(config)
     mut cache_key := ""
-    mut cached_session := CachedSession(bytes.empty(), bytes.empty(), 0, "", "", "", "", "", "", [], [], 0, 0)
+    mut cached_session := CachedSession(bytes.empty(), bytes.empty(), 0, "", "", "", "", "", "", [], [], 0, [], 0)
     mut offering_psk := false
     if config_resumption_enabled(config) and not config_has_client_certificate(config):
         cache_key = resume_cache_key(config, server_name)
@@ -561,6 +589,7 @@ fn native_client_handshake_after_client_hello(stream: TcpStream, server_name: St
     mut peer_dns_names: List[String] := []
     mut peer_ip_addresses: List[String] := []
     mut peer_certificate_count := 0
+    mut peer_certificates: List[PeerCertificate] := []
 
     mut first_record := native_read_record(stream)!
     while first_record.content_type == TLS_CONTENT_CHANGE_CIPHER_SPEC:
@@ -639,6 +668,7 @@ fn native_client_handshake_after_client_hello(stream: TcpStream, server_name: St
                 peer_dns_names = certificate_dns_names(certs)
                 peer_ip_addresses = certificate_ip_addresses(certs)
                 peer_certificate_count = certificate_count(certs)
+                peer_certificates = certificate_summaries(certs)
                 cert_verified = true
                 transcript_append(transcript_buf, message)!
             elif message.message_type == TLS_HANDSHAKE_CERTIFICATE_VERIFY:
@@ -706,8 +736,9 @@ fn native_client_handshake_after_client_hello(stream: TcpStream, server_name: St
         peer_dns_names = copy_string_list(cached_session.peer_dns_names)
         peer_ip_addresses = copy_string_list(cached_session.peer_ip_addresses)
         peer_certificate_count = cached_session.peer_certificate_count
+        peer_certificates = copy_peer_certificate_list(cached_session.peer_certificates)
     peer_chain_present := peer_common_name != "" or peer_dns_names.len() > 0 or peer_ip_addresses.len() > 0
-    state := ConnectionState(772, server_hello.cipher_suite, negotiated_alpn, did_resume, peer_common_name, peer_issuer_common_name, peer_serial_hex, peer_not_before, peer_not_after, peer_dns_names, peer_ip_addresses, peer_certificate_count, peer_chain_present, client_cert_requested, false)
+    state := ConnectionState(772, server_hello.cipher_suite, negotiated_alpn, did_resume, peer_common_name, peer_issuer_common_name, peer_serial_hex, peer_not_before, peer_not_after, peer_dns_names, peer_ip_addresses, peer_certificate_count, peer_certificates, peer_chain_present, client_cert_requested, false)
     run_verify_connection_hook(config, state)!
     return allocate_native_conn(stream, server_hello.cipher_suite, server_app_keys, client_app_keys, 0, 0, cache_key, resumption_master_secret, state)
 
@@ -805,6 +836,7 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
     mut peer_dns_names: List[String] := []
     mut peer_ip_addresses: List[String] := []
     mut peer_certificate_count := 0
+    mut peer_certificates: List[PeerCertificate] := []
     while not client_finished_seen:
         record := native_read_record(stream)!
         if record.content_type == TLS_CONTENT_CHANGE_CIPHER_SPEC:
@@ -831,6 +863,7 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
                     peer_dns_names = certificate_dns_names(client_certs)
                     peer_ip_addresses = certificate_ip_addresses(client_certs)
                     peer_certificate_count = certificate_count(client_certs)
+                    peer_certificates = certificate_summaries(client_certs)
                 client_cert_seen = true
                 transcript_append(transcript, message)!
             elif message.message_type == TLS_HANDSHAKE_CERTIFICATE_VERIFY:
@@ -869,7 +902,7 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
         native_write_all(stream, ticket_record)!
         initial_write_seq = 1
     peer_chain_present := peer_common_name != "" or peer_dns_names.len() > 0 or peer_ip_addresses.len() > 0
-    state := ConnectionState(772, cipher, selected_alpn, did_resume, peer_common_name, peer_issuer_common_name, peer_serial_hex, peer_not_before, peer_not_after, peer_dns_names, peer_ip_addresses, peer_certificate_count, peer_chain_present, client_cert_requested, client_cert_seen and client_cert_verify_seen)
+    state := ConnectionState(772, cipher, selected_alpn, did_resume, peer_common_name, peer_issuer_common_name, peer_serial_hex, peer_not_before, peer_not_after, peer_dns_names, peer_ip_addresses, peer_certificate_count, peer_certificates, peer_chain_present, client_cert_requested, client_cert_seen and client_cert_verify_seen)
     run_verify_connection_hook(handshake_config, state)!
     return allocate_native_conn(stream, cipher, client_app_keys, server_app_keys, 0, initial_write_seq, "", bytes.empty(), state)
 
@@ -923,7 +956,7 @@ fn native_conn_read_bytes(handle: Int, max_bytes: Int) -> Bytes!:
                     mut state := empty_connection_state()
                     if native_conn_state.contains_key(handle):
                         state = native_conn_state[handle]
-                    remember_client_cached_session(cache_key, CachedSession(ticket_message.ticket, psk, cipher, state.negotiated_protocol, state.peer_common_name, state.peer_issuer_common_name, state.peer_serial_hex, state.peer_not_before, state.peer_not_after, copy_string_list(state.peer_dns_names), copy_string_list(state.peer_ip_addresses), state.peer_certificate_count, expires_at_ms))
+                    remember_client_cached_session(cache_key, CachedSession(ticket_message.ticket, psk, cipher, state.negotiated_protocol, state.peer_common_name, state.peer_issuer_common_name, state.peer_serial_hex, state.peer_not_before, state.peer_not_after, copy_string_list(state.peer_dns_names), copy_string_list(state.peer_ip_addresses), state.peer_certificate_count, copy_peer_certificate_list(state.peer_certificates), expires_at_ms))
             continue
         if inner.content_type == TLS_CONTENT_APPLICATION_DATA:
             payload := inner.payload
@@ -1161,6 +1194,9 @@ impl Conn:
     fn peer_certificate_count() -> Int:
         return self.state().peer_certificate_count
 
+    fn peer_certificates() -> List[PeerCertificate]:
+        return self.state().peer_certificates
+
     fn peer_chain_present() -> Bool:
         return self.state().peer_chain_present
 
@@ -1286,6 +1322,7 @@ test "tls wrappers reject invalid handles":
     assert_eq(bad_state.peer_dns_names.len(), 0)
     assert_eq(bad_state.peer_ip_addresses.len(), 0)
     assert_eq(bad_state.peer_certificate_count, 0)
+    assert_eq(bad_state.peer_certificates.len(), 0)
     assert(not bad_state.peer_chain_present)
     assert(not bad_state.client_auth_requested)
     assert(not bad_state.client_auth_verified)
@@ -1303,6 +1340,7 @@ test "tls wrappers reject invalid handles":
     assert_eq(bad_conn.peer_dns_names().len(), 0)
     assert_eq(bad_conn.peer_ip_addresses().len(), 0)
     assert_eq(bad_conn.peer_certificate_count(), 0)
+    assert_eq(bad_conn.peer_certificates().len(), 0)
     assert(not bad_conn.peer_chain_present())
     assert(not bad_conn.client_auth_requested())
     assert(not bad_conn.client_auth_verified())
@@ -1324,7 +1362,7 @@ test "tls cache helpers evict oldest and expire entries":
     native_server_session_tickets = {}
     native_server_session_ticket_order = []
 
-    remember_client_cached_session("first", CachedSession(bytes.from_string_utf8("a"), bytes.from_string_utf8("psk-a"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", "", "", "", "", [], [], 0, time.now() - 1))
+    remember_client_cached_session("first", CachedSession(bytes.from_string_utf8("a"), bytes.from_string_utf8("psk-a"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", "", "", "", "", [], [], 0, [], time.now() - 1))
     assert(native_client_session_cache.contains_key("first"))
     assert(cached_session_expired(native_client_session_cache["first"]))
     forget_client_cached_session("first")
@@ -1332,10 +1370,10 @@ test "tls cache helpers evict oldest and expire entries":
     mut i := 0
     while i < TLS_MAX_CLIENT_SESSION_CACHE + 1:
         key := "client-" + i.to_string()
-        remember_client_cached_session(key, CachedSession(bytes.from_string_utf8(key), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", "", "", "", "", [], [], 0, time.now() + 1000))
+        remember_client_cached_session(key, CachedSession(bytes.from_string_utf8(key), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", "", "", "", "", [], [], 0, [], time.now() + 1000))
         i = i + 1
     touch_client_cached_session("client-1")
-    remember_client_cached_session("client-extra", CachedSession(bytes.from_string_utf8("extra"), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", "", "", "", "", [], [], 0, time.now() + 1000))
+    remember_client_cached_session("client-extra", CachedSession(bytes.from_string_utf8("extra"), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", "", "", "", "", [], [], 0, [], time.now() + 1000))
     assert_eq(native_client_session_cache_order.len(), TLS_MAX_CLIENT_SESSION_CACHE)
     assert(not native_client_session_cache.contains_key("client-2"))
     assert(native_client_session_cache.contains_key("client-1"))

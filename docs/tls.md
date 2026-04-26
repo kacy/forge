@@ -70,6 +70,7 @@ the fields are:
 - `peer_dns_names`
 - `peer_ip_addresses`
 - `peer_certificate_count`
+- `peer_certificates`
 - `peer_chain_present`
 - `client_auth_requested`
 - `client_auth_verified`
@@ -89,9 +90,20 @@ there are also small wrappers on `Conn` for the common cases:
 - `peer_dns_names()`
 - `peer_ip_addresses()`
 - `peer_certificate_count()`
+- `peer_certificates()`
 - `peer_chain_present()`
 - `client_auth_requested()`
 - `client_auth_verified()`
+
+`peer_certificates` and `peer_certificates()` expose a summary list with:
+- `subject_common_name`
+- `issuer_common_name`
+- `serial_hex`
+- `not_before`
+- `not_after`
+- `dns_names`
+- `ip_addresses`
+- `is_ca`
 
 `version_name()` currently returns `tls1.3` for native connections.
 `cipher_suite_name()` returns one of:
