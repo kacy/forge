@@ -28,6 +28,7 @@ fn run_server(port: Int) -> Int!:
     listener := tls.listen("127.0.0.1", port, server_cfg)!
 
     echo_conn := listener.accept()!
+    assert(echo_conn.peer_common_name() == "")
     msg := echo_conn.read(64)!
     echo_conn.write_all("echo:" + msg)!
     echo_conn.close()
@@ -53,6 +54,8 @@ fn run_mtls_server(port: Int) -> Int!:
     server_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["forge.mtls"]).require_client_ca_file(CA_PATH)!
     listener := tls.listen("127.0.0.1", port, server_cfg)!
     conn := listener.accept()!
+    assert(conn.peer_common_name() == "localhost")
+    assert(conn.peer_dns_names().contains("localhost"))
     msg := conn.read(64)!
     conn.write_all("mtls:" + msg)!
     conn.close()
@@ -70,12 +73,15 @@ fn main() -> Int!:
     conn.write_all("forge")!
     assert(conn.read(64)! == "echo:forge")
     assert(conn.negotiated_protocol() == "forge.echo")
+    assert(conn.peer_common_name() == "localhost")
+    assert(conn.peer_dns_names().contains("localhost"))
     conn.close()
 
     resumed_conn := tls.dial_with_config("127.0.0.1", port, "localhost", client_cfg)!
     resumed_conn.write_all("again")!
     assert(resumed_conn.read(64)! == "echo:again")
     assert(resumed_conn.did_resume())
+    assert(resumed_conn.peer_common_name() == "localhost")
     resumed_conn.close()
 
     http_cfg := tls.client_config_with_ca_file(CA_PATH)!.with_alpn(["http/1.1"])
@@ -96,6 +102,8 @@ fn main() -> Int!:
     mtls_conn.write_all("client")!
     assert(mtls_conn.read(64)! == "mtls:client")
     assert(mtls_conn.negotiated_protocol() == "forge.mtls")
+    assert(mtls_conn.peer_common_name() == "localhost")
+    assert(mtls_conn.peer_dns_names().contains("localhost"))
     mtls_conn.close()
     mtls_cfg.close()
 
