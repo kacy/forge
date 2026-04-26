@@ -63,6 +63,19 @@ fn run_mtls_server(port: Int) -> Int!:
     server_cfg.close()
     return 0
 
+fn run_optional_client_auth_server(port: Int) -> Int!:
+    server_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["forge.optional"]).request_client_ca_file(CA_PATH)!
+    listener := tls.listen("127.0.0.1", port, server_cfg)!
+    conn := listener.accept()!
+    assert(conn.peer_common_name() == "")
+    assert(conn.peer_dns_names().len() == 0)
+    msg := conn.read(64)!
+    conn.write_all("optional:" + msg)!
+    conn.close()
+    listener.close()
+    server_cfg.close()
+    return 0
+
 fn main() -> Int!:
     port := choose_port(18942)!
     server_task := spawn run_server(port)
@@ -108,4 +121,19 @@ fn main() -> Int!:
     mtls_cfg.close()
 
     await mtls_task
+
+    optional_port := choose_port(19342)!
+    optional_task := spawn run_optional_client_auth_server(optional_port)
+    sleep(200)
+
+    optional_cfg := tls.client_config_with_ca_file(CA_PATH)!.with_alpn(["forge.optional"])
+    optional_conn := tls.dial_with_config("127.0.0.1", optional_port, "localhost", optional_cfg)!
+    optional_conn.write_all("guest")!
+    assert(optional_conn.read(64)! == "optional:guest")
+    assert(optional_conn.negotiated_protocol() == "forge.optional")
+    assert(optional_conn.peer_common_name() == "localhost")
+    optional_conn.close()
+    optional_cfg.close()
+
+    await optional_task
     return 0

@@ -762,8 +762,6 @@ pub fn parse_certificate_message(body: Bytes) -> CertificateMessage!:
         ext_len := checked_read(binary.read_u16_be(er))!
         extensions := checked_bytes(binary.read_bytes(er, ext_len))!
         entries.push(CertificateEntry(cert, extensions))
-    if entries.len() == 0:
-        fail "tls certificate message has no certificates"
     return CertificateMessage(context, entries)
 
 # encode a tls 1.3 EncryptedExtensions handshake message.
@@ -813,8 +811,6 @@ pub fn encode_certificate_request(signature_schemes: List[Int]) -> Bytes!:
 
 # encode a tls 1.3 Certificate handshake message.
 pub fn encode_certificate_message(certs_der: List[Bytes]) -> Bytes!:
-    if certs_der.len() == 0:
-        fail "tls certificate chain is empty"
     entries := bytes.buffer()
     for cert in certs_der:
         write_u24_be(entries, cert.len())!
@@ -1191,6 +1187,11 @@ test "tls13 parses alpn, certificate request, and new session ticket":
     assert(bytes.eq(ticket.nonce, bytes.from_string_utf8("n")))
     assert(bytes.eq(ticket.ticket, bytes.from_string_utf8("ticket")))
     assert_eq(server_hello.selected_psk_identity, 0)
+
+test "tls13 allows empty certificate messages":
+    cert := parse_certificate_message(decode_handshakes(encode_certificate_message([])!)![0].body)!
+
+    assert_eq(cert.certificates.len(), 0)
 
 test "tls13 encodes hkdf labels":
     label := hkdf_label("derived", bytes.empty(), 32)!
