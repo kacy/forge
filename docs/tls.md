@@ -63,8 +63,13 @@ the fields are:
 - `negotiated_protocol`
 - `did_resume`
 - `peer_common_name`
+- `peer_issuer_common_name`
+- `peer_serial_hex`
+- `peer_not_before`
+- `peer_not_after`
 - `peer_dns_names`
 - `peer_ip_addresses`
+- `peer_certificate_count`
 - `peer_chain_present`
 - `client_auth_requested`
 - `client_auth_verified`
@@ -77,8 +82,13 @@ there are also small wrappers on `Conn` for the common cases:
 - `negotiated_protocol()`
 - `did_resume()`
 - `peer_common_name()`
+- `peer_issuer_common_name()`
+- `peer_serial_hex()`
+- `peer_not_before()`
+- `peer_not_after()`
 - `peer_dns_names()`
 - `peer_ip_addresses()`
+- `peer_certificate_count()`
 - `peer_chain_present()`
 - `client_auth_requested()`
 - `client_auth_verified()`

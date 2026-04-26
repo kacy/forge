@@ -28,6 +28,8 @@ fn verify_echo_client(state: tls.ConnectionState) -> String:
         return "expected forge.echo"
     if state.peer_common_name != "localhost":
         return "expected localhost certificate"
+    if state.peer_issuer_common_name != "forge-test-ca":
+        return "expected forge-test-ca issuer"
     if not state.peer_chain_present:
         return "expected verified peer certificate"
     return ""
@@ -126,9 +128,15 @@ fn run_mtls_server(port: Int) -> Int!:
     assert(state.peer_chain_present)
     assert(state.client_auth_requested)
     assert(state.client_auth_verified)
+    assert(state.peer_issuer_common_name == "forge-test-ca")
+    assert(state.peer_serial_hex != "")
+    assert(state.peer_not_before != "")
+    assert(state.peer_not_after != "")
+    assert(state.peer_certificate_count > 0)
     assert(conn.client_auth_requested())
     assert(conn.client_auth_verified())
     assert(conn.peer_common_name() == "localhost")
+    assert(conn.peer_issuer_common_name() == "forge-test-ca")
     assert(conn.peer_dns_names().contains("localhost"))
     msg := conn.read(64)!
     conn.write_all("mtls:" + msg)!
@@ -173,11 +181,21 @@ fn main() -> Int!:
     assert(state.peer_chain_present)
     assert(not state.client_auth_requested)
     assert(not state.client_auth_verified)
+    assert(state.peer_issuer_common_name == "forge-test-ca")
+    assert(state.peer_serial_hex != "")
+    assert(state.peer_not_before != "")
+    assert(state.peer_not_after != "")
+    assert(state.peer_certificate_count > 0)
     assert(conn.version() == 772)
     assert(conn.version_name() == "tls1.3")
     assert(conn.cipher_suite() == state.cipher_suite)
     assert(conn.cipher_suite_name() != "unknown")
     assert(conn.peer_chain_present())
+    assert(conn.peer_issuer_common_name() == "forge-test-ca")
+    assert(conn.peer_serial_hex() != "")
+    assert(conn.peer_not_before() != "")
+    assert(conn.peer_not_after() != "")
+    assert(conn.peer_certificate_count() > 0)
     conn.write_all("forge")!
     assert(conn.read(64)! == "echo:forge")
     assert(conn.negotiated_protocol() == "forge.echo")
@@ -190,7 +208,13 @@ fn main() -> Int!:
     assert(resumed_state.did_resume)
     assert(resumed_state.peer_chain_present)
     assert(resumed_state.negotiated_protocol == "forge.echo")
+    assert(resumed_state.peer_issuer_common_name == "forge-test-ca")
+    assert(resumed_state.peer_serial_hex != "")
+    assert(resumed_state.peer_certificate_count > 0)
     assert(resumed_conn.peer_chain_present())
+    assert(resumed_conn.peer_issuer_common_name() == "forge-test-ca")
+    assert(resumed_conn.peer_serial_hex() != "")
+    assert(resumed_conn.peer_certificate_count() > 0)
     resumed_conn.write_all("again")!
     assert(resumed_conn.read(64)! == "echo:again")
     assert(resumed_conn.did_resume())
@@ -221,6 +245,8 @@ fn main() -> Int!:
     assert(mtls_state.peer_chain_present)
     assert(not mtls_state.client_auth_requested)
     assert(not mtls_state.client_auth_verified)
+    assert(mtls_state.peer_issuer_common_name == "forge-test-ca")
+    assert(mtls_state.peer_certificate_count > 0)
     assert(mtls_conn.version_name() == "tls1.3")
     mtls_conn.write_all("client")!
     assert(mtls_conn.read(64)! == "mtls:client")
@@ -243,6 +269,8 @@ fn main() -> Int!:
     assert(optional_state.peer_chain_present)
     assert(not optional_state.client_auth_requested)
     assert(not optional_state.client_auth_verified)
+    assert(optional_state.peer_issuer_common_name == "forge-test-ca")
+    assert(optional_state.peer_certificate_count > 0)
     assert(optional_conn.version_name() == "tls1.3")
     optional_conn.write_all("guest")!
     assert(optional_conn.read(64)! == "optional:guest")
