@@ -46,6 +46,11 @@ fn reject_client(state: tls.ConnectionState) -> String:
         return "intentional tls hook rejection"
     return ""
 
+fn choose_dynamic_config(info: tls.ClientHelloInfo, dynamic_echo_cfg: tls.Config, dynamic_http_cfg: tls.Config) -> tls.Config:
+    if info.alpn_protocols.contains("forge.dynamic"):
+        return dynamic_echo_cfg
+    return dynamic_http_cfg
+
 fn run_server(port: Int) -> Int!:
     server_cfg := alpn_server_config()!
     listener := tls.listen("127.0.0.1", port, server_cfg)!
@@ -85,6 +90,28 @@ fn run_server(port: Int) -> Int!:
 
     listener.close()
     server_cfg.close()
+    return 0
+
+fn run_dynamic_select_server(port: Int, base_cfg: tls.Config) -> Int!:
+    listener := tls.listen("127.0.0.1", port, base_cfg)!
+
+    echo_conn := listener.accept()!
+    echo_state := echo_conn.state()
+    assert(echo_state.negotiated_protocol == "forge.dynamic")
+    msg := echo_conn.read(64)!
+    echo_conn.write_all("dynamic:" + msg)!
+    echo_conn.close()
+
+    http_conn := listener.accept()!
+    req := http_conn.read(2048)!
+    if req.contains("GET /dynamic HTTP/1.1"):
+        http_conn.write_all("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\nConnection: close\r\n\r\ndynamic hello")!
+    else:
+        http_conn.write_all("HTTP/1.1 400 Bad Request\r\nContent-Length: 3\r\nConnection: close\r\n\r\nbad")!
+    http_conn.close()
+
+    listener.close()
+    base_cfg.close()
     return 0
 
 fn run_mtls_server(port: Int) -> Int!:
@@ -211,4 +238,30 @@ fn main() -> Int!:
     optional_cfg.close()
 
     await optional_task
+
+    dynamic_echo_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["forge.dynamic"])
+    dynamic_http_cfg := tls.server_config(CERT_PATH, KEY_PATH)!.with_alpn(["http/1.1"])
+    dynamic_base_cfg := tls.with_config_selector(tls.server_config(CERT_PATH, KEY_PATH)!, fn(info: tls.ClientHelloInfo) => choose_dynamic_config(info, dynamic_echo_cfg, dynamic_http_cfg))
+    dynamic_port := choose_port(19542)!
+    dynamic_task := spawn run_dynamic_select_server(dynamic_port, dynamic_base_cfg)
+    sleep(200)
+
+    dynamic_cfg := tls.client_config_with_ca_file(CA_PATH)!.with_alpn(["forge.dynamic"])
+    dynamic_conn := tls.dial_with_config("127.0.0.1", dynamic_port, "localhost", dynamic_cfg)!
+    dynamic_state := dynamic_conn.state()
+    assert(dynamic_state.negotiated_protocol == "forge.dynamic")
+    dynamic_conn.write_all("route")!
+    assert(dynamic_conn.read(64)! == "dynamic:route")
+    dynamic_conn.close()
+    dynamic_cfg.close()
+
+    dynamic_http_cfg_client := tls.client_config_with_ca_file(CA_PATH)!.with_alpn(["http/1.1"])
+    dynamic_res := http.https_request_port("GET", "127.0.0.1", dynamic_port, "/dynamic").send_tls_with_config("localhost", dynamic_http_cfg_client)!
+    assert(dynamic_res.status == 200)
+    assert(dynamic_res.body_text()! == "dynamic hello")
+    dynamic_http_cfg_client.close()
+
+    await dynamic_task
+    dynamic_echo_cfg.close()
+    dynamic_http_cfg.close()
     return 0

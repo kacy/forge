@@ -74,6 +74,7 @@ pub struct ClientHello:
     pub legacy_version: Int
     pub random: Bytes
     pub session_id: Bytes
+    pub server_name: String
     pub cipher_suites: List[Int]
     pub supported_versions: List[Int]
     pub key_share_group: Int
@@ -573,6 +574,7 @@ pub fn parse_client_hello(body: Bytes) -> ClientHello!:
 
     supported_versions: List[Int] := []
     signature_schemes: List[Int] := []
+    mut server_name := ""
     mut alpn_protocols: List[String] := []
     mut key_share_group := 0
     mut key_share := bytes.empty()
@@ -613,6 +615,21 @@ pub fn parse_client_hello(body: Bytes) -> ClientHello!:
                 signature_schemes.push(checked_read(binary.read_u16_be(sr))!)
         elif extension_type == EXT_ALPN:
             alpn_protocols = parse_alpn_protocol_list(data)!
+        elif extension_type == EXT_SERVER_NAME:
+            dr := binary.reader(data)
+            list_len := checked_read(binary.read_u16_be(dr))!
+            names := checked_bytes(binary.read_bytes(dr, list_len))!
+            if binary.remaining(dr) != 0:
+                fail "malformed tls server name extension"
+            nr := binary.reader(names)
+            if binary.remaining(nr) > 0:
+                name_type := checked_read(binary.read_u8(nr))!
+                if name_type != 0:
+                    fail "unsupported tls server name type"
+                name_len := checked_read(binary.read_u16_be(nr))!
+                server_name = checked_bytes(binary.read_bytes(nr, name_len))!.to_string_utf8()!
+                if binary.remaining(nr) != 0:
+                    fail "multiple tls server names are not supported"
         elif extension_type == EXT_PSK_KEY_EXCHANGE_MODES:
             dr := binary.reader(data)
             list_len := checked_read(binary.read_u8(dr))!
@@ -654,7 +671,7 @@ pub fn parse_client_hello(body: Bytes) -> ClientHello!:
         fail "client did not offer tls 1.3"
     if key_share_group != GROUP_X25519 or key_share.len() != 32:
         fail "client hello missing x25519 key share"
-    return ClientHello(legacy_version, random, session_id, cipher_suites, supported_versions, key_share_group, key_share, signature_schemes, alpn_protocols, psk_mode_dhe, psk_identity, psk_binder, psk_obfuscated_ticket_age, psk_binder_input)
+    return ClientHello(legacy_version, random, session_id, server_name, cipher_suites, supported_versions, key_share_group, key_share, signature_schemes, alpn_protocols, psk_mode_dhe, psk_identity, psk_binder, psk_obfuscated_ticket_age, psk_binder_input)
 
 # encode a tls 1.3 server hello.
 pub fn encode_server_hello(random: Bytes, session_id: Bytes, cipher_suite: Int, x25519_public_key: Bytes) -> Bytes!:
