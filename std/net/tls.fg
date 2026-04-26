@@ -13,6 +13,7 @@ import std.encoding as encoding
 import std.io as io
 import std.net.tls13 as tls13
 import std.os.certs as os_certs
+import std.time as time
 from std.io import TcpStream
 
 mut next_native_config_handle := -1
@@ -59,12 +60,16 @@ TLS_CIPHER_CHACHA20_POLY1305_SHA256 := 4867
 TLS_SIG_RSA_PSS_RSAE_SHA256 := 2052
 TLS_MAX_PLAINTEXT_RECORD := 16384
 TLS_SESSION_TICKET_LIFETIME := 86400
+TLS_MAX_SERVER_SESSION_TICKETS := 64
+TLS_MAX_CLIENT_SESSION_CACHE := 32
 
 struct SessionTicketEntry:
     config_handle: Int
     cipher: Int
     psk: Bytes
     alpn_protocol: String
+    issued_at_ms: Int
+    lifetime_ms: Int
 
 struct CachedSession:
     ticket: Bytes
@@ -74,9 +79,12 @@ struct CachedSession:
     peer_common_name: String
     peer_dns_names: List[String]
     peer_ip_addresses: List[String]
+    expires_at_ms: Int
 
 mut native_server_session_tickets: Map[String, SessionTicketEntry] := {}
 mut native_client_session_cache: Map[String, CachedSession] := {}
+mut native_server_session_ticket_order: List[String] := []
+mut native_client_session_cache_order: List[String] := []
 
 # reusable tls configuration.
 pub struct Config:
@@ -290,7 +298,8 @@ fn server_ticket_key(ticket: Bytes) -> String:
     return encoding.to_hex(ticket)
 
 fn cache_resumed_session(cache_key: String, ticket: Bytes, entry: SessionTicketEntry):
-    native_client_session_cache.insert(cache_key, CachedSession(ticket, entry.psk, entry.cipher, entry.alpn_protocol, "", [], []))
+    expires_at_ms := entry.issued_at_ms + entry.lifetime_ms
+    remember_client_cached_session(cache_key, CachedSession(ticket, entry.psk, entry.cipher, entry.alpn_protocol, "", [], [], expires_at_ms))
 
 fn copy_string_list(items: List[String]) -> List[String]:
     out: List[String] := []
@@ -312,6 +321,58 @@ fn certificate_ip_addresses(certs: List[x509.Certificate]) -> List[String]:
     if certs.len() == 0:
         return []
     return copy_string_list(certs[0].ip_addresses)
+
+fn ttl_ms(seconds: Int) -> Int:
+    if seconds <= 0:
+        return 0
+    return seconds * 1000
+
+fn drop_key(order: List[String], key: String) -> List[String]:
+    next: List[String] := []
+    for item in order:
+        if item != key:
+            next.push(item)
+    return next
+
+fn session_ticket_expired(entry: SessionTicketEntry) -> Bool:
+    if entry.lifetime_ms <= 0:
+        return true
+    return time.now() >= entry.issued_at_ms + entry.lifetime_ms
+
+fn cached_session_expired(entry: CachedSession) -> Bool:
+    if entry.expires_at_ms <= 0:
+        return true
+    return time.now() >= entry.expires_at_ms
+
+fn forget_server_ticket(ticket_key: String):
+    if native_server_session_tickets.contains_key(ticket_key):
+        native_server_session_tickets.remove(ticket_key)
+    native_server_session_ticket_order = drop_key(native_server_session_ticket_order, ticket_key)
+
+fn forget_client_cached_session(cache_key: String):
+    if native_client_session_cache.contains_key(cache_key):
+        native_client_session_cache.remove(cache_key)
+    native_client_session_cache_order = drop_key(native_client_session_cache_order, cache_key)
+
+fn remember_server_ticket(ticket_key: String, entry: SessionTicketEntry):
+    forget_server_ticket(ticket_key)
+    native_server_session_tickets.insert(ticket_key, entry)
+    native_server_session_ticket_order.push(ticket_key)
+    while native_server_session_ticket_order.len() > TLS_MAX_SERVER_SESSION_TICKETS:
+        oldest := native_server_session_ticket_order[0]
+        native_server_session_ticket_order = native_server_session_ticket_order.slice(1, native_server_session_ticket_order.len())
+        if native_server_session_tickets.contains_key(oldest):
+            native_server_session_tickets.remove(oldest)
+
+fn remember_client_cached_session(cache_key: String, session: CachedSession):
+    forget_client_cached_session(cache_key)
+    native_client_session_cache.insert(cache_key, session)
+    native_client_session_cache_order.push(cache_key)
+    while native_client_session_cache_order.len() > TLS_MAX_CLIENT_SESSION_CACHE:
+        oldest := native_client_session_cache_order[0]
+        native_client_session_cache_order = native_client_session_cache_order.slice(1, native_client_session_cache_order.len())
+        if native_client_session_cache.contains_key(oldest):
+            native_client_session_cache.remove(oldest)
 
 fn allocate_native_conn(stream: TcpStream, cipher: Int, read_keys: tls13.TrafficKeys, write_keys: tls13.TrafficKeys, read_seq: Int, write_seq: Int, alpn_protocol: String, did_resume: Bool, cache_key: String, resumption_master_secret: Bytes, peer_common_name: String, peer_dns_names: List[String], peer_ip_addresses: List[String]) -> Conn:
     handle := next_native_conn_handle
@@ -347,19 +408,22 @@ fn native_client_handshake(stream: TcpStream, server_name: String, config: Confi
     session_id := random.bytes(32)!
     alpn_protocols := config_alpn_protocols(config)
     mut cache_key := ""
-    mut cached_session := CachedSession(bytes.empty(), bytes.empty(), 0, "", "", [], [])
+    mut cached_session := CachedSession(bytes.empty(), bytes.empty(), 0, "", "", [], [], 0)
     mut offering_psk := false
     if config_resumption_enabled(config) and not config_has_client_certificate(config):
         cache_key = resume_cache_key(config, server_name)
         if native_client_session_cache.contains_key(cache_key):
             cached_session = native_client_session_cache[cache_key]
-            binder_input := tls13.client_hello_psk_binder_input(server_name, client_random, session_id, keypair.public_key, alpn_protocols, cached_session.ticket, 0)!
-            binder := tls13.resumption_binder_verify_data_sha256(cached_session.psk, binder_input)!
-            client_hello := tls13.encode_client_hello_with_options(server_name, client_random, session_id, keypair.public_key, alpn_protocols, cached_session.ticket, 0, binder)!
-            native_write_all(stream, tls13.encode_record(TLS_CONTENT_HANDSHAKE, client_hello)!)!
-            transcript := bytes.buffer()
-            transcript.write(client_hello)!
-            return native_client_handshake_after_client_hello(stream, server_name, config, keypair, cached_session, true, cache_key, transcript)
+            if cached_session_expired(cached_session):
+                forget_client_cached_session(cache_key)
+            else:
+                binder_input := tls13.client_hello_psk_binder_input(server_name, client_random, session_id, keypair.public_key, alpn_protocols, cached_session.ticket, 0)!
+                binder := tls13.resumption_binder_verify_data_sha256(cached_session.psk, binder_input)!
+                client_hello := tls13.encode_client_hello_with_options(server_name, client_random, session_id, keypair.public_key, alpn_protocols, cached_session.ticket, 0, binder)!
+                native_write_all(stream, tls13.encode_record(TLS_CONTENT_HANDSHAKE, client_hello)!)!
+                transcript := bytes.buffer()
+                transcript.write(client_hello)!
+                return native_client_handshake_after_client_hello(stream, server_name, config, keypair, cached_session, true, cache_key, transcript)
     client_hello := tls13.encode_client_hello_with_options(server_name, client_random, session_id, keypair.public_key, alpn_protocols, bytes.empty(), 0, bytes.empty())!
     native_write_all(stream, tls13.encode_record(TLS_CONTENT_HANDSHAKE, client_hello)!)!
     transcript := bytes.buffer()
@@ -524,7 +588,9 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
         ticket_key := server_ticket_key(client_hello.psk_identity)
         if native_server_session_tickets.contains_key(ticket_key):
             entry := native_server_session_tickets[ticket_key]
-            if entry.config_handle == config.handle and client_hello.cipher_suites.contains(entry.cipher) and entry.alpn_protocol == selected_alpn:
+            if session_ticket_expired(entry):
+                forget_server_ticket(ticket_key)
+            elif entry.config_handle == config.handle and client_hello.cipher_suites.contains(entry.cipher) and entry.alpn_protocol == selected_alpn:
                 expected_binder := tls13.resumption_binder_verify_data_sha256(entry.psk, client_hello.psk_binder_input)!
                 if bytes.eq(expected_binder, client_hello.psk_binder):
                     did_resume = true
@@ -644,7 +710,7 @@ fn native_server_handshake(stream: TcpStream, config: Config) -> Conn!:
         ticket := random.bytes(32)!
         resumption_master_secret := tls13.resumption_master_secret_sha256(master_secret, transcript.bytes())!
         ticket_psk := tls13.resumption_psk_sha256(resumption_master_secret, ticket_nonce)!
-        native_server_session_tickets.insert(server_ticket_key(ticket), SessionTicketEntry(config.handle, cipher, ticket_psk, selected_alpn))
+        remember_server_ticket(server_ticket_key(ticket), SessionTicketEntry(config.handle, cipher, ticket_psk, selected_alpn, time.now(), ttl_ms(TLS_SESSION_TICKET_LIFETIME)))
         ticket_message := tls13.encode_new_session_ticket(TLS_SESSION_TICKET_LIFETIME, 0, ticket_nonce, ticket)!
         ticket_record := seal_record_for_cipher(cipher, server_app_keys.key, server_app_keys.iv, 0, TLS_CONTENT_HANDSHAKE, ticket_message)!
         native_write_all(stream, ticket_record)!
@@ -694,8 +760,11 @@ fn native_conn_read_bytes(handle: Int, max_bytes: Int) -> Bytes!:
                     if cache_key == "":
                         continue
                     ticket_message := tls13.parse_new_session_ticket(message.body)!
+                    if ticket_message.ticket_lifetime <= 0:
+                        continue
                     psk := tls13.resumption_psk_sha256(native_conn_resumption_master_secret[handle], ticket_message.nonce)!
-                    native_client_session_cache.insert(cache_key, CachedSession(ticket_message.ticket, psk, cipher, native_conn_alpn[handle], native_conn_peer_common_name[handle], copy_string_list(native_conn_peer_dns_names[handle]), copy_string_list(native_conn_peer_ip_addresses[handle])))
+                    expires_at_ms := time.now() + ttl_ms(ticket_message.ticket_lifetime)
+                    remember_client_cached_session(cache_key, CachedSession(ticket_message.ticket, psk, cipher, native_conn_alpn[handle], native_conn_peer_common_name[handle], copy_string_list(native_conn_peer_dns_names[handle]), copy_string_list(native_conn_peer_ip_addresses[handle]), expires_at_ms))
             continue
         if inner.content_type == TLS_CONTENT_APPLICATION_DATA:
             payload := inner.payload
@@ -980,3 +1049,34 @@ test "tls wrappers reject invalid handles":
     assert(bad_listener.accept().is_err)
     bad_conn.close()
     bad_listener.close()
+
+test "tls cache helpers evict oldest and expire entries":
+    native_client_session_cache = {}
+    native_client_session_cache_order = []
+    native_server_session_tickets = {}
+    native_server_session_ticket_order = []
+
+    remember_client_cached_session("first", CachedSession(bytes.from_string_utf8("a"), bytes.from_string_utf8("psk-a"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", [], [], time.now() - 1))
+    assert(native_client_session_cache.contains_key("first"))
+    assert(cached_session_expired(native_client_session_cache["first"]))
+    forget_client_cached_session("first")
+
+    mut i := 0
+    while i < TLS_MAX_CLIENT_SESSION_CACHE + 1:
+        key := "client-" + i.to_string()
+        remember_client_cached_session(key, CachedSession(bytes.from_string_utf8(key), bytes.from_string_utf8("psk"), TLS_CIPHER_AES_128_GCM_SHA256, "forge", "", [], [], time.now() + 1000))
+        i = i + 1
+    assert_eq(native_client_session_cache_order.len(), TLS_MAX_CLIENT_SESSION_CACHE)
+    assert(not native_client_session_cache.contains_key("client-0"))
+
+    remember_server_ticket("expired", SessionTicketEntry(1, TLS_CIPHER_AES_128_GCM_SHA256, bytes.from_string_utf8("psk"), "forge", time.now() - 1000, 1))
+    assert(session_ticket_expired(native_server_session_tickets["expired"]))
+    forget_server_ticket("expired")
+
+    i = 0
+    while i < TLS_MAX_SERVER_SESSION_TICKETS + 1:
+        key := "server-" + i.to_string()
+        remember_server_ticket(key, SessionTicketEntry(1, TLS_CIPHER_AES_128_GCM_SHA256, bytes.from_string_utf8("psk"), "forge", time.now(), 1000))
+        i = i + 1
+    assert_eq(native_server_session_ticket_order.len(), TLS_MAX_SERVER_SESSION_TICKETS)
+    assert(not native_server_session_tickets.contains_key("server-0"))
