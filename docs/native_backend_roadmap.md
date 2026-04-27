@@ -15,15 +15,15 @@ policy.
 
 Source totals:
 
-- `self-host/*.fg`: about 22,450 lines
-- `std/**/*.fg`: about 10,690 lines
-- `cranelift/**/*.rs`: about 10,550 lines
+- `self-host/*.fg`: about 22,540 lines
+- `std/**/*.fg`: about 25,330 lines
+- `cranelift/**/*.rs`: about 10,650 tracked lines
 
 Rust breakdown:
 
 - runtime: 8,040 lines
-- codegen: 1,917 lines
-- CLI: 418 lines
+- codegen: 1,937 lines
+- CLI: 491 lines
 
 Largest Rust files:
 
@@ -234,13 +234,14 @@ The example corpus shows the biggest quality gaps directly.
 
 Observed frequency in `examples/*.fg`:
 
-- `print(...)`: 699
-- string concatenations with `+`: 615
-- `.to_string()`: 254
-- interpolation sites: 63
-- manual `while i < list.len()` loops: 36
+- `print(...)`: 785
+- string concatenations with `+`: 653
+- `.to_string()`: 165
+- interpolation sites: 291
+- manual `while i < list.len()` loops: 20
 
-Only one example imports `std.fmt`, while many examples build strings manually.
+Several examples now import `std.fmt`, but many examples still build strings
+manually.
 
 ### Highest-value language/library additions
 

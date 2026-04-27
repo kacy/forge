@@ -10,14 +10,15 @@ fn main() -> String!:
     sortable2 := uuid.v7_at(1645557742000)!
     parsed := uuid.parse(stable).ok
 
-    print("len: " + id1.len().to_string())
+    print("len: {id1.len()}")
     print("v4 version: " + id1[14])
-    print("v4 unique: " + (id1 != id2).to_string())
+    print("v4 unique: {id1 != id2}")
     print("v5 dns: " + stable)
     print("v7 version: " + sortable1[14])
-    print("v7 ordered: " + (sortable1 < sortable2).to_string())
-    print("parse version: " + parsed.version().to_string())
-    print("valid upper: " + uuid.is_valid("2ED6657D-E927-568B-95E1-2665A8AEA6A2").to_string())
-    print("nil version: " + uuid.nil().version().to_string())
-    print("max is max: " + uuid.max().is_max().to_string())
+    print("v7 ordered: {sortable1 < sortable2}")
+    print("parse version: {parsed.version()}")
+    valid_upper := uuid.is_valid("2ED6657D-E927-568B-95E1-2665A8AEA6A2")
+    print("valid upper: {valid_upper}")
+    print("nil version: {uuid.nil().version()}")
+    print("max is max: {uuid.max().is_max()}")
     print("uuid ops work")

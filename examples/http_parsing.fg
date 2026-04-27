@@ -36,7 +36,7 @@ fn parse_request(raw: String) -> Request:
     return Request(method, path, version, body, hdr_count)
 
 fn respond(status: Int, body: String) -> String:
-    return "HTTP/1.1 " + status.to_string() + " OK" + chr(10) + body
+    return "HTTP/1.1 {status} OK" + chr(10) + body
 
 fn main():
     # parse a GET request
@@ -45,7 +45,7 @@ fn main():
     req := parse_request(raw)
     print("method: " + req.method)
     print("path: " + req.path)
-    print("headers: " + req.header_count.to_string())
+    print("headers: {req.header_count}")
 
     # parse a POST with body
     raw2 := "POST /login HTTP/1.1" + nl + "Content-Type: json" + nl + nl + "hello body"
@@ -55,6 +55,7 @@ fn main():
 
     # build response
     resp := respond(200, "hello")
-    print("has 200: " + resp.contains("200").to_string())
+    has_status := resp.contains("200")
+    print("has 200: {has_status}")
 
     print("http parsing works")

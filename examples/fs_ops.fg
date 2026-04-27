@@ -18,7 +18,8 @@ fn do_test() -> String!:
     # check existence
     print("exists: {fs.exists(text_path)}")
     print("is_dir: {fs.is_dir(text_path)}")
-    print("is_dir /tmp: " + fs.is_dir("/tmp").to_string())
+    tmp_is_dir := fs.is_dir("/tmp")
+    print("is_dir /tmp: {tmp_is_dir}")
 
     # read it back with the whole-file helper
     content := fs.read(text_path)!
@@ -32,7 +33,8 @@ fn do_test() -> String!:
 
     # list directory
     entries := fs.list("/tmp")
-    print("tmp has entries: " + (entries.len() > 0).to_string())
+    tmp_has_entries := entries.len() > 0
+    print("tmp has entries: {tmp_has_entries}")
 
     # copy into a sibling directory and inspect the file
     fs.make_dirs(copy_root)
@@ -53,7 +55,8 @@ fn do_test() -> String!:
 
     # clean up
     fs.remove_tree(root)
-    print("removed: " + (fs.exists(root) == false).to_string())
+    removed := fs.exists(root) == false
+    print("removed: {removed}")
     return ""
 
 fn main() -> String!:

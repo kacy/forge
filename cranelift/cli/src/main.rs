@@ -62,7 +62,7 @@ fn main() {
             println!("Forge Cranelift Compiler v0.2.1");
             println!("Using IR path: source → ir_emitter.fg → ir_consumer.rs → native");
         }
-        "fmt" | "lint" | "doc" | "new" => {
+        "fmt" | "lint" | "doc" | "new" | "package" => {
             delegate_to_frontend(&args[1..]);
         }
         "help" | "--help" | "-h" => {
@@ -87,6 +87,7 @@ fn print_usage() {
     println!("  fmt [args...]      Format source files");
     println!("  lint [args...]     Lint source files");
     println!("  doc [args...]      Generate or search documentation");
+    println!("  package [args...]  Run package-level check/test/lint/doc");
     println!("  new [args...]      Create a new project");
     println!("  parse <file.fg>    Parse and display AST");
     println!("  lex <file.fg>      Tokenize and display token stream");
@@ -462,13 +463,27 @@ fn delegate_to_frontend(args: &[String]) {
         }
     };
 
-    let status = Command::new(&compiler)
-        .args(args)
-        .status()
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to run self-hosted compiler: {}", e);
-            std::process::exit(1);
-        });
+    let mut command = Command::new(&compiler);
+    command.args(args);
+    if let Ok(current_exe) = env::current_exe() {
+        if env::var("FORGE_IR_DRIVER").is_err() {
+            if let Some(root) = current_exe
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+            {
+                let ir_driver = root.join("self-host").join("ir_driver");
+                if ir_driver.exists() {
+                    command.env("FORGE_IR_DRIVER", ir_driver);
+                }
+            }
+        }
+        command.env("FORGE_NATIVE", current_exe);
+    }
+    let status = command.status().unwrap_or_else(|e| {
+        eprintln!("Failed to run self-hosted compiler: {}", e);
+        std::process::exit(1);
+    });
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));

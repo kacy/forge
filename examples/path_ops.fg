@@ -7,7 +7,8 @@ fn main():
     print(joined)
     print(path.join_all(["/home", "user", "documents", "notes.txt"]))
     print(path.clean("/home/user//docs/../downloads/"))
-    print(path.is_abs("/home/user").to_string())
+    home_is_abs := path.is_abs("/home/user")
+    print(home_is_abs.to_string())
 
     # dir
     directory_path := path.dir("/home/user/file.txt")

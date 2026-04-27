@@ -198,6 +198,10 @@ forge doc <file>               # generate documentation
 forge doc --json <file>        # machine-readable doc output
 forge doc --check <file>       # verify all public items documented
 forge doc search <query>       # search stdlib by keyword
+forge package check            # type check package root from forge.toml
+forge package test             # run package root tests
+forge package lint             # lint package root
+forge package doc              # generate package root documentation
 forge version                  # print version
 forge help                     # print usage
 ```
@@ -210,6 +214,7 @@ make self-host             # compile the self-hosted compiler via Cranelift
 make bootstrap-verify      # verify Cranelift-compiled compiler works on all examples
 make run-examples          # run the browseable deterministic examples
 make run-regressions       # run deterministic regression cases
+make status-audit          # print current corpus and source-size metrics
 make test                  # run the full native + self-hosted test suite
 make clean                 # remove build artifacts
 ```
@@ -224,7 +229,7 @@ the upstream submission checklist.
 ## project layout
 
 ```
-self-host/             compiler frontend — written in forge (~18,800 lines)
+self-host/             compiler frontend — written in forge (~22,540 lines)
   forge_main.fg      CLI — check/fmt/lint/lex/parse/doc
   driver.fg          import resolution pipeline
   lexer.fg           tokenizer with indentation tracking
@@ -239,12 +244,12 @@ self-host/             compiler frontend — written in forge (~18,800 lines)
   errors.fg          human-readable error rendering
   docgen.fg          documentation generator and search
 
-cranelift/             native code backend — Rust + Cranelift (~10,500 lines)
+cranelift/             native code backend — Rust + Cranelift (~10,650 tracked lines)
   cli/               CLI entry point (build/run/test + delegates to self-host)
   codegen/           AST-to-IR compilation, monomorphization, type inference
   runtime/           runtime library (ARC, collections, JSON, TOML, URL, concurrency, crypto)
 
-std/                 standard library (58 native forge modules)
+std/                 standard library (58 native forge modules, ~25,300 lines)
   cli.fg             command-line parsing helpers
   diagnostic.fg      reusable diagnostics for tools
   encoding.fg        base64/hex encoding
@@ -276,7 +281,7 @@ tests/               regression and negative compiler fixtures
   invalid/           checker-invalid programs + expected error codes
   invalid_parse/     parser-invalid programs + expected error codes
 
-examples/            91 tracked .fg programs, including deterministic demos and live networking examples
+examples/            89 tracked .fg programs, including deterministic demos and live networking examples
 docs/grammar.ebnf    complete EBNF for the language
 docs/errors.md       error code reference (E0xx–E3xx)
 docs/architecture.md compiler and ownership overview

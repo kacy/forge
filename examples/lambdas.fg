@@ -22,6 +22,7 @@ fn main():
     # closure stored in a binding
     offset := 100
     add_offset := fn(x: Int) => x + offset
-    print(apply(42, add_offset).to_string())
+    offset_result := apply(42, add_offset)
+    print(offset_result.to_string())
 
     print("lambdas work")

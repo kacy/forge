@@ -26,10 +26,13 @@ fn wrap_parse_error(err: ParseError) -> Int!AppError:
     fail AppError{"config: " + err.message}
 
 fn main() -> Int!:
-    print(divide(10, 2).unwrap_or(0).to_string())
-    print((divide(10, 0) catch 99).to_string())
+    good_divide := divide(10, 2).unwrap_or(0)
+    fallback_divide := divide(10, 0) catch 99
+    required_port := require_port("8080") catch 0
 
-    print((require_port("8080") catch 0).to_string())
+    print(good_divide.to_string())
+    print(fallback_divide.to_string())
+    print(required_port.to_string())
 
     bad := parse_port("nope")
     print(bad.is_err.to_string())

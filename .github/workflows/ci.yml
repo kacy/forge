@@ -33,6 +33,9 @@ jobs:
       - name: run examples (self-hosted)
         run: make run-examples-self
 
+      - name: native parity examples
+        run: make parity-examples-only
+
       - name: verify bootstrap fixed point
         run: make bootstrap-verify
 

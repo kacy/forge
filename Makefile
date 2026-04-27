@@ -1,4 +1,4 @@
-.PHONY: build self-host self-host-ir-driver bootstrap bootstrap-verify bootstrap-ir-checks bootstrap-ir-checks-only bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test-std-self test-std-self-only test-self-host-only test-fast-self test clean
+.PHONY: build self-host self-host-ir-driver bootstrap bootstrap-verify bootstrap-ir-checks bootstrap-ir-checks-only bootstrap-ir-fixed-point bootstrap-ir-fixed-point-only bootstrap-ir-invariants bootstrap-ir-invariants-only run-examples run-examples-self run-examples-self-only run-regressions run-regressions-only run-regressions-self run-regressions-self-only run-live-websocket-tests run-live-websocket-tests-self-only parity-examples parity-examples-only check-parse-invalid check-parse-invalid-only check-parse-invalid-self-host check-parse-invalid-self-host-only check-invalid check-invalid-only check-invalid-self-host check-invalid-self-host-only cli-regressions cli-regressions-only cli-regressions-self cli-regressions-self-only ir-contract-regressions ir-contract-regressions-only test-std-self test-std-self-only test-self-host-only test-fast-self status-audit test clean
 
 NONDETERMINISTIC_EXAMPLES := net_basics net_echo
 EXPECTED_EXAMPLES := $(filter-out $(addprefix examples/expected/,$(addsuffix .txt,$(NONDETERMINISTIC_EXAMPLES))),$(wildcard examples/expected/*.txt))
@@ -29,6 +29,10 @@ PARITY_EXAMPLES := \
 	generics \
 	lambdas \
 	error_handling \
+	json_ops \
+	toml_ops \
+	http_parsing \
+	uuid_ops \
 	matrix_math \
 	self_host_patterns \
 	wildcard_import
@@ -407,6 +411,17 @@ parity-examples-only:
 	echo "$$pass passed, $$fail failed"; \
 	if [ $$fail -gt 0 ]; then exit 1; fi; \
 	echo "all parity examples passed"
+
+status-audit:
+	@echo "examples: $$(find examples -maxdepth 1 -name '*.fg' | wc -l)"
+	@echo "deterministic snapshots: $$(find examples/expected -name '*.txt' | wc -l)"
+	@echo "regression snapshots: $$(find tests/expected -name '*.txt' | wc -l)"
+	@echo "std modules: $$(find std -name '*.fg' | wc -l)"
+	@echo "self-host forge lines: $$(git ls-files 'self-host/*.fg' | xargs wc -l | tail -1 | awk '{print $$1}')"
+	@echo "std forge lines: $$(git ls-files 'std/**/*.fg' 'std/*.fg' | xargs wc -l | tail -1 | awk '{print $$1}')"
+	@echo "tracked cranelift rust lines: $$(git ls-files 'cranelift/**/*.rs' | xargs wc -l | tail -1 | awk '{print $$1}')"
+	@echo "example .to_string() sites: $$(rg -o '\.to_string\(' examples -g '*.fg' | wc -l)"
+	@echo "example manual length loops: $$(rg 'while .*< .*\.len\(\)' examples -g '*.fg' | wc -l)"
 
 check-parse-invalid: build check-parse-invalid-only
 
