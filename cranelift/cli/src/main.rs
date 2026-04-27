@@ -59,7 +59,7 @@ fn main() {
             lex_file(&args[2]);
         }
         "version" => {
-            println!("Forge Cranelift Compiler v0.2.1");
+            println!("Forge Cranelift Compiler v0.2.2");
             println!("Using IR path: source → ir_emitter.fg → ir_consumer.rs → native");
         }
         "fmt" | "lint" | "doc" | "new" | "package" => {
