@@ -13,7 +13,10 @@
 from std.io import ProcessStdin, ProcessStdout, ProcessStderr
 from std.concurrent import Context, BlockingError, WaitError, blocking_failed, blocking_from_wait
 from std.collections import copy_list
+import std.bytes as bytes
 import std.time as time
+
+PROCESS_IO_CHUNK_SIZE := 4096
 
 # a process command builder with argv, cwd, and env overrides.
 pub struct Command:
@@ -125,6 +128,33 @@ fn await_output_or_fail(process: Process, task: Task[String!]) -> String!Blockin
         fail blocking_failed(result.err)
     return result.ok
 
+fn process_write_all(writer: ProcessStdin, data: String) -> Int!:
+    mut total := 0
+    mut remaining := data
+    while remaining.len() > 0:
+        wrote := writer.write(remaining)!
+        if wrote <= 0:
+            fail "write returned 0"
+        total = total + wrote
+        remaining = remaining.substring(wrote, remaining.len())
+    return total
+
+fn process_read_all_stdout(reader: ProcessStdout) -> String!:
+    mut out := ""
+    mut chunk := reader.read(PROCESS_IO_CHUNK_SIZE)!
+    while chunk.len() > 0:
+        out = out + chunk
+        chunk = reader.read(PROCESS_IO_CHUNK_SIZE)!
+    return out
+
+fn process_read_all_stderr(reader: ProcessStderr) -> String!:
+    mut out := ""
+    mut chunk := reader.read(PROCESS_IO_CHUNK_SIZE)!
+    while chunk.len() > 0:
+        out = out + chunk
+        chunk = reader.read(PROCESS_IO_CHUNK_SIZE)!
+    return out
+
 # waits for a process while respecting cancellation and deadlines.
 pub fn wait_ctx(process: Process, ctx: Context) -> Int!WaitError:
     task := spawn wait_worker(process)
@@ -224,6 +254,27 @@ impl Process:
 
     fn close():
         process_close(self.handle)
+
+impl ProcessStdin:
+    fn write(data: String) -> Int!:
+        return process_write_bytes(self.handle, bytes.from_string_utf8(data))!
+
+    fn write_all(data: String) -> Int!:
+        return process_write_all(self, data)
+
+impl ProcessStdout:
+    fn read(max_bytes: Int) -> String!:
+        return process_read_bytes(self.handle, max_bytes)!.to_string_utf8()!
+
+    fn read_all() -> String!:
+        return process_read_all_stdout(self)
+
+impl ProcessStderr:
+    fn read(max_bytes: Int) -> String!:
+        return process_read_err_bytes(self.handle, max_bytes)!.to_string_utf8()!
+
+    fn read_all() -> String!:
+        return process_read_all_stderr(self)
 
 impl Output:
     fn success() -> Bool:
