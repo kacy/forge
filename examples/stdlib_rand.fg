@@ -1,13 +1,6 @@
 # test std.rand — random numbers, shuffle, choice, sample
+import std.fmt as fmt
 from std.rand import seed, int, shuffle, choice, sample, roll, chance
-
-fn list_str(list: List[Int]) -> String:
-    mut parts: List[String] := []
-    mut i := 0
-    while i < list.len():
-        parts.push(list[i].to_string())
-        i = i + 1
-    return "[" + parts.join(", ") + "]"
 
 fn main():
     seed(42)
@@ -28,7 +21,7 @@ fn main():
     # shuffle
     nums := [1, 2, 3, 4, 5]
     shuffled := shuffle(nums)
-    print("shuffled: " + list_str(shuffled))
+    print("shuffled: " + fmt.ints(shuffled))
     # verify same elements
     mut sum_orig := 0
     mut sum_shuf := 0
@@ -42,7 +35,7 @@ fn main():
 
     # sample
     s := sample([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)
-    print("sample 3: " + list_str(s))
+    print("sample 3: " + fmt.ints(s))
 
     # chance
     seed(42)

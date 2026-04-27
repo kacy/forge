@@ -1,61 +1,46 @@
 # test std.algo (sorting, searching) + std.collections (utilities)
+import std.fmt as fmt
 from std.algo import sort, sort_desc, sort_strings, binary_search
 from std.collections import sum, min_of, max_of, reversed, product
 from std.collections import unique, without, intersection, difference
 from std.collections import slice, flatten, chunks, is_sorted, count
 from std.collections import take, drop, has, zip, enumerate, index_of
 
-fn list_str(list: List[Int]) -> String:
-    mut parts: List[String] := []
-    mut i := 0
-    while i < list.len():
-        parts.push(list[i].to_string())
-        i = i + 1
-    return "[" + parts.join(", ") + "]"
-
-fn nested_str(lists: List[List[Int]]) -> String:
-    mut parts: List[String] := []
-    mut i := 0
-    while i < lists.len():
-        parts.push(list_str(lists[i]))
-        i = i + 1
-    return "[" + parts.join(", ") + "]"
-
 fn main():
     # sorting
-    print("sort: " + list_str(sort([3, 1, 4, 1, 5, 9, 2, 6])))
-    print("sort_desc: " + list_str(sort_desc([3, 1, 4, 1, 5])))
+    print("sort: " + fmt.ints(sort([3, 1, 4, 1, 5, 9, 2, 6])))
+    print("sort_desc: " + fmt.ints(sort_desc([3, 1, 4, 1, 5])))
     print("sort_strings: " + sort_strings(["banana", "apple", "cherry"]).join(", "))
 
     # searching
     sorted := sort([10, 30, 20, 40, 50])
-    print("binary_search 30: " + binary_search(sorted, 30).to_string())
-    print("binary_search 99: " + binary_search(sorted, 99).to_string())
-    print("index_of 20: " + index_of([10, 20, 30], 20).to_string())
+    print("binary_search 30: {binary_search(sorted, 30)}")
+    print("binary_search 99: {binary_search(sorted, 99)}")
+    print("index_of 20: {index_of([10, 20, 30], 20)}")
 
     # dedup and filtering
-    print("unique: " + list_str(unique([1, 1, 2, 2, 3, 3, 3])))
-    print("without 2: " + list_str(without([1, 2, 3, 2, 4], 2)))
-    print("intersection: " + list_str(intersection([1, 2, 3, 4], [2, 4, 6])))
-    print("difference: " + list_str(difference([1, 2, 3, 4], [2, 4])))
+    print("unique: " + fmt.ints(unique([1, 1, 2, 2, 3, 3, 3])))
+    print("without 2: " + fmt.ints(without([1, 2, 3, 2, 4], 2)))
+    print("intersection: " + fmt.ints(intersection([1, 2, 3, 4], [2, 4, 6])))
+    print("difference: " + fmt.ints(difference([1, 2, 3, 4], [2, 4])))
 
     # transformation
-    print("reverse: " + list_str(reversed([1, 2, 3, 4, 5])))
-    print("slice 1..4: " + list_str(slice([10, 20, 30, 40, 50], 1, 4)))
-    print("take 3: " + list_str(take([10, 20, 30, 40, 50], 3)))
-    print("drop 2: " + list_str(drop([10, 20, 30, 40, 50], 2)))
-    print("flatten: " + list_str([1, 2, 3, 4, 5, 6]))
-    print("chunks: " + nested_str(chunks([1, 2, 3, 4, 5], 2)))
+    print("reverse: " + fmt.ints(reversed([1, 2, 3, 4, 5])))
+    print("slice 1..4: " + fmt.ints(slice([10, 20, 30, 40, 50], 1, 4)))
+    print("take 3: " + fmt.ints(take([10, 20, 30, 40, 50], 3)))
+    print("drop 2: " + fmt.ints(drop([10, 20, 30, 40, 50], 2)))
+    print("flatten: " + fmt.ints([1, 2, 3, 4, 5, 6]))
+    print("chunks: " + fmt.nested_ints(chunks([1, 2, 3, 4, 5], 2)))
 
     # combining
     print("zip: " + zip([1, 2, 3], [10, 20, 30]).join(", "))
     print("enumerate: " + enumerate([10, 20, 30]).join(", "))
 
     # aggregation
-    print("sum: " + sum([1, 2, 3, 4, 5]).to_string())
-    print("product: " + product([2, 3, 4]).to_string())
-    print("min: " + min_of([5, 2, 8, 1, 9]).to_string())
-    print("max: " + max_of([5, 2, 8, 1, 9]).to_string())
+    print("sum: {sum([1, 2, 3, 4, 5])}")
+    print("product: {product([2, 3, 4])}")
+    print("min: {min_of([5, 2, 8, 1, 9])}")
+    print("max: {max_of([5, 2, 8, 1, 9])}")
 
     # queries
     if has([1, 2, 3], 2):
@@ -64,6 +49,6 @@ fn main():
         print("is_sorted [1,2,3]: true")
     if not is_sorted([3, 1, 2]):
         print("is_sorted [3,1,2]: false")
-    print("count 2: " + count([1, 2, 2, 3, 2], 2).to_string())
+    print("count 2: {count([1, 2, 2, 3, 2], 2)}")
 
     print("algo tests passed")

@@ -1,47 +1,41 @@
 # higher-order functions — map, filter, reduce with builtin support
 # exercises: lambdas, closures, function composition, chaining
 
+import std.fmt as fmt
+
 fn apply_twice(x: Int, f: fn(Int) -> Int) -> Int:
     return f(f(x))
-
-fn list_to_str(items: List[Int]) -> String:
-    mut parts: List[String] := []
-    mut i := 0
-    while i < items.len():
-        parts.push(items[i].to_string())
-        i = i + 1
-    return "[" + parts.join(", ") + "]"
 
 fn main():
     nums := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     # map: transform each element
     doubled := map(nums, fn(x: Int) => x * 2)
-    print("doubled: " + list_to_str(doubled))
+    print("doubled: " + fmt.ints(doubled))
 
     squared := map(nums, fn(x: Int) => x * x)
-    print("squared: " + list_to_str(squared))
+    print("squared: " + fmt.ints(squared))
 
     # filter: keep elements matching predicate (non-zero = keep)
     evens := filter(nums, fn(x: Int) => 1 - (x % 2))
-    print("evens: " + list_to_str(evens))
+    print("evens: " + fmt.ints(evens))
 
     big := filter(nums, fn(x: Int) => x / 6)
-    print("big (>5): " + list_to_str(big))
+    print("big (>5): " + fmt.ints(big))
 
     # reduce: fold into single value
     total := reduce(nums, 0, fn(acc: Int, x: Int) => acc + x)
-    print("sum: " + total.to_string())
+    print("sum: {total}")
 
     sum_sq := reduce(map(nums, fn(x: Int) => x * x), 0, fn(acc: Int, x: Int) => acc + x)
-    print("sum of squares: " + sum_sq.to_string())
+    print("sum of squares: {sum_sq}")
 
     # apply_twice: function composition
     result := apply_twice(3, fn(x: Int) => x * 2 + 1)
-    print("apply_twice(3, 2x+1): " + result.to_string())
+    print("apply_twice(3, 2x+1): {result}")
 
     # chain: filter then map
     big_doubled := map(filter(nums, fn(x: Int) => x / 6), fn(x: Int) => x * 2)
-    print("big doubled: " + list_to_str(big_doubled))
+    print("big doubled: " + fmt.ints(big_doubled))
 
     print("higher order works")

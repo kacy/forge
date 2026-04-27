@@ -1,4 +1,5 @@
 # stdlib collection utilities via import
+import std.fmt as fmt
 from std.collections import range, sum, max_of, min_of, reversed
 from std.collections import copy_list, group_by, count_by, set_union
 from std.collections import any, find, sort_by_key, min_by, max_by
@@ -9,23 +10,13 @@ struct Player:
 
 fn main():
     r := range(1, 6)
-    mut strs: List[String] := []
-    mut i := 0
-    while i < r.len():
-        strs.push(r[i].to_string())
-        i = i + 1
-    print("range: " + strs.join(", "))
-    print("sum: " + sum(r).to_string())
-    print("max: " + max_of(r).to_string())
-    print("min: " + min_of(r).to_string())
+    print("range: " + fmt.join_ints(r, ", "))
+    print("sum: {sum(r)}")
+    print("max: {max_of(r)}")
+    print("min: {min_of(r)}")
 
     rev := reversed(r)
-    mut rev_strs: List[String] := []
-    i = 0
-    while i < rev.len():
-        rev_strs.push(rev[i].to_string())
-        i = i + 1
-    print("reversed: " + rev_strs.join(", "))
+    print("reversed: " + fmt.join_ints(rev, ", "))
 
     nums_copy := copy_list(r)
     nums_copy.push(6)

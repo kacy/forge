@@ -1,29 +1,23 @@
 # functional list operations — map, filter, reduce with lambdas
 
-fn list_str(list: List[Int]) -> String:
-    mut parts: List[String] := []
-    mut i := 0
-    while i < list.len():
-        parts.push(list[i].to_string())
-        i = i + 1
-    return "[" + parts.join(", ") + "]"
+import std.fmt as fmt
 
 fn main():
     nums := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     # map: transform each element
     doubled := map(nums, fn(x: Int) => x * 2)
-    print("doubled: " + list_str(doubled))
+    print("doubled: " + fmt.ints(doubled))
 
     squared := map(nums, fn(x: Int) => x * x)
-    print("squared: " + list_str(squared))
+    print("squared: " + fmt.ints(squared))
 
     # filter: keep elements matching predicate
     evens := filter(nums, fn(x: Int) => 1 - (x % 2))
-    print("evens: " + list_str(evens))
+    print("evens: " + fmt.ints(evens))
 
     big := filter(nums, fn(x: Int) => x / 6)
-    print("big (>5): " + list_str(big))
+    print("big (>5): " + fmt.ints(big))
 
     # reduce: fold into single value
     total := reduce(nums, 0, fn(acc: Int, x: Int) => acc + x)
@@ -35,7 +29,7 @@ fn main():
 
     # chaining: filter then map
     big_doubled := map(filter(nums, fn(x: Int) => x / 6), fn(x: Int) => x * 2)
-    print("big doubled: " + list_str(big_doubled))
+    print("big doubled: " + fmt.ints(big_doubled))
 
     # map.get_default for counters
     mut counts: Map[String, Int] := {}

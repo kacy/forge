@@ -1,4 +1,4 @@
-# std.fmt — number formatting and lightweight templates
+# std.fmt — number formatting, display helpers, and lightweight templates
 #
 # use interpolation for one-off value printing:
 #   print("count: {items.len()}")
@@ -9,6 +9,7 @@
 #
 # format integers as hexadecimal, octal, or binary strings.
 # format floats with a fixed number of decimal places.
+# display small lists and grids without local helper functions.
 # fill `{}` placeholders with string values.
 
 # ===============================================================
@@ -52,6 +53,50 @@ pub fn bin(n: Int) -> String:
 # Example: float_fixed(3.14159, 2) -> "3.14"
 pub fn float_fixed(n: Float, decimals: Int) -> String:
     return fmt_float(n, decimals)
+
+# ===============================================================
+# Display Helpers
+# ===============================================================
+
+# join integers with the provided separator.
+pub fn join_ints(values: List[Int], sep: String) -> String:
+    mut parts: List[String] := []
+    for value in values:
+        parts.push(value.to_string())
+    return parts.join(sep)
+
+# render integers as a bracketed list.
+pub fn ints(values: List[Int]) -> String:
+    return "[" + join_ints(values, ", ") + "]"
+
+# join strings with the provided separator.
+pub fn join_strings(values: List[String], sep: String) -> String:
+    return values.join(sep)
+
+# render strings as a bracketed list.
+pub fn strings(values: List[String]) -> String:
+    return "[" + join_strings(values, ", ") + "]"
+
+# render nested integer lists as bracketed lists.
+pub fn nested_ints(values: List[List[Int]]) -> String:
+    mut parts: List[String] := []
+    for value in values:
+        parts.push(ints(value))
+    return "[" + parts.join(", ") + "]"
+
+# render a flat integer grid, row-major.
+pub fn int_grid(values: List[Int], rows: Int, cols: Int) -> String:
+    mut row_parts: List[String] := []
+    mut r := 0
+    while r < rows:
+        mut col_parts: List[String] := []
+        mut c := 0
+        while c < cols:
+            col_parts.push(values[r * cols + c].to_string())
+            c = c + 1
+        row_parts.push(col_parts.join(" "))
+        r = r + 1
+    return row_parts.join("; ")
 
 # ===============================================================
 # String Formatting
@@ -120,6 +165,13 @@ test "integer formatters render common bases":
     assert_eq(hex(-16), "-10")
     assert_eq(oct(64), "100")
     assert_eq(bin(5), "101")
+
+test "display helpers render common collection shapes":
+    assert_eq(join_ints([1, 2, 3], ", "), "1, 2, 3")
+    assert_eq(ints([1, 2, 3]), "[1, 2, 3]")
+    assert_eq(strings(["red", "blue"]), "[red, blue]")
+    assert_eq(nested_ints([[1, 2], [3]]), "[[1, 2], [3]]")
+    assert_eq(int_grid([1, 2, 3, 4], 2, 2), "1 2; 3 4")
 
 test "format fills placeholders in order":
     slot := chr(123) + chr(125)
