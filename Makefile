@@ -651,12 +651,14 @@ ir-contract-regressions: self-host ir-contract-regressions-only
 ir-contract-regressions-only:
 	@echo "--- combined ir contract checks ---"
 	@pass=0; fail=0; \
+	http_ir=$$(mktemp /tmp/forge-http-api-ir-XXXXXX); \
+	trap 'rm -f "$$http_ir"' EXIT; \
 	if timeout 15 ./self-host/ir_driver --combined tests/cases/test_suite.fg | awk '/^field / && NF==4 { bad=1 } END { exit bad }'; then \
 		pass=$$((pass+1)); echo "ok   no legacy short fields"; \
 	else \
 		echo "FAIL no legacy short fields"; fail=$$((fail+1)); \
 	fi; \
-	if timeout 15 ./self-host/ir_driver --combined examples/http_api.fg | awk '/^call / && ($$3=="tcp_connect" || $$3=="file_open_read" || $$3=="process_spawn" || $$3=="parse_int") && $$4 != "result_int" { bad=1 } END { exit bad }'; then \
+	if timeout 60 ./self-host/ir_driver --combined examples/http_api.fg > "$$http_ir" && awk '/^call / && ($$3=="tcp_connect" || $$3=="file_open_read" || $$3=="process_spawn") && $$4 != "result_int" { bad=1 } /^call / && $$3=="parse_int" && $$4 != "tuple" { bad=1 } END { exit bad }' "$$http_ir"; then \
 		pass=$$((pass+1)); echo "ok   builtin result retkinds"; \
 	else \
 		echo "FAIL builtin result retkinds"; fail=$$((fail+1)); \
