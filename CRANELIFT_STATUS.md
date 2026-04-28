@@ -58,8 +58,8 @@ Pith rather than Rust.
 - `pith version`, `lex`, `parse`, `check` — all work
 - `pith build` / `pith run` — compiles and executes the tracked example suite
 - `std.net.tls` now owns both client and server TLS 1.3 handshakes in Pith
-- Fixed-point reached: C output is byte-for-byte identical whether the
-  compiler was compiled via C transpilation or Cranelift (837,451 bytes)
+- Fixed-point reached: the self-hosted frontend and Cranelift backend rebuild
+  the compiler and pass the tracked example, stdlib, and regression suites
 
 ## Building
 

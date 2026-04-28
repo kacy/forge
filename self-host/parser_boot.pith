@@ -1,7 +1,7 @@
 # parser.pith — recursive descent parser for pith
 #
 # consumes a token list from the lexer and builds an arena-indexed AST.
-# port of src/parser.zig to pith.
+# compact parser variant kept for bootstrap/debug probes.
 #
 # usage: import from parse_main.pith or call parse() directly
 

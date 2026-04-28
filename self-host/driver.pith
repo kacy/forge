@@ -1,7 +1,7 @@
 # driver.pith - shared utilities for self-hosted compiler entry points
 #
 # provides path helpers, import resolution, and the compile pipeline
-# used by both codegen_main.pith and pith_main.pith.
+# used by pith_main.pith and the IR driver.
 
 from lexer import lex_all
 from parser import parse, parse_with_file, parser_diagnostics, parser_has_errors
@@ -80,7 +80,7 @@ mut visited_files: Map[String, Bool] := {}
 # tracks files currently being processed to detect circular imports.
 mut files_being_checked: Map[String, Bool] := {}
 
-# stdlib root - set by compile_to_c before resolving imports
+# stdlib root - set before resolving imports
 mut stdlib_root_directory: String := ""
 mut driver_parse_diagnostics: List[Diagnostic] := []
 mut resolved_module_paths: Map[Int, String] := {}
@@ -204,8 +204,8 @@ pub fn get_resolved_module_file(root_idx: Int) -> String:
         return resolved_module_files[root_idx]
     return ""
 
-# run the full compile pipeline: lex, parse, resolve imports, check, codegen.
-# compile_to_c removed — compilation is now handled by the Cranelift native backend.
+# run the frontend pipeline: lex, parse, resolve imports, and check.
+# native compilation is handled by the IR driver and Cranelift backend.
 # the self-hosted compiler provides the frontend: lex, parse, check, fmt, lint, doc.
 
 # Import alias tracking for module namespaces

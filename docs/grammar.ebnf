@@ -17,7 +17,7 @@
 (*   lexer    — complete                                               *)
 (*   parser   — complete                                               *)
 (*   checker  — complete                                               *)
-(*   codegen  — C transpilation (pith build / pith run)              *)
+(*   codegen  — Pith IR emission plus Cranelift native backend        *)
 
 (* ------------------------------------------------------------------ *)
 (* 1. lexical rules                                                    *)

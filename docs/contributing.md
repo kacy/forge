@@ -2,17 +2,18 @@
 
 ## minimum setup
 
-- install zig 0.15.2
+- install rust/cargo
+- install a C toolchain with `gcc`
 - work from the repo root
 - prefer the self-hosted compiler for feature work
-- keep the zig bootstrap healthy because it is the safest refactor harness
+- keep the Cranelift backend and self-hosted frontend healthy together
 
 ## development loop
 
 the smallest useful validation loop is:
 
 ```
-zig build test
+cargo test -p pith-cli
 ./self-host/pith_main check <file>
 make run-examples-self
 make run-regressions-self
@@ -28,8 +29,8 @@ make self-host
 recommended smoke loop for this repo:
 
 ```
-zig build test
-zig build run -- check examples/hello.pith
+cargo build --release
+./target/release/pith run examples/hello.pith
 make self-host
 ./self-host/pith_main check examples/hello.pith
 make run-examples-self
@@ -60,20 +61,19 @@ make bootstrap
 
 ## where to work
 
-- CLI and bootstrap orchestration: `bootstrap/main.zig`, `bootstrap/cli/`, `bootstrap/pipeline.zig`
-- bootstrap semantic logic: `bootstrap/checker.zig`
-- bootstrap code generation: `bootstrap/codegen.zig`
+- native backend CLI: `cranelift/cli/src/main.rs`
+- IR lowering and native code generation: `cranelift/codegen/src/`
 - self-hosted implementation: `self-host/`
-- runtime support: `runtime/pith_runtime.h`
+- runtime support: `cranelift/runtime/src/`
 - native tls and higher-level protocol work: `std/net/tls.pith`, `std/net/tls13.pith`, `std/net/http.pith`, `std/net/websocket.pith`
 - language and diagnostic docs: `docs/`
 
 ## common validation commands
 
 ```
-zig fmt --check build.zig bootstrap/*.zig bootstrap/cli/*.zig
-zig build test
-zig build run -- check examples/hello.pith
+cargo test -p pith-cli
+cargo build --release
+./target/release/pith run examples/hello.pith
 make self-host
 ./self-host/pith_main run examples/hello.pith
 make run-examples-self

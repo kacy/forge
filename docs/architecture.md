@@ -2,69 +2,66 @@
 
 ## compiler map
 
-pith currently has two compiler implementations:
+pith currently has one active compiler pipeline:
 
-- `self-host/`: the primary implementation for product work
-- `bootstrap/`: the zig bootstrap used for initial builds, unit tests, and
-  safer structural refactors
+- `self-host/`: the Pith frontend, tools, import resolution, checking, and IR emission
+- `cranelift/`: the Rust/Cranelift backend, runtime, object generation, and linking
 
-both follow the same pipeline:
+the active pipeline is:
 
 1. lex source text into tokens
 2. parse tokens into an AST
 3. type-check and resolve imports
-4. transpile to C
-5. compile the generated C with `zig cc`
+4. emit Pith text IR
+5. lower text IR to Cranelift IR
+6. emit an object file and link it with the Rust runtime using `gcc`
+
+the older Zig bootstrap and C transpiler are historical implementation paths.
+they are useful context when reading old notes, but they are not tracked as the
+current build/run path.
 
 networking and protocol layers now live mostly in the Pith stdlib. that
 includes `std.net.http`, `std.net.websocket`, and the native TLS 1.3 stack in
 `std.net.tls` / `std.net.tls13`. Rust stays on the lower-level runtime side for
 storage, syscall-facing helpers, and the Cranelift backend.
 
-the bootstrap implementation now keeps that flow explicit:
-
-- `bootstrap/main.zig`: process setup, argument parsing, command dispatch
-- `bootstrap/cli/`: one file per CLI behavior (`check`, `build`, `test`, etc.)
-- `bootstrap/pipeline.zig`: shared source loading, diagnostics, parse, and check setup
-- `bootstrap/build_support.zig`: `.pith-build/` layout, runtime header emission, child process helpers
-
 ## ownership boundaries
 
 - lexer/parser own syntax-only concerns and should never guess at types
 - checker owns name resolution, type resolution, imports, and diagnostics
-- codegen assumes checked input and focuses on stable C emission
+- IR emission assumes checked input and focuses on stable text IR
 - CLI modules should only coordinate user-facing flows; they should not duplicate compiler setup
 - stdlib protocol layers should own wire semantics and user-facing behavior;
   lower-level runtime code should stay boring and explicit
 
-if a change requires repeated lex/parse/check setup, it belongs in `bootstrap/pipeline.zig`.
-if a change only affects filesystem output or child-process execution, it belongs in `bootstrap/build_support.zig`.
+if a change requires repeated lex/parse/check setup, it belongs in
+`self-host/driver.pith` or the relevant self-hosted tool module.
+if a change only affects object output or linking, it belongs in `cranelift/`.
 
 ## change map
 
 ### add a token or keyword
 
-- zig bootstrap: `bootstrap/lexer.zig`
 - self-hosted compiler: `self-host/lexer.pith`
 - if syntax changes: update `docs/grammar.ebnf`
 
 ### add syntax
 
-- parser: `bootstrap/parser.zig`, `self-host/parser.pith`
-- AST shape: `bootstrap/ast.zig`, `self-host/ast.pith`
+- parser: `self-host/parser.pith`
+- AST shape: `self-host/ast.pith`
 - examples/docs: add or update an example under `examples/`
 
 ### add or change a type rule
 
-- bootstrap checker: `bootstrap/checker.zig`
 - self-hosted checker: `self-host/checker.pith`
 - diagnostics reference: `docs/errors.md` if a new stable code is introduced
 
 ### add or change code generation
 
-- bootstrap backend: `bootstrap/codegen.zig`
-- self-hosted backend: `self-host/codegen.pith`
-- runtime support: `runtime/pith_runtime.h` if the emitted C needs new helpers
+- IR emitter: `self-host/ir_emitter.pith`
+- IR driver: `self-host/ir_driver.pith`
+- Cranelift lowering: `cranelift/codegen/src/ir_consumer.rs`
+- runtime support: `cranelift/runtime/src/` if native code needs new helpers
 
 ### add or change tls or protocol behavior
 
@@ -74,16 +71,16 @@ if a change only affects filesystem output or child-process execution, it belong
 
 ### change CLI behavior
 
-- bootstrap CLI parsing/dispatch: `bootstrap/main.zig`, `bootstrap/cli/`
 - self-hosted CLI: `self-host/pith_main.pith`
+- native backend CLI: `cranelift/cli/src/main.rs`
 
 ## mental model for new contributors
 
 start at the CLI entrypoint, then follow one command end to end:
 
-1. `bootstrap/main.zig`
-2. `bootstrap/cli/run_check.zig`
-3. `bootstrap/pipeline.zig`
-4. `bootstrap/checker.zig`
+1. `cranelift/cli/src/main.rs`
+2. `self-host/pith_main.pith`
+3. `self-host/driver.pith`
+4. `self-host/checker.pith`
 
 that path shows most of the compiler lifecycle with minimal generated-output noise.

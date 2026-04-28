@@ -1,7 +1,7 @@
 # errors.pith — human-readable error rendering for pith diagnostics
 #
 # renders diagnostics with source context, underlines, and fix
-# suggestions. mirrors the output format of src/errors.zig.
+# suggestions.
 
 pub struct Diagnostic:
     pub severity: String

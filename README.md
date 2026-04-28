@@ -7,10 +7,10 @@ compile-time cycle prevention. result types everywhere. designed so that AI
 coding agents can read the errors, apply fixes, and iterate — fast.
 
 **status:** the compiler self-hosts — pith is written in pith. the
-self-hosted compiler compiles itself and produces identical output across
-stages (fixed-point verified). two backends: C transpilation and Cranelift
-native code generation — both compile the tracked example suite, and both
-compile the compiler itself to a fixed point. the CLI handles build, run,
+self-hosted frontend emits Pith text IR, and the Rust/Cranelift backend lowers
+that IR to native code. this path compiles the tracked example suite and the
+compiler itself to a fixed point. the older C transpiler and Zig bootstrap are
+historical; they are not the active build path. the CLI handles build, run,
 test, check, fmt, lint, lex, parse, doc, and more. the standard library now
 covers I/O, networking, native TLS 1.3, encoding, hashing, JSON, TOML,
 process management, tooling helpers, and more.
@@ -102,9 +102,10 @@ fn main():
 
 ## what works today
 
-the self-hosted compiler handles the full pipeline: lex → parse → check →
-codegen. 85 deterministic example programs compile and produce verified
-output via the Cranelift native backend.
+the self-hosted compiler handles the frontend pipeline: lex → parse → check →
+emit text IR. the Cranelift backend consumes that IR to produce native code.
+85 deterministic example programs compile and produce verified output through
+that path.
 
 **language features:**
 - function declarations, typed parameters, return types, calls

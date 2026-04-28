@@ -1,9 +1,8 @@
 # Pith rename plan
 
 This file keeps the language rename to Pith easy to resume. The rename is
-intentionally broad: public docs, source extensions, command names, generated C
-symbols, runtime APIs, package metadata, and build output paths should all use
-Pith naming.
+intentionally broad: public docs, source extensions, command names, runtime
+symbols, package metadata, and build output paths should all use Pith naming.
 
 ## Current target
 
@@ -12,8 +11,8 @@ Pith naming.
 - CLI command: `pith`
 - Package manifest: `pith.toml`
 - Build directory: `.pith-build`
-- Public C/runtime prefix: `pith_`
-- Generated user symbol prefix: `pith_`
+- Public runtime prefix: `pith_`
+- Generated native symbol prefix: `pith_`
 - Environment prefix: `PITH_`
 
 ## Migration phases
@@ -21,7 +20,7 @@ Pith naming.
 1. Rename tracked source files to `.pith`.
 2. Rename public files and entrypoints that still use the legacy name.
 3. Update docs, examples, tests, CI, Make targets, Cargo metadata, and editor tooling.
-4. Update compiler import resolution, package discovery, generated C names, runtime
+4. Update compiler import resolution, package discovery, generated native names, runtime
    symbols, and self-hosted tool paths.
 5. Build the Rust bootstrap CLI, then use it to check or rebuild the self-hosted
    compiler from `.pith` sources.
