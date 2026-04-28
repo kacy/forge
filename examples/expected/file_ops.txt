@@ -3,5 +3,5 @@ read: ok
 exists: ok
 size: 16
 remove: ok
-read hello.fg: ok
+read hello.pith: ok
 file ops work

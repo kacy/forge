@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
-    println!("cargo:rustc-check-cfg=cfg(forge_cranelift_new_api)");
+    println!("cargo:rustc-check-cfg=cfg(pith_cranelift_new_api)");
 
     let Some(lockfile) = workspace_lockfile() else {
         return;
@@ -11,7 +11,7 @@ fn main() {
         return;
     };
     if uses_new_cranelift_api(&contents) {
-        println!("cargo:rustc-cfg=forge_cranelift_new_api");
+        println!("cargo:rustc-cfg=pith_cranelift_new_api");
     }
 
     if let Err(err) = generate_runtime_table() {
@@ -108,6 +108,20 @@ fn generate_runtime_table() -> Result<(), String> {
         target.push_str(", returns: ");
         target.push_str(&format_type_slice(&returns));
         target.push_str(" },\n");
+
+        if matches!(class, RuntimeDeclClass::Abi) {
+            if let Some(legacy_key) = key.strip_prefix("pith_") {
+                compat.push_str("    RuntimeDecl { key: \"forge_");
+                compat.push_str(legacy_key);
+                compat.push_str("\", symbol: \"");
+                compat.push_str(symbol);
+                compat.push_str("\", params: ");
+                compat.push_str(&format_type_slice(&params));
+                compat.push_str(", returns: ");
+                compat.push_str(&format_type_slice(&returns));
+                compat.push_str(" },\n");
+            }
+        }
     }
     abi.push_str("];\n");
     compat.push_str("];\n");
@@ -117,6 +131,7 @@ fn generate_runtime_table() -> Result<(), String> {
     fs::write(out_dir.join("runtime_table.rs"), out).map_err(|e| e.to_string())
 }
 
+#[derive(Clone, Copy)]
 enum RuntimeDeclClass {
     Abi,
     Compat,
