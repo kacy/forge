@@ -7,7 +7,7 @@ fn main():
     assert_eq(10 * 3, 30)
     assert_ne(1, 2)
     assert_eq("hello", "hello")
-    assert_true("pith".starts_with("for"))
+    assert_true("pith".starts_with("pit"))
     assert_false("pith".contains("zig"))
     assert_contains("hello pith", "pith")
     check_true(10 > 5, "greater than")

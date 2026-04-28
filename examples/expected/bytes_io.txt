@@ -1,5 +1,5 @@
-wrote: 11
-len: 11
+wrote: 10
+len: 10
 typed decode: true
 text: pith bytes
 invalid decode: true
