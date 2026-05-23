@@ -1,0 +1,6 @@
+plain {literal} braces
+hello world
+mixed {a} and world
+only close } here
+json-ish {"k": 1}
+empty {}

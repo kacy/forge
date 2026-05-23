@@ -551,8 +551,12 @@ fn scan_string():
             else:
                 i = i + 2
         elif is_lbrace(scan_char):
-            has_interpolation = true
-            found_string_boundary = true
+            if i + 1 < source.len() and is_lbrace(source_char(i + 1)):
+                # `{{` is an escaped literal brace, not interpolation
+                i = i + 2
+            else:
+                has_interpolation = true
+                found_string_boundary = true
         elif is_quote(scan_char):
             found_string_boundary = true
         elif is_newline_char(scan_char):
@@ -597,7 +601,12 @@ fn scan_string():
             current_position = current_position + 2
             current_column = current_column + 2
         elif is_lbrace(scan_char):
-            found_interp_start = true
+            if current_position + 1 < source.len() and is_lbrace(source_char(current_position + 1)):
+                # `{{` is an escaped literal brace; keep scanning for a real `{`
+                current_position = current_position + 2
+                current_column = current_column + 2
+            else:
+                found_interp_start = true
         elif is_quote(scan_char):
             found_interp_start = true
         elif is_newline_char(scan_char):
@@ -671,7 +680,12 @@ fn scan_interpolation_parts():
                 current_position = current_position + 2
                 current_column = current_column + 2
             elif is_lbrace(scan_char):
-                found_middle_end = true
+                if current_position + 1 < source.len() and is_lbrace(source_char(current_position + 1)):
+                    # `{{` is an escaped literal brace inside the trailing segment
+                    current_position = current_position + 2
+                    current_column = current_column + 2
+                else:
+                    found_middle_end = true
             elif is_quote(scan_char):
                 found_middle_end = true
             elif is_newline_char(scan_char):
