@@ -1200,7 +1200,17 @@ fn parse_for_stmt() -> Int:
         loop_idx = add_leaf_with_position("loop_index", idx_tok.value)
 
     expect("kw_in")
-    iterable := parse_expression()
+    mut iterable := parse_expression()
+    # range iteration: `for i in lo..hi` (exclusive) or `lo..=hi` (inclusive)
+    if check("dotdot") or check("dotdoteq"):
+        inclusive := check("dotdoteq")
+        advance_token()
+        upper := parse_expression()
+        mut range_children: List[Int] := [iterable, upper]
+        mut range_kind := "exclusive"
+        if inclusive:
+            range_kind = "inclusive"
+        iterable = add_node_with_position("range", range_kind, range_children)
     expect("colon")
     body := parse_block()
 

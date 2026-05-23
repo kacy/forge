@@ -1,0 +1,38 @@
+# range-for iteration: exclusive, inclusive, empty, expression bounds,
+# break/continue, and the optional value+index binding
+
+fn main():
+    mut excl := ""
+    for i in 0..5:
+        excl = excl + i.to_string() + " "
+    print("excl: " + excl)
+
+    mut incl := ""
+    for i in 0..=5:
+        incl = incl + i.to_string() + " "
+    print("incl: " + incl)
+
+    mut empty := "none"
+    for i in 3..3:
+        empty = empty + i.to_string()
+    print("empty: " + empty)
+
+    n := 4
+    mut expr := ""
+    for i in 1..n + 1:
+        expr = expr + i.to_string()
+    print("expr: " + expr)
+
+    mut bc := ""
+    for i in 0..10:
+        if i == 3:
+            continue
+        if i == 6:
+            break
+        bc = bc + i.to_string()
+    print("break/continue: " + bc)
+
+    mut vi := ""
+    for v, idx in 10..13:
+        vi = vi + "(" + v.to_string() + "@" + idx.to_string() + ")"
+    print("value+index: " + vi)

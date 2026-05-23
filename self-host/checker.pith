@@ -1214,26 +1214,38 @@ fn check_for_statement(node: Node, scope_id: Int):
     # children[1]: body
     if node.children.len() < 2:
         return
-    iter_type := c_check_expr(node.children[0], scope_id)
-    if is_error_type(iter_type):
-        return
-    # infer element type from collection
     tid_err := lookup_type_id("<error>")
     tid_int := lookup_type_id("Int")
     tid_string := lookup_type_id("String")
     mut elem_type := tid_err
-    iter_info := get_type_info(iter_type)
-    if iter_type == tid_string:
-        elem_type = tid_string
-    elif iter_info.kind == "list":
-        elem_type = iter_info.inner
-    elif iter_info.kind == "map":
-        elem_type = iter_info.key_type
-    elif iter_info.kind == "set":
-        elem_type = iter_info.inner
+    iter_node := get_node(node.children[0])
+    if iter_node.kind == "range":
+        # `for i in lo..hi`: the bounds must be Int, and i is bound to Int
+        lo_type := c_check_expr(iter_node.children[0], scope_id)
+        hi_type := c_check_expr(iter_node.children[1], scope_id)
+        if is_error_type(lo_type) or is_error_type(hi_type):
+            return
+        if lo_type != tid_int or hi_type != tid_int:
+            report_error("E217", "range bounds must be Int, got " + get_type_name(lo_type) + ".." + get_type_name(hi_type))
+            return
+        elem_type = tid_int
     else:
-        report_error("E217", "cannot iterate over " + get_type_name(iter_type))
-        return
+        iter_type := c_check_expr(node.children[0], scope_id)
+        if is_error_type(iter_type):
+            return
+        # infer element type from collection
+        iter_info := get_type_info(iter_type)
+        if iter_type == tid_string:
+            elem_type = tid_string
+        elif iter_info.kind == "list":
+            elem_type = iter_info.inner
+        elif iter_info.kind == "map":
+            elem_type = iter_info.key_type
+        elif iter_info.kind == "set":
+            elem_type = iter_info.inner
+        else:
+            report_error("E217", "cannot iterate over " + get_type_name(iter_type))
+            return
     # create loop scope
     loop_scope := create_loop_scope(scope_id)
     # bind the loop variable
