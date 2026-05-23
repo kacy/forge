@@ -330,7 +330,15 @@ pub fn compile_from_ir(
                 let bytes = raw.as_bytes();
                 let mut j = 0;
                 while j < bytes.len() {
-                    if bytes[j] == b'\\' && j + 1 < bytes.len() {
+                    if bytes[j] == b'{' && j + 1 < bytes.len() && bytes[j + 1] == b'{' {
+                        // `{{` is an escaped literal brace
+                        content.push('{');
+                        j += 2;
+                    } else if bytes[j] == b'}' && j + 1 < bytes.len() && bytes[j + 1] == b'}' {
+                        // `}}` is an escaped literal brace
+                        content.push('}');
+                        j += 2;
+                    } else if bytes[j] == b'\\' && j + 1 < bytes.len() {
                         match bytes[j + 1] {
                             b'n' => {
                                 content.push('\n');

@@ -1,0 +1,9 @@
+fn main():
+    name := "world"
+    # `{{` and `}}` emit literal braces; single `{...}` still interpolates
+    print("plain {{literal}} braces")
+    print("hello {name}")
+    print("mixed {{a}} and {name}")
+    print("only close }} here")
+    print("json-ish {{\"k\": 1}}")
+    print("empty {{}}")
