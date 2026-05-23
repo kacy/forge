@@ -2515,8 +2515,9 @@ fn ir_emit_json_decode_file_call(idx: Int, node: Node, path_input: Bool) -> Int:
 fn ir_emit_list_map_call(idx: Int, node: Node) -> Int:
     if node.children.len() != 3:
         return - 1
-    list_idx := ir_call_arg_expr_index(node.children[1])
-    mapper_idx := ir_call_arg_expr_index(node.children[2])
+    return ir_emit_list_map_lowering(idx, ir_call_arg_expr_index(node.children[1]), ir_call_arg_expr_index(node.children[2]))
+
+fn ir_emit_list_map_lowering(idx: Int, list_idx: Int, mapper_idx: Int) -> Int:
     list_r := ir_expr(list_idx)
     mapper_r := ir_expr(mapper_idx)
     mapper_name := ir_temp_name("__map_fn")
@@ -2533,8 +2534,9 @@ fn ir_emit_list_map_call(idx: Int, node: Node) -> Int:
 fn ir_emit_list_filter_call(idx: Int, node: Node) -> Int:
     if node.children.len() != 3:
         return - 1
-    list_idx := ir_call_arg_expr_index(node.children[1])
-    keep_idx := ir_call_arg_expr_index(node.children[2])
+    return ir_emit_list_filter_lowering(idx, ir_call_arg_expr_index(node.children[1]), ir_call_arg_expr_index(node.children[2]))
+
+fn ir_emit_list_filter_lowering(idx: Int, list_idx: Int, keep_idx: Int) -> Int:
     list_r := ir_expr(list_idx)
     keep_r := ir_expr(keep_idx)
     keep_name := ir_temp_name("__filter_fn")
@@ -2552,9 +2554,9 @@ fn ir_emit_list_filter_call(idx: Int, node: Node) -> Int:
 fn ir_emit_list_reduce_call(idx: Int, node: Node) -> Int:
     if node.children.len() != 4:
         return - 1
-    list_idx := ir_call_arg_expr_index(node.children[1])
-    init_idx := ir_call_arg_expr_index(node.children[2])
-    reducer_idx := ir_call_arg_expr_index(node.children[3])
+    return ir_emit_list_reduce_lowering(idx, ir_call_arg_expr_index(node.children[1]), ir_call_arg_expr_index(node.children[2]), ir_call_arg_expr_index(node.children[3]))
+
+fn ir_emit_list_reduce_lowering(idx: Int, list_idx: Int, init_idx: Int, reducer_idx: Int) -> Int:
     list_r := ir_expr(list_idx)
     init_r := ir_expr(init_idx)
     reducer_r := ir_expr(reducer_idx)
@@ -2602,7 +2604,7 @@ fn ir_emit_list_contains_method(node: Node, obj_type: String) -> Int:
     index_r := ir_emit_list_index_search(node, obj_type)
     return ir_emit_list_contains_from_index(index_r)
 
-fn ir_emit_self_hosted_list_method(node: Node, mname: String, obj_type: String) -> Int:
+fn ir_emit_self_hosted_list_method(idx: Int, node: Node, mname: String, obj_type: String) -> Int:
     if not ir_is_list_runtime_type(obj_type):
         return - 1
     if mname == "is_empty":
@@ -2611,6 +2613,14 @@ fn ir_emit_self_hosted_list_method(node: Node, mname: String, obj_type: String) 
         return ir_emit_list_index_search(node, obj_type)
     if mname == "contains":
         return ir_emit_list_contains_method(node, obj_type)
+    if mname == "map":
+        # list.map(fn): receiver is the list, child 0; the mapper is arg 0
+        return ir_emit_list_map_lowering(idx, node.children[0], ir_method_call_arg_expr(node, 0))
+    if mname == "filter":
+        return ir_emit_list_filter_lowering(idx, node.children[0], ir_method_call_arg_expr(node, 0))
+    if mname == "reduce":
+        # list.reduce(init, fn): init is arg 0, reducer is arg 1
+        return ir_emit_list_reduce_lowering(idx, node.children[0], ir_method_call_arg_expr(node, 0), ir_method_call_arg_expr(node, 1))
     return - 1
 
 fn ir_emit_index_json_decode_call(idx: Int, node: Node, callee_idx: Int) -> Int:
@@ -3274,7 +3284,7 @@ fn ir_emit_method_call(idx: Int) -> Int:
         return r
 
     obj_type := ir_method_receiver_type(node)
-    self_hosted_list_r := ir_emit_self_hosted_list_method(node, mname, obj_type)
+    self_hosted_list_r := ir_emit_self_hosted_list_method(idx, node, mname, obj_type)
     if self_hosted_list_r >= 0:
         return self_hosted_list_r
     mut emit_name := ir_method_emit_name(mname, obj_type)
