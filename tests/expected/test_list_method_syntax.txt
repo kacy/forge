@@ -1,0 +1,5 @@
+map: 2 4 6 8 10 12 
+filter: 2 4 6 
+reduce: 21
+chained: 30 40 50 60 
+long words: 2

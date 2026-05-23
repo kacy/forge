@@ -1,0 +1,28 @@
+# map, filter, reduce called as methods on a list, including chaining
+
+fn ints_to_string(xs: List[Int]) -> String:
+    mut s := ""
+    for x in xs:
+        s = s + x.to_string() + " "
+    return s
+
+fn main():
+    nums := [1, 2, 3, 4, 5, 6]
+
+    doubled := nums.map(fn(x: Int) => x * 2)
+    print("map: " + ints_to_string(doubled))
+
+    evens := nums.filter(fn(x: Int) => x % 2 == 0)
+    print("filter: " + ints_to_string(evens))
+
+    total := nums.reduce(0, fn(acc: Int, x: Int) => acc + x)
+    print("reduce: {total}")
+
+    # chaining reads left to right
+    chained := nums.map(fn(x: Int) => x * 10).filter(fn(x: Int) => x > 25)
+    print("chained: " + ints_to_string(chained))
+
+    # string elements
+    words := ["hi", "hello", "yo", "world"]
+    longish := words.filter(fn(w: String) => w.len() > 2)
+    print("long words: {longish.len()}")
