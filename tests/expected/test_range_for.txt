@@ -1,0 +1,6 @@
+excl: 0 1 2 3 4 
+incl: 0 1 2 3 4 5 
+empty: none
+expr: 1234
+break/continue: 01245
+value+index: (10@0)(11@1)(12@2)

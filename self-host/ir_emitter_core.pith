@@ -51,7 +51,7 @@ from ir_callees import ResolvedCallee, ir_import_declares_function_with_state, i
 from ir_call_helpers import ir_is_declared_callable_with_state, ir_declared_callable_ir_retkind_with_state, ir_declared_callable_return_type_with_state, ir_emit_call_text_with_state, ir_join_arg_regs, ir_method_call_arg_regs, ir_call_arg_expr_index
 from ir_generics import ir_is_fn_decl_kind, ir_has_generic_params, ir_collect_generic_param_names, ir_param_name_at, ir_generic_preferred_name_with_state, ir_json_generic_name_with_state, ir_config_generic_name_with_state, ir_toml_generic_name_with_state, ir_resolve_generic_module_call_name, ir_encode_type_list, ir_decode_type_list, ir_generic_specialization_key, ir_generic_specialization_name, ir_specialize_type_name_with_state, ir_resolve_type_node_with_subst_with_state, ir_extract_return_type_with_subst_with_state, ir_extract_optional_inner_type_with_subst_with_state, ir_extract_param_types_with_subst_with_state
 from ir_struct_layouts import ir_struct_layout_name_with_state, ir_struct_field_count_with_state, ir_struct_field_name_at_with_state, ir_struct_field_type_name_with_state, ir_struct_field_kind_from_decl_with_state, ir_field_kind_tid_with_state, ir_struct_field_tid_at_with_state, ir_struct_field_default_node_with_state
-from ir_control_helpers import IrIfBranch, ir_stmt_is_expr, ir_collect_if_branch, ir_for_binding_names, ir_collect_bind_parts
+from ir_control_helpers import IrIfBranch, IrForBindingNames, ir_stmt_is_expr, ir_collect_if_branch, ir_for_binding_names, ir_collect_bind_parts
 from ir_collection_helpers import ir_map_uses_int_keys, ir_set_new_name, ir_set_add_name, ir_lookup_map_value_type_for_expr_with_state, ir_index_get_call_name, ir_index_set_call_name, ir_for_loop_item_call_name, ir_for_loop_item_return_kind, ir_for_iter_item_kind, ir_for_iter_conversion_call, ir_for_iter_conversion_return_kind, ir_for_len_call_name, ir_empty_collection_init_call_name
 from ir_field_helpers import ir_emit_named_field_access_with_state, ir_emit_tuple_field_access
 from ir_operator_helpers import ir_emit_unary_op, ir_emit_simple_binary, ir_is_float_arithmetic, ir_emit_float_binary, ir_binary_simple_ir_op, ir_compound_assignment_ir_op
@@ -4017,6 +4017,9 @@ fn ir_emit_while_stmt(node: Node):
 fn ir_emit_for_stmt(node: Node):
     names := ir_for_binding_names(node)
     if node.children.len() >= 2:
+        if get_node(node.children[0]).kind == "range":
+            ir_emit_for_range_stmt(node, names)
+            return
         iter_type := ir_infer_type(node.children[0])
         mut iter_r := ir_expr(node.children[0])
         item_kind := ir_for_iter_item_kind(iter_type)
@@ -4066,6 +4069,75 @@ fn ir_emit_for_stmt(node: Node):
         ir_emit("store " + fi + " " + inc_r.to_string())
         ir_emit("jmp " + head_l)
         ir_emit("label " + end_l)
+
+# `for i in lo..hi` lowers to a counted loop over an Int counter, with no
+# intermediate list allocation. exclusive (`..`) stops at hi, inclusive
+# (`..=`) includes it. an optional index binding tracks the 0-based position.
+fn ir_emit_for_range_stmt(node: Node, names: IrForBindingNames):
+    iter_node := get_node(node.children[0])
+    inclusive := iter_node.value == "inclusive"
+    lo_r := ir_expr(iter_node.children[0])
+    hi_r := ir_expr(iter_node.children[1])
+    fid := ir_for_count
+    ir_for_count = ir_for_count + 1
+    fv := "__for_val_" + fid.to_string()
+    fh := "__for_hi_" + fid.to_string()
+    fp := "__for_pos_" + fid.to_string()
+    has_index := names.index_name.len() > 0
+    ir_emit("store " + fv + " " + lo_r.to_string())
+    ir_emit("store " + fh + " " + hi_r.to_string())
+    if has_index:
+        zero_r := ir_reg()
+        ir_emit("iconst " + zero_r.to_string() + " 0")
+        ir_emit("store " + fp + " " + zero_r.to_string())
+    head_l := ir_label()
+    body_l := ir_label()
+    step_l := ir_label()
+    end_l := ir_label()
+    ir_emit("label " + head_l)
+    cv := ir_reg()
+    ir_emit("load " + cv.to_string() + " " + fv)
+    ch := ir_reg()
+    ir_emit("load " + ch.to_string() + " " + fh)
+    cmp_r := ir_reg()
+    mut cmp_op := "lt"
+    if inclusive:
+        cmp_op = "lte"
+    ir_emit(cmp_op + " " + cmp_r.to_string() + " " + cv.to_string() + " " + ch.to_string())
+    ir_emit("brif " + cmp_r.to_string() + " " + body_l + " " + end_l)
+    ir_emit("label " + body_l)
+    bind_r := ir_reg()
+    ir_emit("load " + bind_r.to_string() + " " + fv)
+    ir_var_types.insert(names.value_name, "int")
+    ir_emit("store " + names.value_name + " " + bind_r.to_string())
+    if has_index:
+        pos_r := ir_reg()
+        ir_emit("load " + pos_r.to_string() + " " + fp)
+        ir_var_types.insert(names.index_name, "int")
+        ir_emit("store " + names.index_name + " " + pos_r.to_string())
+    ir_break_stack = ir_push_string(ir_break_stack, end_l)
+    ir_continue_stack = ir_push_string(ir_continue_stack, step_l)
+    ir_block(node.children[1])
+    ir_break_stack.remove(ir_break_stack.len() - 1)
+    ir_continue_stack.remove(ir_continue_stack.len() - 1)
+    ir_emit("label " + step_l)
+    v3 := ir_reg()
+    ir_emit("load " + v3.to_string() + " " + fv)
+    one_r := ir_reg()
+    ir_emit("iconst " + one_r.to_string() + " 1")
+    inc_r := ir_reg()
+    ir_emit("add " + inc_r.to_string() + " " + v3.to_string() + " " + one_r.to_string())
+    ir_emit("store " + fv + " " + inc_r.to_string())
+    if has_index:
+        p3 := ir_reg()
+        ir_emit("load " + p3.to_string() + " " + fp)
+        pone_r := ir_reg()
+        ir_emit("iconst " + pone_r.to_string() + " 1")
+        pinc_r := ir_reg()
+        ir_emit("add " + pinc_r.to_string() + " " + p3.to_string() + " " + pone_r.to_string())
+        ir_emit("store " + fp + " " + pinc_r.to_string())
+    ir_emit("jmp " + head_l)
+    ir_emit("label " + end_l)
 
 fn ir_stmt_control(idx: Int, node: Node):
     if node.kind == "if" or node.kind == "if_stmt":
