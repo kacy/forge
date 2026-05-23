@@ -3288,6 +3288,9 @@ fn ir_emit_method_call(idx: Int) -> Int:
     if self_hosted_list_r >= 0:
         return self_hosted_list_r
     mut emit_name := ir_method_emit_name(mname, obj_type)
+    if emit_name == "list_join" and ir_list_element_kind(node.children[0]) == "int":
+        # list_join assumes string elements; Int lists need decimal formatting
+        emit_name = "list_join_int"
     if ir_is_bool_returning_method(emit_name):
         ir_var_types.insert("__last_call", "bool")
 

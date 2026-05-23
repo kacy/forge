@@ -1,0 +1,20 @@
+# joining Int lists formats each element as decimal; String lists unchanged
+
+fn main():
+    nums := [1, 2, 3, 4, 5]
+    print(nums.join(","))
+    print(nums.join(" -> "))
+
+    empty: List[Int] := []
+    print("empty:[" + empty.join(",") + "]")
+
+    print([42].join(","))
+
+    # negative numbers
+    print([0 - 1, 0, 2].join(","))
+
+    # combines with map
+    print(nums.map(fn(x: Int) => x * 2).join("|"))
+
+    # String lists still join as before
+    print(["a", "b", "c"].join("-"))

@@ -54,6 +54,7 @@ pith_list_push|pith_list_push|I64,I64,I64|
 pith_list_push_value|pith_list_push_value|I64,I64|
 pith_list_set_value|pith_list_set_value|I64,I64,I64|
 list_join|pith_list_join|I64,I64|I64
+list_join_int|pith_list_join_int|I64,I64|I64
 pith_list_get_value|pith_list_get_value|I64,I64|I64
 pith_list_get_value_unchecked|pith_list_get_value_unchecked|I64,I64|I64
 pith_list_len|pith_list_len|I64|I64
