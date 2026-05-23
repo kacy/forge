@@ -3001,6 +3001,10 @@ fn check_list_method_call(method: String, info: TypeInfo, args: List[Int], scope
         return tid_bool
     if method == "join":
         expect_one_typed_argument(method, args, tid_string, scope_id)
+        # join formats elements into a string; only String and Int elements are
+        # supported. other element types would otherwise crash at runtime.
+        if elem != tid_string and is_integer_type(elem) == false:
+            report_error("E219", "join requires a list of String or Int elements, got List[" + get_type_name(elem) + "]; map elements to String first")
         return tid_string
     if method == "index_of":
         expect_one_typed_argument(method, args, elem, scope_id)

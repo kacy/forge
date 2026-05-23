@@ -410,6 +410,37 @@ pub unsafe extern "C" fn pith_list_join(list: PithList, sep: *const i8) -> *mut 
     out
 }
 
+/// Join a list of Int elements with a separator, formatting each as decimal.
+/// Unlike `pith_list_join`, the elements are values rather than string pointers.
+/// Returns a newly allocated C string.
+#[no_mangle]
+pub unsafe extern "C" fn pith_list_join_int(list: PithList, sep: *const i8) -> *mut i8 {
+    let Some(impl_ref) = list_ref(list) else {
+        return std::ptr::null_mut();
+    };
+
+    let sep_str = if sep.is_null() {
+        ""
+    } else {
+        let len = crate::string::pith_cstring_len(sep) as usize;
+        std::str::from_utf8(std::slice::from_raw_parts(sep as *const u8, len)).unwrap_or("")
+    };
+
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < impl_ref.len() {
+        if let Some(raw) = impl_ref.get_value(i) {
+            if i > 0 {
+                out.push_str(sep_str);
+            }
+            out.push_str(&raw.to_string());
+        }
+        i += 1;
+    }
+
+    crate::pith_copy_bytes_to_cstring(out.as_bytes())
+}
+
 /// Pop element from end of list
 ///
 /// Returns true if successful, false if list is empty
