@@ -3897,10 +3897,52 @@ fn ir_emit_assign_stmt(node: Node):
         ir_var_regs.insert(name, r)
         ir_emit("store " + ir_resolve_storage_name(name) + " " + r.to_string())
 
+# Assign to a struct field target: `obj.field = value`. Returns false if the
+# target is not a known struct field (so the caller falls back to other forms).
+fn ir_emit_field_assignment(target_idx: Int, value_idx: Int) -> Bool:
+    target := get_node(target_idx)
+    if target.kind != "field_access" or target.children.len() == 0:
+        return false
+    fname := node_value(target_idx)
+    recv_idx := target.children[0]
+    lookup_key := ir_field_lookup_key(recv_idx, fname)
+    if not ir_struct_field_index_lookup.contains_key(lookup_key):
+        return false
+    field_index := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key])
+    obj_r := ir_expr(recv_idx)
+    mut value_type := ir_checked_struct_field_type(recv_idx, fname)
+    if value_type.len() == 0:
+        value_type = ir_infer_type(value_idx)
+    value_r := ir_emit_value_for_target(value_idx, value_type)
+    ir_emit("sstore " + obj_r.to_string() + " " + field_index.to_string() + " " + value_r.to_string())
+    return true
+
+# Compound assign to a struct field: `obj.field += value` (and -=, *=, /=).
+fn ir_emit_field_compound_assignment(target_idx: Int, value_idx: Int, compound_op: String) -> Bool:
+    target := get_node(target_idx)
+    if target.kind != "field_access" or target.children.len() == 0:
+        return false
+    fname := node_value(target_idx)
+    recv_idx := target.children[0]
+    lookup_key := ir_field_lookup_key(recv_idx, fname)
+    if not ir_struct_field_index_lookup.contains_key(lookup_key):
+        return false
+    field_index := ir_unpack_field_index(ir_struct_field_index_lookup[lookup_key])
+    obj_r := ir_expr(recv_idx)
+    cur := ir_reg()
+    ir_emit_named_field_access(cur, obj_r, lookup_key, fname, ir_checked_struct_field_type(recv_idx, fname))
+    rhs := ir_expr(value_idx)
+    res := ir_reg()
+    ir_emit_simple_binary(res, compound_op, cur, rhs)
+    ir_emit("sstore " + obj_r.to_string() + " " + field_index.to_string() + " " + res.to_string())
+    return true
+
 fn ir_emit_compound_assignment(node: Node):
     op := node.value
     if op == "=" and node.children.len() >= 2:
         if ir_emit_index_assignment(node.children[0], node.children[1]):
+            return
+        if ir_emit_field_assignment(node.children[0], node.children[1]):
             return
         tn := get_node(node.children[0])
         name := tn.value
@@ -3910,6 +3952,8 @@ fn ir_emit_compound_assignment(node: Node):
         return
     compound_op := ir_compound_assignment_ir_op(op)
     if compound_op.len() > 0 and node.children.len() >= 2:
+        if ir_emit_field_compound_assignment(node.children[0], node.children[1], compound_op):
+            return
         tn := get_node(node.children[0])
         name := tn.value
         cur := ir_reg()

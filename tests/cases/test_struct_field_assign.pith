@@ -1,0 +1,45 @@
+# assigning to struct fields: locals, compound ops, through functions
+# (reference semantics), and from methods via implicit self
+
+struct Counter:
+    value: Int
+    label: String
+
+struct Point:
+    x: Int
+    y: Int
+
+impl Counter:
+    fn step():
+        self.value = self.value + 1
+
+    fn add(n: Int):
+        self.value += n
+
+fn bump(c: Counter):
+    c.value = c.value + 100
+
+fn main():
+    mut c := Counter(5, "hits")
+    c.value = 10
+    print("set: {c.value}")
+    c.value += 3
+    print("compound: {c.value}")
+    c.label = "changed"
+    print("label: {c.label}")
+
+    # mutation through a function persists (structs are shared handles)
+    bump(c)
+    print("after bump: {c.value}")
+
+    # mutation through methods (implicit self)
+    c.step()
+    c.step()
+    print("after steps: {c.value}")
+    c.add(20)
+    print("after add: {c.value}")
+
+    p := Point(1, 2)
+    p.x = 42
+    p.y = p.x + 1
+    print("point: {p.x},{p.y}")
