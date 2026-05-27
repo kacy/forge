@@ -1,0 +1,54 @@
+# a `for` loop drives any struct that has a `next() -> T?` method (the iterator
+# protocol), calling next() until it returns none
+
+struct Counter:
+    cur: Int
+    hi: Int
+
+impl Counter:
+    fn next() -> Int?:
+        if self.cur >= self.hi:
+            return none
+        v := self.cur
+        self.cur = self.cur + 1
+        return v
+
+struct Words:
+    items: List[String]
+    pos: Int
+
+impl Words:
+    fn next() -> String?:
+        if self.pos >= self.items.len():
+            return none
+        w := self.items[self.pos]
+        self.pos = self.pos + 1
+        return w
+
+fn main():
+    mut total := 0
+    for x in Counter(0, 5):
+        total = total + x
+    print("sum: {total}")
+
+    # break / continue
+    mut parts := ""
+    for x in Counter(0, 10):
+        if x == 2:
+            continue
+        if x == 5:
+            break
+        parts = parts + x.to_string()
+    print("bc: {parts}")
+
+    # value + index binding (index is the 0-based position)
+    mut vi := ""
+    for v, i in Counter(10, 13):
+        vi = vi + "(" + v.to_string() + "@" + i.to_string() + ")"
+    print("vi: {vi}")
+
+    # string-element iterator
+    mut joined := ""
+    for w in Words(["red", "green", "blue"], 0):
+        joined = joined + w + " "
+    print("words: {joined}")

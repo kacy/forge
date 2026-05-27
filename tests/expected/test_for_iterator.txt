@@ -1,0 +1,4 @@
+sum: 10
+bc: 0134
+vi: (10@0)(11@1)(12@2)
+words: red green blue 

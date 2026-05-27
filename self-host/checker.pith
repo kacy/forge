@@ -1208,6 +1208,22 @@ fn check_while_statement(node: Node, scope_id: Int):
 # for statement
 # ---------------------------------------------------------------
 
+# If `iter_type` is an iterator (a struct with a `next() -> T?` method), return
+# the element type T; otherwise return -1. Kept small and separate so the map
+# reads compile reliably.
+fn iterator_element_type(iter_type: Int) -> Int:
+    info := get_type_info(iter_type)
+    if info.kind != "struct":
+        return 0 - 1
+    next_key := get_type_name(iter_type) + ".next"
+    if method_type_map.contains_key(next_key) == false:
+        return 0 - 1
+    next_fn_info := get_type_info(method_type_map[next_key])
+    ret_info := get_type_info(next_fn_info.return_type)
+    if ret_info.kind != "optional":
+        return 0 - 1
+    return ret_info.inner
+
 fn check_for_statement(node: Node, scope_id: Int):
     # node.value: "x" or "x, i" (binding names)
     # children[0]: iterable expression
@@ -1244,14 +1260,23 @@ fn check_for_statement(node: Node, scope_id: Int):
         elif iter_info.kind == "set":
             elem_type = iter_info.inner
         else:
-            report_error("E217", "cannot iterate over " + get_type_name(iter_type))
-            return
+            # iterator protocol: a struct with a `next() -> T?` method is iterable,
+            # yielding T until next() returns none
+            it_elem := iterator_element_type(iter_type)
+            if it_elem >= 0:
+                elem_type = it_elem
+            else:
+                report_error("E217", "cannot iterate over " + get_type_name(iter_type))
+                return
     # create loop scope
     loop_scope := create_loop_scope(scope_id)
     # bind the loop variable
     if node.children.len() >= 3:
         elem_name := get_node(node.children[2]).value
         define_binding(loop_scope, elem_name, elem_type, false)
+        # cache the element type on the loop-var node so the ir emitter can
+        # read it back (used to type the value extracted from an iterator)
+        expression_type_cache.insert(node.children[2], elem_type)
         if node.children.len() >= 4:
             idx_name := get_node(node.children[3]).value
             define_binding(loop_scope, idx_name, tid_int, false)

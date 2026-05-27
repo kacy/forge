@@ -4067,6 +4067,13 @@ fn ir_emit_for_stmt(node: Node):
         if get_node(node.children[0]).kind == "range":
             ir_emit_for_range_stmt(node, names)
             return
+        # iterator protocol: a struct with a `next() -> T?` method drives the
+        # loop via next() instead of index-based access
+        iter_struct := ir_infer_type(node.children[0])
+        next_name := ir_lookup_impl_method_name(iter_struct, "next")
+        if next_name.len() > 0:
+            ir_emit_for_iterator_stmt(node, names, next_name)
+            return
         iter_type := ir_infer_type(node.children[0])
         mut iter_r := ir_expr(node.children[0])
         item_kind := ir_for_iter_item_kind(iter_type)
@@ -4175,6 +4182,63 @@ fn ir_emit_for_range_stmt(node: Node, names: IrForBindingNames):
     inc_r := ir_reg()
     ir_emit("add " + inc_r.to_string() + " " + v3.to_string() + " " + one_r.to_string())
     ir_emit("store " + fv + " " + inc_r.to_string())
+    if has_index:
+        p3 := ir_reg()
+        ir_emit("load " + p3.to_string() + " " + fp)
+        pone_r := ir_reg()
+        ir_emit("iconst " + pone_r.to_string() + " 1")
+        pinc_r := ir_reg()
+        ir_emit("add " + pinc_r.to_string() + " " + p3.to_string() + " " + pone_r.to_string())
+        ir_emit("store " + fp + " " + pinc_r.to_string())
+    ir_emit("jmp " + head_l)
+    ir_emit("label " + end_l)
+
+# `for x in it` where `it` is an iterator (a struct with `next() -> T?`).
+# Drives the loop by calling next() each iteration: the result is an optional
+# tuple (is_some flag at field 0, value at field 8); stop when the flag is 0.
+fn ir_emit_for_iterator_stmt(node: Node, names: IrForBindingNames, next_name: String):
+    iter_r := ir_expr(node.children[0])
+    fid := ir_for_count
+    ir_for_count = ir_for_count + 1
+    it_var := "__for_it_" + fid.to_string()
+    fp := "__for_pos_" + fid.to_string()
+    has_index := names.index_name.len() > 0
+    ir_emit("store " + it_var + " " + iter_r.to_string())
+    if has_index:
+        zero_r := ir_reg()
+        ir_emit("iconst " + zero_r.to_string() + " 0")
+        ir_emit("store " + fp + " " + zero_r.to_string())
+    # the element type was cached on the loop-var node by the checker
+    mut elem_kind := ir_retkind(ir_type_from_tid(c_get_expr_type(node.children[2])))
+    if elem_kind.len() == 0:
+        elem_kind = "unknown"
+    head_l := ir_label()
+    body_l := ir_label()
+    step_l := ir_label()
+    end_l := ir_label()
+    ir_emit("label " + head_l)
+    it_cur := ir_reg()
+    ir_emit("load " + it_cur.to_string() + " " + it_var)
+    opt_r := ir_reg()
+    ir_emit("call " + opt_r.to_string() + " " + next_name + " tuple 1 " + it_cur.to_string())
+    flag_r := ir_optional_flag_field(opt_r)
+    ir_emit("brif " + flag_r.to_string() + " " + body_l + " " + end_l)
+    ir_emit("label " + body_l)
+    val_r := ir_reg()
+    ir_emit("field " + val_r.to_string() + " " + opt_r.to_string() + " 8 " + elem_kind + " value")
+    ir_var_types.insert(names.value_name, elem_kind)
+    ir_emit("store " + names.value_name + " " + val_r.to_string())
+    if has_index:
+        pos_r := ir_reg()
+        ir_emit("load " + pos_r.to_string() + " " + fp)
+        ir_var_types.insert(names.index_name, "int")
+        ir_emit("store " + names.index_name + " " + pos_r.to_string())
+    ir_break_stack = ir_push_string(ir_break_stack, end_l)
+    ir_continue_stack = ir_push_string(ir_continue_stack, step_l)
+    ir_block(node.children[1])
+    ir_break_stack.remove(ir_break_stack.len() - 1)
+    ir_continue_stack.remove(ir_continue_stack.len() - 1)
+    ir_emit("label " + step_l)
     if has_index:
         p3 := ir_reg()
         ir_emit("load " + p3.to_string() + " " + fp)
